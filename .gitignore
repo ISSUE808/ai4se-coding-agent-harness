@@ -1,0 +1,54 @@
+# 凭据与密钥文件 —— 绝对不提交
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+*.cred
+*_credentials.*
+
+# 操作系统
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 依赖目录
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+target/
+
+# 构建产物
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.a
+
+# 日志
+*.log
+logs/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+.cache/
+
+# Superpowers 本地状态（按需调整）
+# .claude/ 视情况决定是否提交
