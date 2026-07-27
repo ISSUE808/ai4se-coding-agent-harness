@@ -50,7 +50,8 @@ temp/
 *.tmp
 .cache/
 
-# 个人工作笔记（仅本地保留）
+# 课程参考文档（不下发，仅本地保留）
+AI4SE_Final_Project_*.md
 PREPARATION_CHECKLIST.md
 
 # Superpowers 本地状态（按需调整）
