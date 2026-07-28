@@ -22,3 +22,21 @@
   - CR 评审 subagent 发现了 SPEC 和实现之间的 `Date` vs `string` 不一致——spec 写 `Date` 但在 JSON 场景下不合理。说明在写 SPEC 时就应考虑序列化格式
 
 ---
+
+## 2026-07-28 15:04 Task 2：LLMProvider 接口 + MockProvider
+
+- **触发技能**：`using-git-worktrees`, `subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a6a57567`（general-purpose，独立执行 TDD 红→绿→重构）
+- **Prompt 要点**：按 CLAUDE.md §2 模板派发；明确 `provider.ts` 不做 re-export；要求 subagent 自行完成 TDD 循环并返回 commit hash
+- **产出**：
+  - Commit: `3ff7841`
+  - 涉及文件: `src/llm/provider.ts`, `src/llm/mock-provider.ts`, `tests/unit/llm/mock-provider.test.ts`
+  - 测试: 4/4 passing（+ 预存 3 events = 7 total）, `tsc --noEmit` clean
+- **人工干预**：无（subagent 独立完成 TDD + commit）
+- **教训**：
+  - Subagent 在 RED 阶段自行发现了 import 路径错误并修正——TDD 的价值：运行测试暴露路径问题而非假设正确
+  - `provider.ts` 为"准残留文件"——CR 评审指出它只有 import+注释，后续 task 需明确其定位价值或移除
+  - Subagent 单 commit 缺少独立 RED commit——后续派发 prompt 应要求"至少两个 commit"
+  - MockProvider 忽略 `_tools` 正确，但 Task 3 DeepSeekProvider 需处理 `Tool.execute` 无法 JSON 序列化的问题
+
+---
