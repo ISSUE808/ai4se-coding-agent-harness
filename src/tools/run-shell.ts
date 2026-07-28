@@ -1,19 +1,6 @@
 import { execSync } from 'child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
-
-/** Environment variable whitelist (SPEC §3.4). Applies cross-platform. */
-const ENV_WHITELIST = ['PATH', 'HOME', 'USER', 'TEMP', 'TMP'];
-
-function buildWhitelistedEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of ENV_WHITELIST) {
-    const val = process.env[key];
-    if (val !== undefined) {
-      env[key] = val;
-    }
-  }
-  return env;
-}
+import { buildWhitelistedEnv } from './env-utils.js';
 
 interface RunShellParams {
   command: string;

@@ -1,28 +1,46 @@
 import { execSync } from 'child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
-
-/** Environment variable whitelist — matches run_shell (SPEC §3.4). */
-const ENV_WHITELIST = ['PATH', 'HOME', 'USER', 'TEMP', 'TMP'];
-
-function buildWhitelistedEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of ENV_WHITELIST) {
-    const val = process.env[key];
-    if (val !== undefined) {
-      env[key] = val;
-    }
-  }
-  return env;
-}
+import { buildWhitelistedEnv } from './env-utils.js';
 
 interface RunTestParams {
   pattern?: string;
 }
 
+interface TestResult {
+  name: string;
+  status: 'passed' | 'failed';
+  duration: number;
+}
+
+function parseVitestOutput(output: string): { passed: boolean; results: TestResult[] } {
+  const results: TestResult[] = [];
+  // Parse vitest summary lines: "✓ file.test.ts (N tests) Xms" or "❯ file.test.ts (N tests | M failed) Xms"
+  const summaryRe = /([✓❯])\s+(.+?\.test\.\w+)\s+\((\d+)\s+tests?(?:\s*\|\s*(\d+)\s+failed)?\)\s+(\d+)ms/g;
+  let match;
+  while ((match = summaryRe.exec(output)) !== null) {
+    const [, _icon, name, _total, failed, duration] = match;
+    results.push({
+      name,
+      status: failed && parseInt(failed) > 0 ? 'failed' : 'passed',
+      duration: parseInt(duration),
+    });
+  }
+
+  // If no structured matches found, fallback: check for overall pass/fail lines
+  if (results.length === 0) {
+    const allPassed = /Test Files\s+\d+ passed/.test(output);
+    const anyFailed = /Test Files\s+.*\d+ failed/.test(output);
+    return { passed: allPassed && !anyFailed, results: [] };
+  }
+
+  const passed = results.every(r => r.status === 'passed');
+  return { passed, results };
+}
+
 export const runTestTool: Tool = {
   name: 'run_test',
   description:
-    'Runs vitest tests within the workspace. This is syntax sugar that delegates to "npx vitest run". An optional pattern filters which test files to execute.',
+    'Runs vitest tests within the workspace. Returns structured test results with per-file pass/fail status and duration. Delegates to "npx vitest run".',
   parameters: {
     pattern: {
       type: 'string',
@@ -47,25 +65,29 @@ export const runTestTool: Tool = {
 
       const stdout = execSync(cmd, {
         cwd: context.workspaceRoot,
-        timeout: 120000, // 2 minutes for test runs
+        timeout: 120000,
         env: buildWhitelistedEnv(),
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
+      const parsed = parseVitestOutput(stdout);
+
       return {
         success: true,
-        output: stdout,
+        output: JSON.stringify(parsed),
         exitCode: 0,
         duration_ms: Date.now() - start,
       };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       const execError = err as { stdout?: string; stderr?: string; status?: number };
-      const output = (execError.stdout || '') + (execError.stderr || '');
+      const rawOutput = (execError.stdout || '') + (execError.stderr || '');
+      const parsed = parseVitestOutput(rawOutput);
+
       return {
         success: false,
-        output: output || undefined,
+        output: JSON.stringify(parsed),
         error: message,
         exitCode: execError.status ?? null,
         duration_ms: Date.now() - start,

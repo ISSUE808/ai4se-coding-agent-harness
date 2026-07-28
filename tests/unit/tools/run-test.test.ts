@@ -36,11 +36,14 @@ beforeEach(() => {
 
 describe('run_test tool', () => {
   it('delegates to npx vitest run with the given pattern', async () => {
-    mockedExecSync.mockReturnValue('Tests  1 passed (1)');
+    mockedExecSync.mockReturnValue('✓ tests/unit/tools/sample.test.ts (1 test) 5ms\n\n Test Files  1 passed\n      Tests  1 passed');
     const result = await runTestTool.execute({ pattern: 'my-test' }, context);
 
     expect(result.success).toBe(true);
-    expect(result.output).toContain('Tests  1 passed');
+    const p1 = JSON.parse(result.output!);
+    expect(p1.passed).toBe(true);
+    expect(p1.results).toHaveLength(1);
+    expect(p1.results[0].name).toContain('sample.test.ts');
     expect(result.exitCode).toBe(0);
     expect(mockedExecSync).toHaveBeenCalledWith(
       'npx vitest run my-test',
@@ -49,11 +52,13 @@ describe('run_test tool', () => {
   });
 
   it('delegates to npx vitest run without a pattern when none is given', async () => {
-    mockedExecSync.mockReturnValue('Tests  5 passed (5)');
+    mockedExecSync.mockReturnValue('✓ tests/unit/a.test.ts (2 tests) 10ms\n✓ tests/unit/b.test.ts (3 tests) 8ms\n\n Test Files  2 passed\n      Tests  5 passed');
     const result = await runTestTool.execute({}, context);
 
     expect(result.success).toBe(true);
-    expect(result.output).toContain('5 passed');
+    const p2 = JSON.parse(result.output!);
+    expect(p2.passed).toBe(true);
+    expect(p2.results).toHaveLength(2);
     expect(mockedExecSync).toHaveBeenCalledWith(
       'npx vitest run',
       expect.objectContaining({ cwd: context.workspaceRoot }),
@@ -61,7 +66,7 @@ describe('run_test tool', () => {
   });
 
   it('delegates to npx vitest run with empty string pattern (runs all)', async () => {
-    mockedExecSync.mockReturnValue('Tests  3 passed (3)');
+    mockedExecSync.mockReturnValue('✓ tests/unit/x.test.ts (3 tests) 6ms');
     const result = await runTestTool.execute({ pattern: '' }, context);
 
     expect(result.success).toBe(true);
@@ -73,7 +78,7 @@ describe('run_test tool', () => {
 
   it('returns failure when vitest exits with non-zero code', async () => {
     const execError = Object.assign(new Error('Command failed'), {
-      stdout: 'Tests  1 failed',
+      stdout: '❯ tests/unit/failing.test.ts (1 test | 1 failed) 12ms',
       stderr: '',
       status: 1,
     });
@@ -84,7 +89,9 @@ describe('run_test tool', () => {
 
     expect(result.success).toBe(false);
     expect(result.exitCode).toBe(1);
-    expect(result.output).toContain('Tests  1 failed');
+    const pf = JSON.parse(result.output!);
+    expect(pf.passed).toBe(false);
+    expect(pf.results[0].status).toBe('failed');
   });
 
   it('passes the workspaceRoot as cwd to vitest', async () => {
