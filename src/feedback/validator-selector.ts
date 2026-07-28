@@ -1,5 +1,4 @@
-import type { Config } from '../types.js';
-import type { ActionType } from './action-classifier.js';
+import type { Config, ActionType } from '../types.js';
 
 export class ValidatorSelector {
   select(actionType: ActionType, config: Config): string[] {

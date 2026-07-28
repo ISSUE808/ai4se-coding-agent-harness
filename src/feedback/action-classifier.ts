@@ -1,9 +1,7 @@
-import type { Action } from '../types.js';
-
-export type ActionType = 'file_write' | 'file_read' | 'test_run' | 'typecheck_run' | 'shell_command' | 'parse_error';
+import type { Action, ActionType } from '../types.js';
 
 const CODE_EXTENSIONS = /\.(ts|js|json|tsx|jsx)$/;
-const TEST_PATTERN = /(?:vitest|jest|\bnpm\s+test\b)/;
+const TEST_PATTERN = /(?:vitest|jest|\bnpm\s+(?:run\s+)?test\b)/;
 const TSC_PATTERN = /\btsc\b/;
 
 export class ActionClassifier {
@@ -11,14 +9,14 @@ export class ActionClassifier {
     const tool = action.tool;
     const params = action.params;
 
-    // file_write: write_file or edit_file involving code files
+    // file_write: SPEC §3.3 — only code files trigger eslint+tsc validators
     if (tool === 'write_file' || tool === 'edit_file') {
       const path = String(params.path ?? '');
       if (CODE_EXTENSIONS.test(path)) {
         return 'file_write';
       }
-      // write/edit on non-code file still counts as file_write
-      return 'file_write';
+      // Non-code files (.md, .css, .yaml etc.) get no validators — same as file_read
+      return 'file_read';
     }
 
     // file_read: read_file, list_directory, search_content

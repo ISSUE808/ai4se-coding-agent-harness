@@ -74,6 +74,8 @@ export interface Validator {
 
 export interface ValidatorContext { workspaceRoot: string; }
 
+export type ActionType = 'file_write' | 'file_read' | 'test_run' | 'typecheck_run' | 'shell_command' | 'parse_error';
+
 export interface Config {
   llm: {
     provider: string;

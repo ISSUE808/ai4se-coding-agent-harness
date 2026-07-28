@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ValidatorSelector } from '../../../src/feedback/validator-selector.js';
-import type { ActionType } from '../../../src/feedback/action-classifier.js';
-import type { Config } from '../../../src/types.js';
+import type { ActionType, Config } from '../../../src/types.js';
 import { DEFAULT_CONFIG } from '../../../src/config/schema.js';
 
 function makeConfig(overrides: Partial<Config['feedback']> = {}): Config {
