@@ -212,3 +212,19 @@
   - Task 11a 的 eslint/tsc 名字恰巧匹配（因为是 SPEC 中的原名），掩盖了这个问题——新 3 个 validator 用了不同命名风格才暴露
 
 ---
+
+## 2026-07-28 19:39 Task 12：FailureClassifier + StrategyMatcher + RoundManager（完成反馈5层管线）
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a61fb659`（RED `d88b0c4` → GREEN `b671b09`）
+- **Prompt 要点**：6 种分类映射 + 6 种策略 + 轮次管理器（3 轮执行，第 4 轮升级）
+- **产出**：
+  - Commits: `d88b0c4`（RED）, `b671b09`（GREEN）, `59b328b`（CR fix）
+  - 涉及文件: 3 source + `types.ts` (+FailureClassification, +Strategy types) + 3 test files
+  - 测试: 19 new + 263 existing = **282/282**, tsc clean
+- **人工干预**：3 项 CR fix——`failureCategory!`→运行时断言、`currentRound` private + getter、`FailureClassification`/`Strategy` 移至 `types.ts`
+- **教训**：
+  - 反馈闭环主力维度完成：5 层管线 × 282 tests × 0 LLM × 0 network——§A.4-C 判据得到充分证实
+  - `!` 非空断言在 TS 中是隐蔽技术债——告诉编译器"相信我"但运行时无保证
+
+---
