@@ -193,6 +193,22 @@
 - **人工干预**：CR 评审 1 IMPORTANT：eslint `details` 硬编码 `files[0]`——多文件时所有错误归属到第一个文件。修复：flatMap 中携带 `filePath` 从 ESLint JSON 输出
 - **教训**：
   - Subagent 的 DI（依赖注入 execSync）设计是本次最佳实践——validator 测试纯确定性，不依赖文件系统/真实工具链
-  - `details` 字段是反馈管线最容易被忽略但最关键的部分——它驱动 SPEC §3.3 Layer 4 的 `auto_fix` 和 `targeted_fix` 策略。错一行代码（`files[0]` vs `filePath`）会导致 LLM 修改错误文件
+  - `details` 字段是反馈管线最容易被忽略但最关键的部分——错一行代码导致 LLM 修改错误文件
+
+---
+
+## 2026-07-28 19:28 Task 11b：TestResultValidator + ShellCheckValidator + FormatValidator
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a05089d5`（RED `de8a3d7` → GREEN `bc8d08f`）
+- **Prompt 要点**：3 个 validator 补齐 5 个校验器；DI 模式；FormatValidator 纯代码
+- **产出**：
+  - Commits: `de8a3d7`（RED）, `bc8d08f`（GREEN）, `1e2d765`（CR fix）
+  - 涉及文件: 3 source + 3 test files
+  - 测试: 30 new + 233 existing = 263/263, tsc clean
+- **人工干预**：CR 评审 1 CRITICAL：3 个 validator 的 `name` 与 ValidatorSelector key 不匹配（如 selector 用 'testResultParser' 但 validator 名为 'test-runner'）。修复：全部对齐为 selector 的 key
+- **教训**：
+  - Validator name ↔ selector key 的一致性应通过共享常量文件或 registry 强制执行——6 个硬编码字符串分散在 selector 和 5 个 validator 中，容易漂移
+  - Task 11a 的 eslint/tsc 名字恰巧匹配（因为是 SPEC 中的原名），掩盖了这个问题——新 3 个 validator 用了不同命名风格才暴露
 
 ---
