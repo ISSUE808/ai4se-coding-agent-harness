@@ -108,3 +108,20 @@
   - CR 评审的价值再次体现——23 个测试全部通过但存在 1 个 false-positive 缺陷
 
 ---
+
+## 2026-07-28 17:43 Task 9：ScopeFence + HITLManager
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a5c32469`（RED `51a8927` → GREEN `dad85c4`）
+- **Prompt 要点**：ScopeFence 路径穿越防护 + 环境白名单；HITLManager 纯状态机无超时
+- **产出**：
+  - Commits: `51a8927`（RED）, `dad85c4`（GREEN）
+  - 涉及文件: `scope-fence.ts`, `hitl-manager.ts` + 2 test files
+  - 测试: 40 new（14 scope + 26 hitl）+ 103 existing = 143/143, tsc clean
+- **人工干预**：无
+- **教训**：
+  - HITLManager 55 行纯状态机——最简单但最正确的设计。无 I/O、无 LLM、无超时
+  - `validatePath` 依赖 `process.cwd()` 而非显式传入 workspaceRoot（IMPORTANT 但非缺陷——harness 保证 cwd = workspaceRoot）
+  - 40 个测试中 26 个是 HITL 状态机——状态数 × 转换数 = 覆盖率的自然结果
+
+---

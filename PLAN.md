@@ -452,7 +452,7 @@ Config 接口包含：`llm`（provider、baseUrl、model、maxTokens、apiKeySou
 
 ---
 
-### 任务 8：PatternGuard
+### 任务 8：PatternGuard ✅ — `076aed5`
 
 **涉及文件：**
 - 创建：`src/guardrail/pattern-guard.ts`
@@ -574,7 +574,7 @@ describe('PatternGuard', () => {
 
 ---
 
-### 任务 9：ScopeFence + HITLManager
+### 任务 9：ScopeFence + HITLManager ✅ — `dad85c4`
 
 **涉及文件：**
 - 创建：`src/guardrail/scope-fence.ts`、`src/guardrail/hitl-manager.ts`
