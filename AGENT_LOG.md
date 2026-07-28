@@ -180,3 +180,19 @@
   - 多角度评审的噪音比：10+ findings → 3 actionable → 实际修复 3 个——其余是设计讨论或后期重构项
 
 ---
+
+## 2026-07-28 19:16 Task 11a：ValidatorChain + EslintValidator + TscValidator
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`ad51f31a`（RED `14937f8` → GREEN `827e157`）
+- **Prompt 要点**：ValidatorChain fail_fast/collect_all 双模式；EslintValidator + TscValidator 实现 Validator 接口；DI execSync 满足 §A.4-C
+- **产出**：
+  - Commits: `14937f8`（RED）, `827e157`（GREEN）, `239d680`（CR fix）
+  - 涉及文件: 3 source + 3 test files
+  - 测试: 20 new（8+6+6）+ 213 existing = 233/233, tsc clean
+- **人工干预**：CR 评审 1 IMPORTANT：eslint `details` 硬编码 `files[0]`——多文件时所有错误归属到第一个文件。修复：flatMap 中携带 `filePath` 从 ESLint JSON 输出
+- **教训**：
+  - Subagent 的 DI（依赖注入 execSync）设计是本次最佳实践——validator 测试纯确定性，不依赖文件系统/真实工具链
+  - `details` 字段是反馈管线最容易被忽略但最关键的部分——它驱动 SPEC §3.3 Layer 4 的 `auto_fix` 和 `targeted_fix` 策略。错一行代码（`files[0]` vs `filePath`）会导致 LLM 修改错误文件
+
+---
