@@ -159,3 +159,24 @@
   - 40 个测试中 26 个是 HITL 状态机——状态数 × 转换数 = 覆盖率的自然结果
 
 ---
+
+## 2026-07-28 18:57 Task 10：ActionClassifier + ValidatorSelector（反馈闭环第1-2层）
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a9fb4a4b`（RED `4cba531` → GREEN `a57970a`）
+- **Prompt 要点**：5 种 ActionType 分类 + ValidatorSelector 按类型选择校验器名称列表（返回 string[] 不创建实例）
+- **产出**：
+  - Commits: `4cba531`（RED）, `a57970a`（GREEN）, `aca0b6f`（主 agent CR 修复）
+  - 涉及文件: `action-classifier.ts`, `validator-selector.ts`, `types.ts` (+ActionType) + 2 test files
+  - 测试: 33 new + 180 existing = 213/213, tsc clean
+- **人工干预**：多维度 CR 评审（6 个 agent 并行）发现 3 个需修复项：
+  - CRITICAL: CODE_EXTENSIONS 死代码——非代码文件被分类为 file_write，触发不必要的 eslint/tsc。修复：非代码扩展名返回 `file_read`（zero validators）
+  - CONVENTION: `ActionType` 从 action-classifier.ts 移至 `types.ts`（§12.1 唯一定义点违规）
+  - BUG: `TEST_PATTERN` 遗漏 `npm run test`（仅匹配 `npm test`）
+- **教训**：
+  - **多角度 CR 评审首次应用**——6 个 agent 并行（Altitude/Conventions/TDD invariants/language pitfalls/wrapper correctness/removed-behavior）发现 10+ 个问题，远多于单一 reviewer 模式
+  - Subagent 写了 CODE_EXTENSIONS 检查但使其失效——"看起来正确 + 测试通过" ≠ 真正正确（测试缺少负向用例揭示死代码）
+  - `parse_error` 在 type union 中但 ActionClassifier 永远不返回它——设计意图正确（由 LLM parser 产生），但类型系统未体现分叉路径
+  - 多角度评审的噪音比：10+ findings → 3 actionable → 实际修复 3 个——其余是设计讨论或后期重构项
+
+---
