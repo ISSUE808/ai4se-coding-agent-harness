@@ -73,3 +73,45 @@ export interface Validator {
 }
 
 export interface ValidatorContext { workspaceRoot: string; }
+
+export interface Config {
+  llm: {
+    provider: string;
+    baseUrl: string;
+    model: string;
+    maxTokens: number;
+    apiKeySource: 'keytar' | 'encrypted_file' | 'env';
+    apiKeyService: string;
+  };
+  agent: {
+    maxRounds: number;
+    contextThreshold: number;
+    workspaceRoot: string;
+  };
+  feedback: {
+    validatorMode: 'fail_fast' | 'collect_all';
+    validators: {
+      eslint: { enabled: boolean };
+      tsc: { enabled: boolean };
+      testRunner: { enabled: boolean };
+      shellCheck: { enabled: boolean };
+    };
+  };
+  guardrail: {
+    allowlist: string[];
+    blocklist: string[];
+    warnlist: string[];
+    downgrade: Record<string, 'allow'>;
+  };
+  shell: {
+    timeoutSeconds: number;
+  };
+  memory: {
+    projectPath: string;
+    userPath: string;
+  };
+  webui: {
+    port: number;
+    token?: string;
+  };
+}
