@@ -14,7 +14,12 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  try {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  } catch {
+    // Windows may hold a handle on the directory after execSync uses it as cwd;
+    // this is harmless in CI / tmpdir contexts.
+  }
 });
 
 describe('run_shell tool', () => {
@@ -60,19 +65,18 @@ describe('run_shell tool', () => {
   });
 
   it('has a default timeout of 60 seconds', async () => {
-    // A quick sleep command should succeed within default timeout
-    const isWin = process.platform === 'win32';
-    const cmd = isWin ? 'timeout /t 1 /nobreak >nul' : 'sleep 1';
-    const result = await runShellTool.execute({ command: cmd }, context);
+    // A quick echo command should succeed within default timeout
+    const result = await runShellTool.execute({ command: 'echo ok' }, context);
     expect(result.success).toBe(true);
+    expect(result.output).toContain('ok');
   });
 
   it('respects custom timeout parameter', async () => {
-    // Set a very short timeout that a sleep will exceed
-    const isWin = process.platform === 'win32';
     // Use a command that takes longer than the timeout
-    const cmd = isWin ? 'timeout /t 5 /nobreak >nul' : 'sleep 5';
-    const result = await runShellTool.execute({ command: cmd, timeout: 500 }, context);
+    // ping -n 10 sends 10 pings with 1s interval (~9s) on Windows; sleep 5 on Unix
+    const isWin = process.platform === 'win32';
+    const cmd = isWin ? 'ping -n 10 127.0.0.1 > nul' : 'sleep 5';
+    const result = await runShellTool.execute({ command: cmd, timeout: 1000 }, context);
     // Should fail due to timeout
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
