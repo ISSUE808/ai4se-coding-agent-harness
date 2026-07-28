@@ -93,6 +93,23 @@
 
 ---
 
+## 2026-07-28 16:50 Task 7：记忆系统
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`ad189834`（general-purpose，commit `589fd06`）
+- **Prompt 要点**：3 层记忆、确定性 token 估算（chars/4）、80% 阈值、最近 8 轮保留、important 豁免、项目记忆纯 fs 实现
+- **产出**：
+  - Commit: `589fd06`
+  - 涉及文件: 4 source (context-compressor, session, project, user) + 2 test files
+  - 测试: 28 new（13 compressor + 15 project-memory）+ 88 existing = 116 passing, tsc clean
+- **人工干预**：无
+- **教训**：
+  - SessionMemory 和 UserMemory 零测试——CR 评审指出这是测试覆盖缺口。核心逻辑（Compressor + ProjectMemory）覆盖充分，但集成层无测试
+  - `getMessages()` 和 `getTokenCount()` 在非 addMessage 触发的场景下有状态不一致风险——需在后续 task 中修正
+  - 上下文压缩器的测试策略做对了：13 个测试覆盖 token 估算、阈值、压缩、important、不可变性——这是机制中最关键的确定性部分
+
+---
+
 ## 2026-07-28 16:05 Task 5：写入 + 执行工具
 
 - **触发技能**：`subagent-driven-development`, `requesting-code-review`

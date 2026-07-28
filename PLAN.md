@@ -416,7 +416,7 @@ Mock `openai` 模块：`chat.completions.create` 返回受控响应。测试消�
 
 ---
 
-### 任务 6：配置系统
+### 任务 6：配置系统 ✅ — `7bb8aff`
 
 **涉及文件：**
 - 创建：`src/config/schema.ts`、`src/config/loader.ts`
@@ -434,7 +434,7 @@ Config 接口包含：`llm`（provider、baseUrl、model、maxTokens、apiKeySou
 
 ---
 
-### 任务 7：记忆系统
+### 任务 7：记忆系统 ✅ — `589fd06`
 
 **涉及文件：**
 - 创建：`src/memory/session-memory.ts`、`src/memory/project-memory.ts`、`src/memory/user-memory.ts`、`src/memory/context-compressor.ts`
