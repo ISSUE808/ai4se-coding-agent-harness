@@ -76,6 +76,40 @@
 
 ---
 
+## 2026-07-28 16:43 Task 6：配置系统
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`aa96a264`（general-purpose，commit `7bb8aff` — 首次正确使用 `— by subagent da86a25a` 格式）
+- **Prompt 要点**：3 层覆盖（user→project→CLI）、深度合并、API Key 不在 Config 中、DEFAULT_CONFIG 工厂函数
+- **产出**：
+  - Commit: `7bb8aff`
+  - 涉及文件: `src/types.ts` (+Config 接口), `src/config/schema.ts`, `src/config/loader.ts`, `tests/unit/config/loader.test.ts`
+  - 测试: 9/9 passing（累计 88/88, tsc clean）
+- **人工干预**：无
+- **教训**：
+  - Subagent commit message 首次正确遵循 CLAUDE.md 格式——在前几个 phase 的反复强调后终于落实
+  - `loadConfig` 将路径解析推迟给调用方（CLI 入口）——CR 评审指出这是合理的可测试性权衡，但需在 CLI task 中实现自动解析
+  - `Object.freeze` + `structuredClone` 双保险模式是 immutability 的正确做法
+
+---
+
+## 2026-07-28 16:50 Task 7：记忆系统
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`ad189834`（general-purpose，commit `589fd06`）
+- **Prompt 要点**：3 层记忆、确定性 token 估算（chars/4）、80% 阈值、最近 8 轮保留、important 豁免、项目记忆纯 fs 实现
+- **产出**：
+  - Commit: `589fd06`
+  - 涉及文件: 4 source (context-compressor, session, project, user) + 2 test files
+  - 测试: 28 new（13 compressor + 15 project-memory）+ 88 existing = 116 passing, tsc clean
+- **人工干预**：无
+- **教训**：
+  - SessionMemory 和 UserMemory 零测试——CR 评审指出这是测试覆盖缺口。核心逻辑（Compressor + ProjectMemory）覆盖充分，但集成层无测试
+  - `getMessages()` 和 `getTokenCount()` 在非 addMessage 触发的场景下有状态不一致风险——需在后续 task 中修正
+  - 上下文压缩器的测试策略做对了：13 个测试覆盖 token 估算、阈值、压缩、important、不可变性——这是机制中最关键的确定性部分
+
+---
+
 ## 2026-07-28 16:05 Task 5：写入 + 执行工具
 
 - **触发技能**：`subagent-driven-development`, `requesting-code-review`
