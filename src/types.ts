@@ -76,6 +76,10 @@ export interface ValidatorContext { workspaceRoot: string; }
 
 export type ActionType = 'file_write' | 'file_read' | 'test_run' | 'typecheck_run' | 'shell_command' | 'parse_error';
 
+export type FailureClassification = 'syntax' | 'type' | 'logic' | 'command' | 'timeout' | 'parse_error';
+
+export type Strategy = 'auto_fix' | 'targeted_fix' | 'logic_fix' | 'command_fix' | 'split_task' | 'format_retry';
+
 export interface Config {
   llm: {
     provider: string;

@@ -1,21 +1,28 @@
 export class RoundManager {
   readonly maxRounds: number;
-  currentRound: number;
+  private _currentRound: number;
 
   constructor(maxRounds: number) {
+    if (maxRounds < 1) {
+      throw new Error(`maxRounds must be >= 1, got ${maxRounds}`);
+    }
     this.maxRounds = maxRounds;
-    this.currentRound = 1;
+    this._currentRound = 1;
+  }
+
+  get currentRound(): number {
+    return this._currentRound;
   }
 
   nextRound(): void {
-    this.currentRound++;
+    this._currentRound++;
   }
 
   shouldUpgrade(): boolean {
-    return this.currentRound > this.maxRounds;
+    return this._currentRound > this.maxRounds;
   }
 
   reset(): void {
-    this.currentRound = 1;
+    this._currentRound = 1;
   }
 }

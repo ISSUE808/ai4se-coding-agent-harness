@@ -1,9 +1,10 @@
-import type { FeedbackResult } from '../types.js';
-
-export type FailureClassification = 'syntax' | 'type' | 'logic' | 'command' | 'timeout' | 'parse_error';
+import type { FeedbackResult, FailureClassification } from '../types.js';
 
 export class FailureClassifier {
   classify(feedback: FeedbackResult): FailureClassification {
-    return feedback.failureCategory!;
+    if (!feedback.failureCategory) {
+      throw new Error('Cannot classify feedback without a failureCategory — only failed feedback should reach the classifier');
+    }
+    return feedback.failureCategory;
   }
 }
