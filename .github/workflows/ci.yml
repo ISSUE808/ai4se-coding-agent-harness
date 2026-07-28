@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master, main]
+    branches: [master]
   pull_request:
-    branches: [master, main]
+    branches: [master]
 
 jobs:
   unit-test:
@@ -14,9 +14,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # TODO: 根据你的技术栈调整以下步骤
-      # 示例为 Node.js/TypeScript，如用其他语言请替换
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -29,7 +26,3 @@ jobs:
 
       - name: Run unit tests
         run: npm test
-
-      # 如需构建分发产物（Docker 镜像、二进制等），在这里添加步骤
-      # - name: Build Docker image
-      #   run: docker build -t ai4se-harness .

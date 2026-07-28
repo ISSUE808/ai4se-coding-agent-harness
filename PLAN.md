@@ -104,7 +104,7 @@ tests/
 
 ---
 
-### 任务 1：项目脚手架 + 核心类型 + 事件系统
+### 任务 1：项目脚手架 + 核心类型 + 事件系统 ✅ — `0f16b22`
 
 **涉及文件：**
 - 创建：`package.json`、`tsconfig.json`、`vitest.config.ts`、`.gitignore`

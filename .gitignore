@@ -24,36 +24,15 @@ Desktop.ini
 
 # 依赖目录
 node_modules/
-__pycache__/
-*.pyc
-.venv/
-venv/
-target/
 
 # 构建产物
 dist/
 build/
-*.exe
-*.dll
-*.so
-*.dylib
-*.o
-*.a
 
 # 日志
 *.log
 logs/
 
 # 临时文件
-tmp/
-temp/
 *.tmp
 .cache/
-
-# 课程参考文档（不下发，仅本地保留）
-# AI4SE_Final_Project_*.md
-PREPARATION_CHECKLIST.md
-# CLAUDE.md
-
-# Superpowers 本地状态（按需调整）
-# .claude/ 视情况决定是否提交
