@@ -70,10 +70,22 @@ describe('read_file tool', () => {
     expect(result.error).toContain('outside workspace');
   });
 
-  it('returns error when a file does not exist', async () => {
+  it('skips missing file with per-file error indicator (SPEC §3.2)', async () => {
     const result = await readFileTool.execute({ paths: ['nonexistent.txt'] }, context);
-    expect(result.success).toBe(false);
-    expect(result.error).toBeDefined();
+    expect(result.success).toBe(true);
+    const files = JSON.parse(result.output!).files;
+    expect(files[0].error).toBe('File not found');
+    expect(files[0].content).toBe('');
+  });
+
+  it('batch: skips missing file, returns other files', async () => {
+    const result = await readFileTool.execute({ paths: ['single.txt', 'nonexistent.txt'] }, context);
+    expect(result.success).toBe(true);
+    const files = JSON.parse(result.output!).files;
+    expect(files).toHaveLength(2);
+    expect(files[0].error).toBeUndefined();
+    expect(files[0].content).toBe('line one\nline two\nline three');
+    expect(files[1].error).toBe('File not found');
   });
 
   it('fails the entire request if any file is outside workspace', async () => {

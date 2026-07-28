@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
+import { isWithinWorkspace } from './fs-utils.js';
 
 interface ListDirectoryParams {
   path: string;
@@ -11,12 +12,6 @@ interface DirEntry {
   name: string;
   type: 'file' | 'directory';
   size: number;
-}
-
-function isWithinWorkspace(targetPath: string, workspaceRoot: string): boolean {
-  const resolved = path.resolve(targetPath);
-  const root = path.resolve(workspaceRoot);
-  return resolved === root || resolved.startsWith(root + path.sep) || resolved.startsWith(root + '/');
 }
 
 function collectEntries(

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
+import { isWithinWorkspace } from './fs-utils.js';
 
 interface ReadFileParams {
   paths: string[];
@@ -10,17 +11,12 @@ interface FileResult {
   path: string;
   content: string;
   lineCount: number;
-}
-
-function isWithinWorkspace(targetPath: string, workspaceRoot: string): boolean {
-  const resolved = path.resolve(targetPath);
-  const root = path.resolve(workspaceRoot);
-  return resolved === root || resolved.startsWith(root + path.sep) || resolved.startsWith(root + '/');
+  error?: string;
 }
 
 export const readFileTool: Tool = {
   name: 'read_file',
-  description: 'Read the contents of one or more files. Returns the content and line count for each file.',
+  description: 'Read the contents of one or more files. Returns the content and line count for each file. Missing files are skipped with an error indicator per file.',
   parameters: {
     paths: {
       type: 'array',
@@ -44,8 +40,6 @@ export const readFileTool: Tool = {
         };
       }
 
-      // Resolve all paths and verify they are within workspace
-      const resolvedPaths: string[] = [];
       for (const filePath of p.paths) {
         if (typeof filePath !== 'string') {
           return {
@@ -62,35 +56,28 @@ export const readFileTool: Tool = {
             duration_ms: Date.now() - start,
           };
         }
-        resolvedPaths.push(resolved);
       }
 
-      // Read all files
+      // Read all files — skip missing ones with per-file error indicator (SPEC §3.2)
       const files: FileResult[] = [];
-      const filesChanged: string[] = [];
-      for (let i = 0; i < resolvedPaths.length; i++) {
-        const resolved = resolvedPaths[i];
+      for (let i = 0; i < p.paths.length; i++) {
+        const resolved = path.resolve(context.workspaceRoot, p.paths[i]);
         const relPath = p.paths[i];
 
         if (!fs.existsSync(resolved)) {
-          return {
-            success: false,
-            error: `File not found: ${relPath}`,
-            duration_ms: Date.now() - start,
-          };
+          files.push({ path: relPath, content: '', lineCount: 0, error: `File not found` });
+          continue;
         }
 
         const content = fs.readFileSync(resolved, 'utf-8');
         const lineCount = content.length === 0 ? 0 : content.split('\n').length;
         files.push({ path: relPath, content, lineCount });
-        filesChanged.push(relPath);
       }
 
       return {
         success: true,
         output: JSON.stringify({ files }),
         duration_ms: Date.now() - start,
-        filesChanged,
       };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
