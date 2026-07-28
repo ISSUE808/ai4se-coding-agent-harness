@@ -677,24 +677,42 @@ describe('HITLManager', () => {
 
 ---
 
-### 任务 11：ValidatorChain + 校验器实现
+### 任务 11a：ValidatorChain + EslintValidator + TscValidator
 
 **涉及文件：**
 - 创建：`src/feedback/validator-chain.ts`
-- 创建：`src/feedback/validators/eslint-validator.ts`、`tsc-validator.ts`、`test-result-validator.ts`、`shell-check-validator.ts`、`format-validator.ts`
-- 创建：`tests/unit/feedback/validator-chain.test.ts` + 5 个校验器测试文件
+- 创建：`src/feedback/validators/eslint-validator.ts`、`tsc-validator.ts`
+- 创建：`tests/unit/feedback/validator-chain.test.ts`、`eslint-validator.test.ts`、`tsc-validator.test.ts`
 
-**产出：** `ValidatorChain`（fail_fast / collect_all）、5 个 `Validator` 实现。
+**产出：** `ValidatorChain`（fail_fast / collect_all 双模式）、`EslintValidator`（调用 `npx eslint --format json` 并解析）、`TscValidator`（调用 `npx tsc --noEmit` 并解析）。ValidatorChain 用前两个校验器进行确定性集成测试。
+
+**完成条件：** `npx vitest run tests/unit/feedback/validator-chain.test.ts tests/unit/feedback/eslint-validator.test.ts tests/unit/feedback/tsc-validator.test.ts` 全部通过；ValidatorChain fail_fast 和 collect_all 行为均被验证；两个校验器均在 mock 环境下通过确定性测试（不依赖项目实际 lint/typecheck 结果）。
 
 - [ ] **步骤 1：ValidatorChain TDD**——fail_fast 首个失败即停；collect_all 运行全部校验器；全部通过 → Pass → 实现 → 通过
 - [ ] **步骤 2：EslintValidator TDD**——运行 `npx eslint --format json`，解析错误 → 实现 → 通过
 - [ ] **步骤 3：TscValidator TDD**——运行 `npx tsc --noEmit`，解析错误输出 → 实现 → 通过
-- [ ] **步骤 4：TestResultValidator TDD**——解析 vitest/jest 输出中的失败项 → 实现 → 通过
-- [ ] **步骤 5：ShellCheckValidator TDD**——exitCode ≠ 0 或 stderr 非空 → 失败 → 实现 → 通过
-- [ ] **步骤 6：FormatValidator TDD**——验证 Action JSON 结构（用于 parse_error）→ 实现 → 通过
-- [ ] **步骤 7：运行所有反馈测试 → 通过，提交**
+- [ ] **步骤 4：运行所有测试 → 通过，提交**
 
-提交：`feat: ValidatorChain + 5 validators (eslint, tsc, test, shell, format) — feedback layer 3`
+提交：`feat: ValidatorChain + EslintValidator + TscValidator — feedback layer 3 (part 1)`
+
+---
+
+### 任务 11b：TestResultValidator + ShellCheckValidator + FormatValidator
+
+**涉及文件：**
+- 创建：`src/feedback/validators/test-result-validator.ts`、`shell-check-validator.ts`、`format-validator.ts`
+- 创建：`tests/unit/feedback/test-result-validator.test.ts`、`shell-check-validator.test.ts`、`format-validator.test.ts`
+
+**产出：** `TestResultValidator`（解析 vitest/jest 输出）、`ShellCheckValidator`（exitCode + stderr 检查）、`FormatValidator`（Action JSON 结构验证，用于 parse_error）。三个校验器均实现 `Validator` 接口，注册到已有 ValidatorChain。
+
+**完成条件：** `npx vitest run tests/unit/feedback/` 下所有测试（含 11a 的测试）全部通过；5 个校验器齐全，每个在 mock 环境下通过确定性测试。
+
+- [ ] **步骤 1：TestResultValidator TDD**——解析 vitest/jest 输出中的失败项 → 实现 → 通过
+- [ ] **步骤 2：ShellCheckValidator TDD**——exitCode ≠ 0 或 stderr 非空 → 失败 → 实现 → 通过
+- [ ] **步骤 3：FormatValidator TDD**——验证 Action JSON 结构（用于 parse_error）→ 实现 → 通过
+- [ ] **步骤 4：运行所有反馈测试 → 通过，提交**
+
+提交：`feat: TestResultValidator + ShellCheckValidator + FormatValidator — feedback layer 3 (part 2)`
 
 ---
 
@@ -774,17 +792,84 @@ describe('RoundManager', () => {
 
 ---
 
-### 任务 13：停机判断器 + Agent 主循环
+### 任务 13a：停机判断器
 
 **涉及文件：**
-- 创建：`src/core/termination.ts`、`src/core/main-loop.ts`
-- 创建：`tests/unit/core/termination.test.ts`、`tests/integration/main-loop.test.ts`
+- 创建：`src/core/termination.ts`
+- 创建：`tests/unit/core/termination.test.ts`
 
-**产出：** `termination.check()` + 完整 `AgentLoop.run()` 集成所有组件。
+**产出：** `termination.check(response, round, maxRounds)` 函数，判断 agent 是否应停止循环。
 
-- [ ] **步骤 1：停机判断器 TDD**——LLM 输出无 tool call → 完成；有 tool call → 未完成；'FINISHED' 工具调用 → 完成；超过 maxRounds → 升级 → 实现 → 通过
-- [ ] **步骤 2：主循环实现**——遵循 SPEC §3.1 伪代码：上下文 → LLM → 解析动作 → 护栏 → 执行工具 → 反馈管线 → 结果回灌 LLM → 循环。每步发出事件。
-- [ ] **步骤 3：使用 MockProvider 编写集成测试**
+**完成条件：** `npx vitest run tests/unit/core/termination.test.ts` 全部通过；所有测试使用 MockProvider 的确定性输出，不依赖真实 LLM。
+
+- [ ] **步骤 1：停机判断器 TDD**
+
+`tests/unit/core/termination.test.ts`：
+
+```typescript
+import { describe, it, expect } from 'vitest';
+import { shouldTerminate } from '../../../src/core/termination.js';
+import type { LLMResponse } from '../../../src/types.js';
+
+describe('shouldTerminate', () => {
+  it('LLM 输出无 tool call → 完成', () => {
+    const resp: LLMResponse = { content: '任务已完成。' };
+    expect(shouldTerminate(resp, 1, 3)).toBe(true);
+  });
+
+  it('有 tool call → 未完成', () => {
+    const resp: LLMResponse = {
+      content: null,
+      toolCalls: [{ name: 'read_file', arguments: { path: 'test.ts' } }],
+    };
+    expect(shouldTerminate(resp, 1, 3)).toBe(false);
+  });
+
+  it('FINISHED 工具调用 → 完成', () => {
+    const resp: LLMResponse = {
+      content: null,
+      toolCalls: [{ name: 'FINISHED', arguments: {} }],
+    };
+    expect(shouldTerminate(resp, 1, 3)).toBe(true);
+  });
+
+  it('超过 maxRounds → 完成（升级触发）', () => {
+    const resp: LLMResponse = {
+      content: null,
+      toolCalls: [{ name: 'write_file', arguments: { path: 'a.ts', content: 'x' } }],
+    };
+    expect(shouldTerminate(resp, 4, 3)).toBe(true);
+  });
+
+  it('第 maxRounds 轮仍在执行', () => {
+    const resp: LLMResponse = {
+      content: null,
+      toolCalls: [{ name: 'write_file', arguments: { path: 'a.ts', content: 'x' } }],
+    };
+    expect(shouldTerminate(resp, 3, 3)).toBe(false);
+  });
+});
+```
+
+运行：`npx vitest run tests/unit/core/termination.test.ts` → FAIL。
+
+- [ ] **步骤 2：实现停机判断器** → 通过测试 → 提交
+
+提交：`feat: termination checker — deterministic stop-condition logic`
+
+---
+
+### 任务 13b：Agent 主循环 + 集成测试
+
+**涉及文件：**
+- 创建：`src/core/main-loop.ts`
+- 创建：`tests/integration/main-loop.test.ts`
+
+**产出：** 完整 `AgentLoop.run()`——遵循 SPEC §3.1 伪代码，编排 LLM → 解析 → 护栏 → 执行 → 反馈 → 回灌 → 循环。每步发出 HarnessEvents。
+
+**完成条件：** `npx vitest run tests/integration/main-loop.test.ts` 3 个集成测试全部通过；所有测试使用 MockProvider，零网络调用；`npx vitest run` 全项目测试通过。
+
+- [ ] **步骤 1：编写集成测试（先红）**
 
 `tests/integration/main-loop.test.ts`：
 
@@ -844,19 +929,17 @@ describe('Agent Main Loop (integration)', () => {
 
   it('解析错误恢复：收到垃圾 JSON 后正确重试', async () => {
     const harness = createTestHarness([
-      { content: 'not valid json {{{}' },          // parse_error
+      { content: 'not valid json {{{}' },
       { toolCalls: [{ name: 'read_file', arguments: { path: 'test.ts' } }] },
       { content: 'done' },
     ]);
     const session = await harness.run('读取文件');
-    // 验证 feedback 中包含 parse_error
     const feedbackMessages = session.messages.filter(m => m.role === 'feedback');
     expect(feedbackMessages.some(f => f.metadata?.feedbackResult?.failureCategory === 'parse_error')).toBe(true);
     expect(session.status).toBe('completed');
   });
 
   it('MaxRounds 升级：4 轮类型错误后触发 HITL', async () => {
-    // 每轮都尝试 write_file，但 Mock 设定每次都触发 type 错误
     const harness = createTestHarness([
       { toolCalls: [{ name: 'write_file', arguments: { path: 'test.ts', content: 'const x: number = "str"' } }] },
       { toolCalls: [{ name: 'write_file', arguments: { path: 'test.ts', content: 'const x: number = "str2"' } }] },
@@ -864,7 +947,6 @@ describe('Agent Main Loop (integration)', () => {
       { toolCalls: [{ name: 'write_file', arguments: { path: 'test.ts', content: 'const x: number = "str4"' } }] },
     ]);
     const session = await harness.run('修复 test.ts 的类型错误');
-    // 第 4 轮后 shouldUpgrade 为 true，session 应标记为需要升级
     expect(session.currentRound).toBe(4);
     expect(session.messages.some(m => m.metadata?.approvalRequired === true)).toBe(true);
   });
@@ -873,9 +955,9 @@ describe('Agent Main Loop (integration)', () => {
 
 运行：`npx vitest run tests/integration/main-loop.test.ts` → FAIL（AgentLoop 类未定义）。
 
-- [ ] **步骤 4：实现停机判断器 + Agent 主循环** → 通过以上所有集成测试 → 提交
+- [ ] **步骤 2：实现 Agent 主循环**——遵循 SPEC §3.1 伪代码 → 通过集成测试 → 提交
 
-提交：`feat: termination checker + agent main loop with full integration tests`
+提交：`feat: agent main loop with full MockProvider integration tests`
 
 ---
 
@@ -949,27 +1031,45 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 18：WebUI——React 前端
+### 任务 18a：WebUI——Open Design 设计 + 项目脚手架 + Dashboard + Settings
 
 **涉及文件：**
 - 创建：`src/webui/client/`——Vite + React 项目（使用 `npm create vite@latest` 脚手架）
-- 创建：页面：`Dashboard.tsx`、`SessionDetail.tsx`、`Settings.tsx`
-- 创建：组件：`MessageList.tsx`、`ApprovalCard.tsx`、`FileDiff.tsx`
+- 创建：`src/webui/client/src/design-tokens.ts`（Open Design 导出）
+- 创建：页面：`Dashboard.tsx`、`Settings.tsx`
 
 初始化：`npm create vite@latest . -- --template react-ts`，安装 `@monaco-editor/react`、`lucide-react`、shadcn/ui（tailwind）。
+
+**完成条件：** `npm run build`（在 client 目录下）无报错；Dashboard 页面渲染正常；Settings 页面渲染正常；所有颜色/字号/间距引用 `design-tokens.ts` 中的变量，无硬编码值。
 
 - [ ] **步骤 0：使用 Open Design 桌面应用设计 UI**——在编写任何 React 代码之前：
   1. 启动 Open Design 桌面应用
   2. 可视化设计三页（Dashboard、SessionDetail、Settings）的布局、颜色方案、间距系统、组件 spec
   3. 导出设计 token 为 `src/webui/client/src/design-tokens.ts`（包含颜色、字体、间距、圆角、阴影等设计变量）
-  4. 此文件是后续 subagent 生成所有 React UI 代码的**约束源**——所有组件必须引用此 token 文件中的变量，不得硬编码颜色/字号/间距
+  4. 此文件是后续 subagent (18a, 18b) 生成所有 React UI 代码的**约束源**——所有组件必须引用此 token 文件中的变量，不得硬编码颜色/字号/间距
 
 - [ ] **步骤 1：Dashboard**——活跃会话列表（状态/任务/运行时长/token 数），"新建会话"按钮 → POST /api/sessions
-- [ ] **步骤 2：SessionDetail（核心页面）**——3 栏布局：文件变更 | 消息流 | 上下文信息。MessageStream 含可展开的 tool call、绿色/红色反馈标记。内联 HITL `ApprovalCard`（批准/编辑/拒绝）。Monaco `FileDiff` 展示 agent 文件变更。底部消息输入框。页面头部：暂停/恢复/停止按钮。
-- [ ] **步骤 3：Settings**——key 管理（脱敏显示、更新/删除），Monaco JSON 配置编辑器（带 schema 校验），配置预览
-- [ ] **步骤 4：提交**
+- [ ] **步骤 2：Settings**——key 管理（脱敏显示、更新/删除），Monaco JSON 配置编辑器（带 schema 校验），配置预览
+- [ ] **步骤 3：提交**
 
-提交：`feat: React WebUI — Dashboard, SessionDetail with inline HITL, Settings`
+提交：`feat: WebUI project scaffold + Open Design tokens + Dashboard + Settings`
+
+---
+
+### 任务 18b：WebUI——SessionDetail + 核心组件
+
+**涉及文件：**
+- 创建：页面：`SessionDetail.tsx`
+- 创建：组件：`MessageList.tsx`、`ApprovalCard.tsx`、`FileDiff.tsx`
+
+**依赖**：Task 18a（需要 Vite 项目脚手架和 design-tokens.ts 已就位）
+
+**完成条件：** `npm run build` 无报错；SessionDetail 页面三栏布局正确；MessageList 可展开 tool call、绿色/红色反馈标记；ApprovalCard 含批准/编辑/拒绝按钮；FileDiff 使用 Monaco Editor 展示 diff；所有样式引用 `design-tokens.ts`。
+
+- [ ] **步骤 1：SessionDetail（核心页面）**——3 栏布局：文件变更 | 消息流 | 上下文信息。MessageStream 含可展开的 tool call、绿色/红色反馈标记。内联 HITL `ApprovalCard`（批准/编辑/拒绝）。Monaco `FileDiff` 展示 agent 文件变更。底部消息输入框。页面头部：暂停/恢复/停止按钮。
+- [ ] **步骤 2：提交**
+
+提交：`feat: WebUI SessionDetail with MessageList, ApprovalCard, FileDiff components`
 
 ---
 
@@ -1024,45 +1124,43 @@ describe('Agent Main Loop (integration)', () => {
 ### 任务 22：文档
 
 **涉及文件：**
-- 创建/完成：`README.md`、`AGENT_LOG.md`、`SPEC_PROCESS.md`、`REFLECTION.md`
+- 创建/完成：`README.md`
 
 - [ ] **步骤 1：README.md**——项目概述、安装（npm + Docker）、快速开始、key 配置指南、WebUI、目录结构、安全边界、已知限制、许可证
-- [ ] **步骤 2：AGENT_LOG.md**——模板含时间戳/任务编号/技能/提示词/提交/人工修改/经验教训
-- [ ] **步骤 3：SPEC_PROCESS.md**——记录 brainstorming 决策、关键迭代、AI vs 人工决策、冷启动验证结果
-- [ ] **步骤 4：REFLECTION.md**——1500-2500 字，覆盖 §五 所有反思主题
-- [ ] **步骤 5：提交**
 
-提交：`docs: README, AGENT_LOG, SPEC_PROCESS, REFLECTION`
+提交：`docs: README`
 
 ---
 
 ## 实现阶段
 
 ```
-阶段 1:  基础             任务 1       （脚手架、类型、事件、CI）
-阶段 2:  LLM 层           任务 2-3     （MockProvider、DeepSeekProvider）
-阶段 3:  工具             任务 4-5     （7 个工具及测试）
-阶段 4:  配置 + 记忆      任务 6-7     （配置覆盖、3 层记忆）
-阶段 5:  护栏             任务 8-9     （PatternGuard、ScopeFence、HITL）
-阶段 6:  反馈闭环         任务 10-12   （主力维度——5 层管线）
-阶段 7:  主循环           任务 13      （停机判断 + 完整 agent 循环）
-阶段 8:  凭据             任务 14-15   （后端 + Store + SecureHandle）
-阶段 9:  CLI              任务 16      （commander + key/config 命令）
-阶段 10: WebUI            任务 17-18   （Express/WS 服务器 + React SPA）
-阶段 11: 集成             任务 19      （完整集成 + --web）
-阶段 12: 演示             任务 20      （§A.6 机制演示）
-阶段 13: 分发             任务 21      （Dockerfile + npm 配置）
-阶段 14: 文档             任务 22      （README、AGENT_LOG 等）
+阶段 1:  基础             任务 1         （脚手架、类型、事件、CI）
+阶段 2:  LLM 层           任务 2-3       （MockProvider、DeepSeekProvider）
+阶段 3:  工具             任务 4-5       （7 个工具及测试）
+阶段 4:  配置 + 记忆      任务 6-7       （配置覆盖、3 层记忆）
+阶段 5:  护栏             任务 8-9       （PatternGuard、ScopeFence、HITL）
+阶段 6:  反馈闭环         任务 10-12     （主力维度——5 层管线；11a/11b 为拆分的校验器）
+阶段 7:  主循环           任务 13a-13b   （停机判断 + Agent 主循环 + 集成测试）
+阶段 8:  凭据             任务 14-15     （后端 + Store + SecureHandle）
+阶段 9:  CLI              任务 16        （commander + key/config 命令）
+阶段 10: WebUI            任务 17-18b    （Express/WS 服务器 + React SPA；18a/18b 拆分前端）
+阶段 11: 集成             任务 19        （完整集成 + --web）
+阶段 12: 演示             任务 20        （§A.6 机制演示）
+阶段 13: 分发             任务 21        （Dockerfile + npm 配置）
+阶段 14: 文档             任务 22        （README）
 ```
 
-**可并行的任务对**：任务 2+4（LLM + 工具）、任务 6+8（配置 + 护栏）、任务 10+14（反馈 + 凭据）、任务 17+20（WebUI + 演示）
+**拆分后任务总数**：25（Task 11→11a/11b、Task 13→13a/13b、Task 18→18a/18b）
+
+**可并行的任务对**：任务 2+4（LLM + 工具）、任务 6+8（配置 + 护栏）、任务 10+14（反馈 + 凭据）、任务 17+20（WebUI 服务器 + 演示）
 
 ---
 
 ## 任务依赖图
 
 ```
- 1 ──→ {2→3, 4→5} ──→ {6, 7} ──→ {8→9, 10→11→12} ──→ 13
-                                                              │
- 14→15 ──→ 16 ──→ {17→18, 20} ──→ 19 ──→ 21 ──→ 22
+ 1 ──→ {2→3, 4→5} ──→ {6, 7} ──→ {8→9, 10→11a→11b→12} ──→ 13a→13b
+                                                                   │
+ 14→15 ──→ 16 ──→ {17→18a→18b, 20} ──→ 19 ──→ 21 ──→ 22
 ```
