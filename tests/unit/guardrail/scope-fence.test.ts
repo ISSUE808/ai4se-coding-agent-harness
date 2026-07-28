@@ -54,7 +54,10 @@ describe('ScopeFence', () => {
       expect(fence.validatePath(inner, workspaceRoot)).toBe(true);
     });
 
-    it('windows 风格分隔符也能正确拦截', () => {
+    // path.resolve() 是平台原生的——Windows 盘符在 Linux 上不被理解。
+    // 此测试仅在 Windows 平台运行。
+    const itWin = process.platform === 'win32' ? it : it.skip;
+    itWin('windows 风格分隔符也能正确拦截', () => {
       const wsWin = 'C:\\Users\\agent\\workspace';
       const outsideWin = 'C:\\Windows\\System32\\drivers\\etc\\hosts';
       expect(fence.validatePath(outsideWin, wsWin)).toBe(false);
