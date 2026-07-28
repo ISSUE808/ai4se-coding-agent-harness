@@ -304,6 +304,7 @@ User Task → Config.load() → Memory.load() → MainLoop.start()
 | Node.js `crypto` | AES-256-GCM 加密 | 标准库 |
 | Node.js `child_process` | shell 执行 | 标准库 |
 | Node.js `fs` | 文件读写 | 标准库 |
+| Open Design 桌面应用 | UI 设计 token 与组件 spec 导出 | 开发工具（非运行时依赖） |
 | Vite + React + shadcn/ui | WebUI 前端构建 | 开发依赖 |
 | Express + ws | WebUI 后端 | 运行时 HTTP/WS |
 
@@ -439,7 +440,7 @@ interface FeedbackResult {
 | 凭据存储 | keytar + 加密文件 fallback | keytar 一个 API 绑三平台；纯 JS 用户可降级到加密文件；环境变量为最后兜底 |
 | 分发 | npm + Docker | npm 对 TS 项目最自然；Docker 提供零依赖备选 |
 | WebUI | React + Vite + shadcn/ui + Monaco Editor | 全功能控制台；Monaco 提供代码 diff 视图；shadcn/ui 轻量；同语言减少心智开销 |
-| 设计系统 | Open Design（skill: `open-design`） | 提供设计 token 与组件 spec，确保 AI 生成 UI 时的一致性；与 shadcn/ui 不冲突——前者管"设计决策如何传达"，后者管"组件如何实现" |
+| 设计系统 | Open Design（桌面应用） | 使用 Open Design 桌面应用可视化设计 Dashboard/SessionDetail/Settings 三页的 UI 布局、颜色和组件 spec；导出设计 token 文件（`design-tokens.ts`）作为 agent 生成 React 代码的约束来源；shadcn/ui 作为组件实现层 |
 
 ---
 
@@ -677,6 +678,8 @@ src/
   webui/
     server.ts                 # Express + WS
     client/                   # React SPA
+      src/
+        design-tokens.ts      # Open Design 导出的设计 token（颜色、间距、字体、组件 spec）
   cli/
     index.ts                  # CLI 入口（commander）
   events.ts                    # EventEmitter（harness→WebUI 桥接）

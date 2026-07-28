@@ -6,7 +6,7 @@
 
 **架构：** Agent 主循环（`while(!done)`）编排 LLM 调用 → 工具执行 → 护栏检查 → 5 层反馈管线 → 结果反馈。所有核心机制实现 TypeScript 接口，配合 `MockProvider` 进行确定性测试。WebUI 通过 EventEmitter/WebSocket 消费事件，与 harness 内核可清晰分离。
 
-**技术栈：** TypeScript, Node.js 20+, vitest, OpenAI SDK (DeepSeek), keytar, Express + ws, React + Vite + shadcn/ui + Monaco Editor, Open Design, Docker
+**技术栈：** TypeScript, Node.js 20+, vitest, OpenAI SDK (DeepSeek), keytar, Express + ws, React + Vite + shadcn/ui + Monaco Editor, Open Design（桌面应用）, Docker
 
 ## 全局约束
 
@@ -20,6 +20,7 @@
 - **`.gitignore` 基线**：不得由 agent 自行补充条目；使用 SPEC §12.2 的基线内容创建
 - **接口定义点**：`src/types.ts` 为所有共享接口的唯一定义点；其他模块（如 `provider.ts`）从 `types.ts` import，不做 re-export
 - **每个主要模块一个 worktree**：在每个模块组之前使用 `superpowers:using-git-worktrees`
+- **CLAUDE.md**：项目级持久指令文件，包含完整实现工作流（§4.6）。所有 subagent 派发 prompt 应引用此文件
 
 ---
 
@@ -83,6 +84,7 @@ src/
     api/sessions.ts, approvals.ts, keys.ts, config.ts
     client/                        # React SPA（Vite）
       src/App.tsx, main.tsx
+      src/design-tokens.ts         # Open Design 导出的设计 token
       pages/Dashboard.tsx, SessionDetail.tsx, Settings.tsx
       components/MessageList.tsx, ApprovalCard.tsx, FileDiff.tsx
   cli/
@@ -956,7 +958,11 @@ describe('Agent Main Loop (integration)', () => {
 
 初始化：`npm create vite@latest . -- --template react-ts`，安装 `@monaco-editor/react`、`lucide-react`、shadcn/ui（tailwind）。
 
-- [ ] **步骤 0：触发 Open Design 技能**——在编写任何 React 代码之前，先触发 Open Design 技能，确定设计 token（颜色、间距、字体）和组件 spec。将设计 token 输出保存到 `src/webui/client/src/design-tokens.ts`。此步骤确保后续 AI 生成的 UI 代码一致。
+- [ ] **步骤 0：使用 Open Design 桌面应用设计 UI**——在编写任何 React 代码之前：
+  1. 启动 Open Design 桌面应用
+  2. 可视化设计三页（Dashboard、SessionDetail、Settings）的布局、颜色方案、间距系统、组件 spec
+  3. 导出设计 token 为 `src/webui/client/src/design-tokens.ts`（包含颜色、字体、间距、圆角、阴影等设计变量）
+  4. 此文件是后续 subagent 生成所有 React UI 代码的**约束源**——所有组件必须引用此 token 文件中的变量，不得硬编码颜色/字号/间距
 
 - [ ] **步骤 1：Dashboard**——活跃会话列表（状态/任务/运行时长/token 数），"新建会话"按钮 → POST /api/sessions
 - [ ] **步骤 2：SessionDetail（核心页面）**——3 栏布局：文件变更 | 消息流 | 上下文信息。MessageStream 含可展开的 tool call、绿色/红色反馈标记。内联 HITL `ApprovalCard`（批准/编辑/拒绝）。Monaco `FileDiff` 展示 agent 文件变更。底部消息输入框。页面头部：暂停/恢复/停止按钮。
