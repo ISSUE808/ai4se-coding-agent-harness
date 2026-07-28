@@ -380,7 +380,7 @@ Mock `openai` 模块：`chat.completions.create` 返回受控响应。测试消�
 
 ---
 
-### 任务 4：Tool 接口 + 只读工具
+### 任务 4：Tool 接口 + 只读工具 ✅ — `4f639b0`
 
 **涉及文件：**
 - 创建：`src/tools/tool.ts`、`src/tools/list-directory.ts`、`src/tools/search-content.ts`、`src/tools/read-file.ts`
@@ -398,7 +398,7 @@ Mock `openai` 模块：`chat.completions.create` 返回受控响应。测试消�
 
 ---
 
-### 任务 5：写入 + 执行工具
+### 任务 5：写入 + 执行工具 ✅ — `6e997bc`
 
 **涉及文件：**
 - 创建：`src/tools/write-file.ts`、`src/tools/edit-file.ts`、`src/tools/run-shell.ts`、`src/tools/run-test.ts`

@@ -75,3 +75,20 @@
   - `filesChanged` 被 subagent 错误填入 read_file——说明需在 SPEC 中标注"仅写操作填充"
 
 ---
+
+## 2026-07-28 16:05 Task 5：写入 + 执行工具
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a2a40dec`（general-purpose，commit message 格式置为 prompt 第一条但仍未完全遵循）
+- **Prompt 要点**：4 个工具（write_file, edit_file, run_shell, run_test）；要求 4 RED+4 GREEN；强制要求 commit message 含 `— by subagent [ID]`
+- **产出**：
+  - Commits: 8 个（4 RED + 4 GREEN）+ `05d15a6`（主 agent CR 修复）
+  - 涉及文件: 4 source + 1 shared (env-utils.ts) + 4 test files
+  - 测试: 34 new tests + 45 existing = 79 passing, tsc clean
+- **人工干预**：CR 评审 2 IMPORTANT，由主 agent 修复
+- **教训**：
+  - Subagent prompt 第一条是 commit message 格式要求，但仍未遵守——后续考虑在 CLAUDE.md 全局约束中再强化
+  - run_test 结构化解析（SPEC §3.2 要求的 `{passed, results[]}`）是 SPEC 的精确规约——subagent 只做了 raw pass-through
+  - env-utils 提取模式已成惯例：fs-utils（Task 4 CR）+ env-utils（Task 5 CR）→ 后续 task 直接遵循
+
+---
