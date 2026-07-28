@@ -28,7 +28,7 @@ afterAll(() => {
 });
 
 function parseFiles(toolResult: { success: boolean; output?: string }): { files: { path: string; content: string; lineCount: number }[] } {
-  return JSON.parse(toolResult.output ?? '{"files":[]}').files;
+  return JSON.parse(toolResult.output ?? '{"files":[]}');
 }
 
 describe('read_file tool', () => {
