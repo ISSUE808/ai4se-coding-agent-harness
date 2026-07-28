@@ -369,8 +369,8 @@ interface Session {
   currentRound: number;
   messages: Message[];
   tokenCount: number;           // estimated
-  createdAt: Date;
-  updatedAt: Date;
+  createdAt: string;             // ISO 8601
+  updatedAt: string;             // ISO 8601
 }
 ```
 
@@ -390,7 +390,7 @@ interface Message {
     important?: boolean;
     compressed?: boolean;
   };
-  timestamp: Date;
+  timestamp: string;            // ISO 8601
 }
 ```
 

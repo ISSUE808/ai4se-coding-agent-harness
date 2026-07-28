@@ -51,9 +51,9 @@ temp/
 .cache/
 
 # 课程参考文档（不下发，仅本地保留）
-AI4SE_Final_Project_*.md
+# AI4SE_Final_Project_*.md
 PREPARATION_CHECKLIST.md
-CLAUDE.md
+# CLAUDE.md
 
 # Superpowers 本地状态（按需调整）
 # .claude/ 视情况决定是否提交
