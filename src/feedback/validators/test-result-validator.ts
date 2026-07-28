@@ -19,7 +19,7 @@ interface VitestResult {
 }
 
 export class TestResultValidator implements Validator {
-  name = 'test-runner';
+  name = 'testResultParser';
   private _exec: typeof nodeExecSync;
 
   constructor(exec?: typeof nodeExecSync) {
@@ -47,7 +47,7 @@ export class TestResultValidator implements Validator {
 
       return {
         passed: false,
-        validator: 'test-runner',
+        validator: 'testResultParser',
         failureCategory: 'command',
         evidence: `Test runner error: ${error.message}`,
       };
@@ -61,7 +61,7 @@ export class TestResultValidator implements Validator {
     } catch {
       return {
         passed: false,
-        validator: 'test-runner',
+        validator: 'testResultParser',
         failureCategory: 'command',
         evidence: 'Failed to parse test runner output',
       };
@@ -72,7 +72,7 @@ export class TestResultValidator implements Validator {
     if (numFailedTests === 0) {
       return {
         passed: true,
-        validator: 'test-runner',
+        validator: 'testResultParser',
         evidence: `All ${numTotalTests} tests passed`,
       };
     }
@@ -96,7 +96,7 @@ export class TestResultValidator implements Validator {
 
     return {
       passed: false,
-      validator: 'test-runner',
+      validator: 'testResultParser',
       failureCategory: 'logic',
       evidence: `${numFailedTests} of ${numTotalTests} tests failed`,
       details,

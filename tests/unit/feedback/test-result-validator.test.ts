@@ -19,7 +19,7 @@ describe('TestResultValidator', () => {
   });
 
   it('has name "test-runner"', () => {
-    expect(validator.name).toBe('test-runner');
+    expect(validator.name).toBe('testResultParser');
   });
 
   it('returns passed when all tests pass', async () => {
@@ -35,7 +35,7 @@ describe('TestResultValidator', () => {
 
     const feedback = await validator.validate(action, result, ctx);
     expect(feedback.passed).toBe(true);
-    expect(feedback.validator).toBe('test-runner');
+    expect(feedback.validator).toBe('testResultParser');
     expect(feedback.evidence).toBe('All 3 tests passed');
   });
 
@@ -72,7 +72,7 @@ describe('TestResultValidator', () => {
     const feedback = await validator.validate(action, result, ctx);
     expect(feedback.passed).toBe(false);
     expect(feedback.failureCategory).toBe('logic');
-    expect(feedback.validator).toBe('test-runner');
+    expect(feedback.validator).toBe('testResultParser');
     expect(feedback.evidence).toContain('2 of 3 tests failed');
     expect(feedback.details).toHaveLength(2);
     expect(feedback.details![0]).toMatchObject({
@@ -125,7 +125,7 @@ describe('TestResultValidator', () => {
     const feedback = await validator.validate(action, result, ctx);
     expect(feedback.passed).toBe(false);
     expect(feedback.failureCategory).toBe('command');
-    expect(feedback.validator).toBe('test-runner');
+    expect(feedback.validator).toBe('testResultParser');
   });
 
   it('returns command failure when JSON output is invalid', async () => {

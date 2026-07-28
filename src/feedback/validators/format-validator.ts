@@ -1,13 +1,13 @@
 import type { Validator, Action, ToolResult, ValidatorContext, FeedbackResult } from '../../types.js';
 
 export class FormatValidator implements Validator {
-  name = 'format';
+  name = 'formatChecker';
 
   async validate(action: Action, _result: ToolResult, _context: ValidatorContext): Promise<FeedbackResult> {
     if (action == null) {
       return {
         passed: false,
-        validator: 'format',
+        validator: 'formatChecker',
         failureCategory: 'parse_error',
         evidence: 'Action is null or undefined',
       };
@@ -26,7 +26,7 @@ export class FormatValidator implements Validator {
     if (missing.length > 0) {
       return {
         passed: false,
-        validator: 'format',
+        validator: 'formatChecker',
         failureCategory: 'parse_error',
         evidence: `Action format invalid: missing required field: ${missing.join(', ')}`,
       };
@@ -34,7 +34,7 @@ export class FormatValidator implements Validator {
 
     return {
       passed: true,
-      validator: 'format',
+      validator: 'formatChecker',
       evidence: 'Action format is valid',
     };
   }

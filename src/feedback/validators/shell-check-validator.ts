@@ -1,7 +1,7 @@
 import type { Validator, Action, ToolResult, ValidatorContext, FeedbackResult } from '../../types.js';
 
 export class ShellCheckValidator implements Validator {
-  name = 'shell-check';
+  name = 'stderrChecker';
 
   async validate(_action: Action, result: ToolResult, _context: ValidatorContext): Promise<FeedbackResult> {
     const hasBadExitCode = result.exitCode != null && result.exitCode !== 0;
@@ -17,7 +17,7 @@ export class ShellCheckValidator implements Validator {
       }
       return {
         passed: false,
-        validator: 'shell-check',
+        validator: 'stderrChecker',
         failureCategory: 'command',
         evidence: `Shell command failed: ${parts.join('; ')}`,
       };
@@ -25,7 +25,7 @@ export class ShellCheckValidator implements Validator {
 
     return {
       passed: true,
-      validator: 'shell-check',
+      validator: 'stderrChecker',
       evidence: 'Shell command completed successfully',
     };
   }

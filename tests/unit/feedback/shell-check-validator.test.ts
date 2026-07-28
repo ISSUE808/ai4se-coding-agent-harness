@@ -13,7 +13,7 @@ describe('ShellCheckValidator', () => {
   });
 
   it('has name "shell-check"', () => {
-    expect(validator.name).toBe('shell-check');
+    expect(validator.name).toBe('stderrChecker');
   });
 
   it('returns passed when exitCode is 0 and no error', async () => {
@@ -26,7 +26,7 @@ describe('ShellCheckValidator', () => {
 
     const feedback = await validator.validate(action, result, ctx);
     expect(feedback.passed).toBe(true);
-    expect(feedback.validator).toBe('shell-check');
+    expect(feedback.validator).toBe('stderrChecker');
     expect(feedback.evidence).toBe('Shell command completed successfully');
   });
 
@@ -65,7 +65,7 @@ describe('ShellCheckValidator', () => {
     const feedback = await validator.validate(action, result, ctx);
     expect(feedback.passed).toBe(false);
     expect(feedback.failureCategory).toBe('command');
-    expect(feedback.validator).toBe('shell-check');
+    expect(feedback.validator).toBe('stderrChecker');
     expect(feedback.evidence).toContain('exit code 1');
   });
 

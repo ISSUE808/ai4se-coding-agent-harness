@@ -12,7 +12,7 @@ describe('FormatValidator', () => {
   });
 
   it('has name "format"', () => {
-    expect(validator.name).toBe('format');
+    expect(validator.name).toBe('formatChecker');
   });
 
   it('returns passed for a valid Action with tool and params', async () => {
@@ -21,7 +21,7 @@ describe('FormatValidator', () => {
 
     const feedback = await validator.validate(action, result, ctx);
     expect(feedback.passed).toBe(true);
-    expect(feedback.validator).toBe('format');
+    expect(feedback.validator).toBe('formatChecker');
     expect(feedback.evidence).toBe('Action format is valid');
   });
 
@@ -40,7 +40,7 @@ describe('FormatValidator', () => {
     const feedback = await validator.validate(action, result, ctx);
     expect(feedback.passed).toBe(false);
     expect(feedback.failureCategory).toBe('parse_error');
-    expect(feedback.validator).toBe('format');
+    expect(feedback.validator).toBe('formatChecker');
     expect(feedback.evidence).toContain('missing required field: tool');
   });
 
