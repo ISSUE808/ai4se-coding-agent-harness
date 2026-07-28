@@ -661,7 +661,7 @@ describe('HITLManager', () => {
 
 ---
 
-### 任务 10：ActionClassifier + ValidatorSelector
+### 任务 10：ActionClassifier + ValidatorSelector ✅ — `a57970a`
 
 **涉及文件：**
 - 创建：`src/feedback/action-classifier.ts`、`src/feedback/validator-selector.ts`
@@ -677,7 +677,7 @@ describe('HITLManager', () => {
 
 ---
 
-### 任务 11a：ValidatorChain + EslintValidator + TscValidator
+### 任务 11a：ValidatorChain + EslintValidator + TscValidator ✅ — `827e157`
 
 **涉及文件：**
 - 创建：`src/feedback/validator-chain.ts`
@@ -697,7 +697,7 @@ describe('HITLManager', () => {
 
 ---
 
-### 任务 11b：TestResultValidator + ShellCheckValidator + FormatValidator
+### 任务 11b：TestResultValidator + ShellCheckValidator + FormatValidator ✅ — `bc8d08f`
 
 **涉及文件：**
 - 创建：`src/feedback/validators/test-result-validator.ts`、`shell-check-validator.ts`、`format-validator.ts`
@@ -716,7 +716,7 @@ describe('HITLManager', () => {
 
 ---
 
-### 任务 12：FailureClassifier + StrategyMatcher + RoundManager
+### 任务 12：FailureClassifier + StrategyMatcher + RoundManager ✅ — `b671b09`
 
 **涉及文件：**
 - 创建：`src/feedback/failure-classifier.ts`、`src/feedback/strategy-matcher.ts`、`src/feedback/round-manager.ts`

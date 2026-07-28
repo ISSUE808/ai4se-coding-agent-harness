@@ -159,3 +159,72 @@
   - 40 个测试中 26 个是 HITL 状态机——状态数 × 转换数 = 覆盖率的自然结果
 
 ---
+
+## 2026-07-28 18:57 Task 10：ActionClassifier + ValidatorSelector（反馈闭环第1-2层）
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a9fb4a4b`（RED `4cba531` → GREEN `a57970a`）
+- **Prompt 要点**：5 种 ActionType 分类 + ValidatorSelector 按类型选择校验器名称列表（返回 string[] 不创建实例）
+- **产出**：
+  - Commits: `4cba531`（RED）, `a57970a`（GREEN）, `aca0b6f`（主 agent CR 修复）
+  - 涉及文件: `action-classifier.ts`, `validator-selector.ts`, `types.ts` (+ActionType) + 2 test files
+  - 测试: 33 new + 180 existing = 213/213, tsc clean
+- **人工干预**：多维度 CR 评审（6 个 agent 并行）发现 3 个需修复项：
+  - CRITICAL: CODE_EXTENSIONS 死代码——非代码文件被分类为 file_write，触发不必要的 eslint/tsc。修复：非代码扩展名返回 `file_read`（zero validators）
+  - CONVENTION: `ActionType` 从 action-classifier.ts 移至 `types.ts`（§12.1 唯一定义点违规）
+  - BUG: `TEST_PATTERN` 遗漏 `npm run test`（仅匹配 `npm test`）
+- **教训**：
+  - **多角度 CR 评审首次应用**——6 个 agent 并行（Altitude/Conventions/TDD invariants/language pitfalls/wrapper correctness/removed-behavior）发现 10+ 个问题，远多于单一 reviewer 模式
+  - Subagent 写了 CODE_EXTENSIONS 检查但使其失效——"看起来正确 + 测试通过" ≠ 真正正确（测试缺少负向用例揭示死代码）
+  - `parse_error` 在 type union 中但 ActionClassifier 永远不返回它——设计意图正确（由 LLM parser 产生），但类型系统未体现分叉路径
+  - 多角度评审的噪音比：10+ findings → 3 actionable → 实际修复 3 个——其余是设计讨论或后期重构项
+
+---
+
+## 2026-07-28 19:16 Task 11a：ValidatorChain + EslintValidator + TscValidator
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`ad51f31a`（RED `14937f8` → GREEN `827e157`）
+- **Prompt 要点**：ValidatorChain fail_fast/collect_all 双模式；EslintValidator + TscValidator 实现 Validator 接口；DI execSync 满足 §A.4-C
+- **产出**：
+  - Commits: `14937f8`（RED）, `827e157`（GREEN）, `239d680`（CR fix）
+  - 涉及文件: 3 source + 3 test files
+  - 测试: 20 new（8+6+6）+ 213 existing = 233/233, tsc clean
+- **人工干预**：CR 评审 1 IMPORTANT：eslint `details` 硬编码 `files[0]`——多文件时所有错误归属到第一个文件。修复：flatMap 中携带 `filePath` 从 ESLint JSON 输出
+- **教训**：
+  - Subagent 的 DI（依赖注入 execSync）设计是本次最佳实践——validator 测试纯确定性，不依赖文件系统/真实工具链
+  - `details` 字段是反馈管线最容易被忽略但最关键的部分——错一行代码导致 LLM 修改错误文件
+
+---
+
+## 2026-07-28 19:28 Task 11b：TestResultValidator + ShellCheckValidator + FormatValidator
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a05089d5`（RED `de8a3d7` → GREEN `bc8d08f`）
+- **Prompt 要点**：3 个 validator 补齐 5 个校验器；DI 模式；FormatValidator 纯代码
+- **产出**：
+  - Commits: `de8a3d7`（RED）, `bc8d08f`（GREEN）, `1e2d765`（CR fix）
+  - 涉及文件: 3 source + 3 test files
+  - 测试: 30 new + 233 existing = 263/263, tsc clean
+- **人工干预**：CR 评审 1 CRITICAL：3 个 validator 的 `name` 与 ValidatorSelector key 不匹配（如 selector 用 'testResultParser' 但 validator 名为 'test-runner'）。修复：全部对齐为 selector 的 key
+- **教训**：
+  - Validator name ↔ selector key 的一致性应通过共享常量文件或 registry 强制执行——6 个硬编码字符串分散在 selector 和 5 个 validator 中，容易漂移
+  - Task 11a 的 eslint/tsc 名字恰巧匹配（因为是 SPEC 中的原名），掩盖了这个问题——新 3 个 validator 用了不同命名风格才暴露
+
+---
+
+## 2026-07-28 19:39 Task 12：FailureClassifier + StrategyMatcher + RoundManager（完成反馈5层管线）
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a61fb659`（RED `d88b0c4` → GREEN `b671b09`）
+- **Prompt 要点**：6 种分类映射 + 6 种策略 + 轮次管理器（3 轮执行，第 4 轮升级）
+- **产出**：
+  - Commits: `d88b0c4`（RED）, `b671b09`（GREEN）, `59b328b`（CR fix）
+  - 涉及文件: 3 source + `types.ts` (+FailureClassification, +Strategy types) + 3 test files
+  - 测试: 19 new + 263 existing = **282/282**, tsc clean
+- **人工干预**：3 项 CR fix——`failureCategory!`→运行时断言、`currentRound` private + getter、`FailureClassification`/`Strategy` 移至 `types.ts`
+- **教训**：
+  - 反馈闭环主力维度完成：5 层管线 × 282 tests × 0 LLM × 0 network——§A.4-C 判据得到充分证实
+  - `!` 非空断言在 TS 中是隐蔽技术债——告诉编译器"相信我"但运行时无保证
+
+---
