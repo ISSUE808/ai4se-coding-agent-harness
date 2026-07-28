@@ -40,3 +40,21 @@
   - MockProvider 忽略 `_tools` 正确，但 Task 3 DeepSeekProvider 需处理 `Tool.execute` 无法 JSON 序列化的问题
 
 ---
+
+## 2026-07-28 15:16 Task 3：DeepSeekProvider
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a3641485`（general-purpose，要求 RED+GREEN 两个独立 commit）
+- **Prompt 要点**：使用 `vi.mock('openai')` 模拟 SDK，零网络调用；排除 `Tool.execute` 等不可序列化字段；构造函数接收配置对象而非硬编码
+- **产出**：
+  - Commits: `89dd56d`（RED，327行测试文件，implementation不存在）→ `ffab869`（GREEN，62行实现）
+  - 涉及文件: `src/llm/deepseek-provider.ts`, `tests/unit/llm/deepseek-provider.test.ts`
+  - 测试: 11/11 passing（累计 18/18, tsc clean）
+- **人工干预**：无
+- **教训**：
+  - 首次成功的独立 RED+GREEN commit 模式——Task 2 反馈的改进在此 task 落地
+  - `vi.mock('openai')` 提供了完整的 SDK mock 能力：消息格式化、工具格式化、tool_calls 解析均通过 mock 返回值验证
+  - CR 评审指出 MINOR：`JSON.parse(tc.function.arguments)` 无 try/catch 保护——若 DeepSeek 返回畸形 JSON 会导致未捕获异常。但依赖 OpenAI function-calling 契约保证合理性，暂缓修复
+  - CR 评审指出 `as OpenAI.Chat.Completions.ChatCompletionMessageParam[]` 类型断言绕过了 TS 检查——实用但值一个注释说明安全性
+
+---

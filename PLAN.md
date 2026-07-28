@@ -325,7 +325,7 @@ git commit -m "feat: project scaffolding, core types, EventEmitter bridge, CI co
 
 ---
 
-### 任务 2：LLMProvider 接口 + MockProvider
+### 任务 2：LLMProvider 接口 + MockProvider ✅ — `3ff7841`
 
 **涉及文件：**
 - 创建：`src/llm/provider.ts`、`src/llm/mock-provider.ts`
@@ -358,7 +358,7 @@ git commit -m "feat: project scaffolding, core types, EventEmitter bridge, CI co
 
 ---
 
-### 任务 3：DeepSeekProvider
+### 任务 3：DeepSeekProvider ✅ — `ffab869`
 
 **涉及文件：**
 - 创建：`src/llm/deepseek-provider.ts`
