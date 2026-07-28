@@ -13,7 +13,7 @@ interface PatternRule {
 const RULES: PatternRule[] = [
   // === BLOCK 级别 ===
   // 递归删除根目录
-  { regex: /\brm\s+.*-(?:r[^-\s]*f?|[^-]\S*r\S*f)\S*\s+(?:--no-preserve-root\s+)?\//, level: 'block', rule: 'recursive_delete_root' },
+  { regex: /\brm\s+.*-(?:r[^-\s]*f?|f[^-\s]*r|[^-]\S*[rf]\S*[rf])\S*\s+(?:--no-preserve-root\s+)?\/(?:\s|$)/, level: 'block', rule: 'recursive_delete_root' },
   // Windows 递归删除
   { regex: /\bdel\s+\/f\s+\/s\s+\/q\b/i, level: 'block', rule: 'windows_recursive_delete' },
   { regex: /\brmdir\s+\/s\s+\/q\b/i, level: 'block', rule: 'windows_recursive_delete' },

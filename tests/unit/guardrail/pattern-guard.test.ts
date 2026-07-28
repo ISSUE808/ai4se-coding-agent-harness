@@ -12,6 +12,14 @@ describe('PatternGuard', () => {
       const r2 = guard.check('rm -rf --no-preserve-root /');
       expect(r2.level).toBe('block');
       expect(r2.blocked).toBe(true);
+      // -fr flag order (CR fix: f-then-r alternative)
+      const r3 = guard.check('rm -fr /');
+      expect(r3.level).toBe('block');
+    });
+    it('不拦截 rm -rf 非根路径', () => {
+      // CR fix: regex now anchors / as terminal path component
+      expect(guard.check('rm -rf /tmp').level).toBe('allow');
+      expect(guard.check('rm -rf /home/user/build').level).toBe('allow');
     });
     it('拦截 Windows 递归删除', () => {
       expect(guard.check('del /f /s /q C:\\').level).toBe('block');
