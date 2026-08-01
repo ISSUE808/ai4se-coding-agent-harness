@@ -3,10 +3,14 @@ import {
   createSession,
   deleteKey,
   fetchConfig,
+  fetchSession,
   fetchSessions,
   getKeyStatus,
+  postMessage,
+  resolveApproval,
   saveConfig,
   saveKey,
+  sessionControl,
 } from './api';
 
 const fetchMock = vi.fn();
@@ -104,5 +108,71 @@ describe('api client', () => {
   it('rejects with the server error message on a failed response', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ error: 'internal server error' }, false, 500));
     await expect(fetchSessions()).rejects.toThrow('internal server error');
+  });
+
+  it('fetchSession GETs /api/sessions/:id and returns messages', async () => {
+    const detail = {
+      id: 's_1',
+      task: 't',
+      status: 'running',
+      maxRounds: 3,
+      currentRound: 1,
+      tokenCount: 100,
+      createdAt: '2026-08-02T08:00:00.000Z',
+      updatedAt: '2026-08-02T08:01:00.000Z',
+      messages: [{ id: 'm1', role: 'user', content: 'task', timestamp: '2026-08-02T08:00:00.000Z' }],
+    };
+    fetchMock.mockResolvedValue(jsonResponse(detail));
+    const result = await fetchSession('s_1');
+    expect(result.messages).toHaveLength(1);
+    expect(lastPath()).toBe('/api/sessions/s_1');
+  });
+
+  it('postMessage POSTs a user message and returns the stored message', async () => {
+    const stored = { id: 'm2', role: 'user', content: '继续', timestamp: '2026-08-02T08:02:00.000Z' };
+    fetchMock.mockResolvedValue(jsonResponse(stored));
+    const result = await postMessage('s_1', '继续');
+    expect(result.id).toBe('m2');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/sessions/s_1/message');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ role: 'user', content: '继续' });
+  });
+
+  it('sessionControl POSTs the action endpoint and returns the session', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's_1', status: 'paused' }));
+    const result = await sessionControl('s_1', 'pause');
+    expect(result.status).toBe('paused');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/sessions/s_1/pause');
+    expect(init.method).toBe('POST');
+  });
+
+  it('sessionControl supports resume and stop actions', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's_1', status: 'running' }));
+    await sessionControl('s_1', 'resume');
+    expect(new URL(fetchMock.mock.calls[0][0]).pathname).toBe('/api/sessions/s_1/resume');
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's_1', status: 'completed' }));
+    await sessionControl('s_1', 'stop');
+    expect(new URL(fetchMock.mock.calls[1][0]).pathname).toBe('/api/sessions/s_1/stop');
+  });
+
+  it('resolveApproval POSTs approve without a modified command', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ sessionId: 's_1', decision: 'approve' }));
+    const result = await resolveApproval('s_1', 'approve');
+    expect(result.decision).toBe('approve');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/approvals/s_1');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ decision: 'approve' });
+  });
+
+  it('resolveApproval POSTs modify with the modifiedCommand body', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ sessionId: 's_1', decision: 'modify' }));
+    const result = await resolveApproval('s_1', 'modify', 'npm run migrate -- --dry-run');
+    expect(result.decision).toBe('modify');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/approvals/s_1');
+    expect(JSON.parse(init.body)).toEqual({ decision: 'modify', modifiedCommand: 'npm run migrate -- --dry-run' });
   });
 });

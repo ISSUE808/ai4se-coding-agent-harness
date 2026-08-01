@@ -3,6 +3,7 @@
  * (src/webui/server.ts). Server responses are already secret-masked; this
  * client never stores or displays plaintext keys.
  */
+import type { SessionMessage } from './session-messages';
 
 export interface SessionSummary {
   id: string;
@@ -82,6 +83,56 @@ export async function fetchSessions(): Promise<SessionSummary[]> {
 
 export async function createSession(task: string, maxRounds: number): Promise<SessionSummary> {
   return request<SessionSummary>('/api/sessions', jsonInit('POST', { task, maxRounds }));
+}
+
+/** Session with its full message history (GET /api/sessions/:id). */
+export interface SessionDetail extends SessionSummary {
+  messages: SessionMessage[];
+}
+
+export async function fetchSession(id: string): Promise<SessionDetail> {
+  return request<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`);
+}
+
+/** Append a user message; the backend broadcasts it back via `message:added`. */
+export async function postMessage(sessionId: string, content: string): Promise<SessionMessage> {
+  return request<SessionMessage>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/message`,
+    jsonInit('POST', { role: 'user', content }),
+  );
+}
+
+export type SessionControlAction = 'pause' | 'resume' | 'stop';
+
+/** Pause/resume/stop a session (illegal transitions answer 409). */
+export async function sessionControl(
+  sessionId: string,
+  action: SessionControlAction,
+): Promise<SessionSummary> {
+  return request<SessionSummary>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/${action}`,
+    { method: 'POST' },
+  );
+}
+
+export type ApprovalDecision = 'approve' | 'modify' | 'deny';
+
+export interface ApprovalResponse {
+  sessionId: string;
+  decision: ApprovalDecision;
+}
+
+/** Resolve a pending HITL approval; `modify` requires the modified command. */
+export async function resolveApproval(
+  sessionId: string,
+  decision: ApprovalDecision,
+  modifiedCommand?: string,
+): Promise<ApprovalResponse> {
+  const body: Record<string, unknown> = { decision };
+  if (decision === 'modify') {
+    body.modifiedCommand = modifiedCommand ?? '';
+  }
+  return request<ApprovalResponse>(`/api/approvals/${encodeURIComponent(sessionId)}`, jsonInit('POST', body));
 }
 
 // ─── Keys (provider-scoped; responses are masked server-side) ───────────────

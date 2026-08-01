@@ -4,11 +4,11 @@ import { Settings as SettingsIcon, SquareTerminal } from 'lucide-react';
 import designTokens from './design-tokens';
 import Dashboard from './pages/Dashboard';
 import SettingsPage from './pages/Settings';
+import SessionDetail from './pages/SessionDetail';
 
 /**
  * App shell: top bar with brand + view tabs, then the routed views.
- * Routes: `/` Dashboard, `/settings` Settings; `/sessions/:id` is a
- * placeholder until Task 18b ships SessionDetail.
+ * Routes: `/` Dashboard, `/sessions/:id` SessionDetail, `/settings` Settings.
  */
 export default function App() {
   return (
@@ -26,7 +26,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/sessions/:id" element={<SessionDetailPlaceholder />} />
+          <Route path="/sessions/:id" element={<SessionDetail />} />
         </Routes>
       </div>
     </div>
@@ -137,35 +137,5 @@ function TopTab({
       {children}
       {label}
     </NavLink>
-  );
-}
-
-/** Placeholder view until Task 18b implements SessionDetail. */
-function SessionDetailPlaceholder() {
-  return (
-    <main
-      style={{
-        height: '100%',
-        display: 'grid',
-        placeItems: 'center',
-        background: designTokens.colors.bg,
-        color: designTokens.colors.textMuted,
-        fontSize: designTokens.typography.fontSize.base,
-      }}
-    >
-      <div style={{ textAlign: 'center' }}>
-        <p style={{ margin: 0, fontWeight: designTokens.typography.fontWeight.semibold }}>
-          会话详情
-        </p>
-        <p
-          style={{
-            margin: `${designTokens.spacing[2]} 0 0`,
-            fontSize: designTokens.typography.fontSize.sm,
-          }}
-        >
-          此页面将在后续任务（18b）中实现。
-        </p>
-      </div>
-    </main>
   );
 }
