@@ -1,4 +1,4 @@
-import type { CredentialBackend } from './backend.js';
+import type { CredentialBackend } from '../../types.js';
 
 /**
  * EnvBackend — reads `CODEHARNESS_API_KEY` from the environment (SPEC §3.7).

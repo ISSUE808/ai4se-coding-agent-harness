@@ -1,4 +1,4 @@
-import type { CredentialBackend } from './backends/backend.js';
+import type { CredentialBackend } from '../types.js';
 import { SecureHandle } from './secure-handle.js';
 
 /** Thrown when no configured backend passes its availability probe. */
@@ -51,7 +51,14 @@ export class CredentialStore {
       return this.activeBackend;
     }
     for (const backend of this.backends) {
-      if (await backend.isAvailable()) {
+      let available = false;
+      try {
+        available = await backend.isAvailable();
+      } catch {
+        // A throwing probe = unavailable; degrade to the next backend (§3.7)
+        available = false;
+      }
+      if (available) {
         this.activeBackend = backend;
         return backend;
       }

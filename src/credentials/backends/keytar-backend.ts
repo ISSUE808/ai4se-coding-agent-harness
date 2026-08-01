@@ -1,4 +1,4 @@
-import type { CredentialBackend } from './backend.js';
+import type { CredentialBackend } from '../../types.js';
 
 /**
  * KeytarBackend — delegates to the OS keychain

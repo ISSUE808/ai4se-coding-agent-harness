@@ -7,7 +7,7 @@ import {
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { CredentialBackend } from './backend.js';
+import type { CredentialBackend } from '../../types.js';
 
 /**
  * EncryptedFileBackend — AES-256-GCM encrypted file fallback (SPEC §3.7).
