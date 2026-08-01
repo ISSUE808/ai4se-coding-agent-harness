@@ -102,7 +102,7 @@ export class AgentLoop {
 
     this.events.emit('session:status', { sessionId: session.id, status: 'running' });
 
-    while (true) {
+    outer: while (true) {
       // Keep session round tracking in sync
       session.currentRound = this.feedback.roundManager.currentRound;
 
@@ -216,6 +216,7 @@ export class AgentLoop {
           if (guardResult.needsApproval) {
             session.status = 'paused';
             this.events.emit('session:status', { sessionId: session.id, status: 'paused' });
+            break outer; // HITL paused — stop the loop; resume handled by CLI/WebUI
           }
           break; // Stop processing further actions
         }
@@ -356,7 +357,7 @@ export class AgentLoop {
           command,
           level: 'block',
         });
-        return { blocked: true, needsApproval: false, reason: `Blocked: ${guardResult.rule}` };
+        return { blocked: true, needsApproval: false, reason: guardResult.rule ?? 'unknown' };
       }
       if (guardResult.level === 'warn') {
         this.events.emit('guardrail:triggered', {
@@ -368,7 +369,13 @@ export class AgentLoop {
         try {
           this.guard.hitl.requestApproval(command);
         } catch {
-          // HITL already in another state
+          // HITL already in another state — treat as blocked so the stale
+          // pendingCommand is not silently overwritten
+          return {
+            blocked: true,
+            needsApproval: false,
+            reason: `HITL busy: ${guardResult.rule}`,
+          };
         }
         return { blocked: true, needsApproval: true, reason: `HITL required: ${guardResult.rule}` };
       }
@@ -475,10 +482,25 @@ export class AgentLoop {
     }
 
     // Layer 3: ValidatorChain
-    const chain = new ValidatorChain(validators, this.config.feedback.validatorMode);
-    const feedbackResults = await chain.run(action, result, {
-      workspaceRoot: this.config.agent.workspaceRoot,
-    });
+    let feedbackResults: FeedbackResult[];
+    try {
+      const chain = new ValidatorChain(validators, this.config.feedback.validatorMode);
+      feedbackResults = await chain.run(action, result, {
+        workspaceRoot: this.config.agent.workspaceRoot,
+      });
+    } catch (err: unknown) {
+      // SPEC §3.1 错误处理: 所有异常捕获并转化为结构化 FeedbackResult，不中断主循环
+      const msg = err instanceof Error ? err.message : String(err);
+      feedbackResults = [
+        {
+          passed: false,
+          validator: 'loop',
+          failureCategory: 'command',
+          strategy: 'command_fix',
+          evidence: `Validator chain crashed: ${msg}`,
+        },
+      ];
+    }
 
     let allPassed = true;
 

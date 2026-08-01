@@ -152,7 +152,7 @@ describe('Agent Main Loop (integration)', () => {
     expect(toolMessages[0].metadata?.toolName).toBe('read_file');
   });
 
-  it('MaxRounds 升级：4 轮反馈失败后触发 HITL', async () => {
+  it('MaxRounds 升级：3 轮反馈失败后，第 4 轮进入前触发 HITL', async () => {
     const harness = createTestHarness(
       [
         { toolCalls: [{ name: 'write_file', arguments: { path: 'test.ts', content: 'const x: number = "str"' } }] },
