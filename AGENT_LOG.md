@@ -282,3 +282,25 @@
   - CR 评审无 CRITICAL——smallest module, cleanest review。停机判断逻辑简单到不可能出错
 
 ---
+## 2026-08-01 21:06 Task 13b：Agent 主循环 + 集成测试
+
+- **触发技能**：`test-driven-development`, `requesting-code-review`
+- **Subagent**：`c767ce5c`（主 agent 直接执行，任务复杂度要求深度集成调试）
+- **Prompt 要点**：编排所有已有模块（LLM/工具/护栏/反馈/记忆/事件/配置/停机判断），遵循 SPEC §3.1 伪代码；3 个集成测试全部使用 MockProvider
+- **产出**：
+  - Commit: `03c6c97`
+  - 涉及文件: `src/core/main-loop.ts`, `tests/integration/main-loop.test.ts`
+  - 测试: 3 new + 329 existing = 332/332, tsc clean
+- **人工干预**：
+  - 修复 3 个集成调试问题：
+    1. 测试使用 `createToolRegistry()` 但代码只有 `ToolRegistry` 类——改为 `new ToolRegistry()`
+    2. `ScopeFence.validatePath` 接收相对路径时从 CWD 解析，导致路径检查失败——在主循环中先用 `path.resolve(workspaceRoot, actionPath)` 解析再传入
+    3. `triggerHITL` 前未更新 `session.currentRound`——在 `triggerHITL` 开头同步 `roundManager.currentRound`
+- **教训**：
+  - PLAN 模板与实际 API 存在差异（`createToolRegistry`、`new ReadFileTool()` 等），需要按实际 codebase 适配而非盲从模板
+  - ScopeFence 路径解析 bug 是一个"相对 vs 绝对路径"的边界问题——验证逻辑应始终使用绝对路径
+  - ValidatorChain 的 `Validator[]` 实例与 `ValidatorSelector` 返回的 `string[]` 名称之间存在映射缺口——主循环用 `Map<string, Validator>` 桥接了这个 gap
+  - 反馈失败的流程中不需要调用 `shouldTerminate`——SPEC §3.1 步骤 7/8 明确了"反馈失败 → 回灌 → 下一轮"和"反馈通过 → 停机判断"的顺序
+  - 全项目 332 测试全部通过，零网络调用——MockProvider 确定性验证目标达成
+
+---
