@@ -961,7 +961,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 14：CredentialBackend 实现
+### 任务 14：CredentialBackend 实现 ✅ — `04bd2be`
 
 **涉及文件：**
 - 创建：`src/credentials/backends/backend.ts`、`keytar-backend.ts`、`encrypted-file-backend.ts`、`env-backend.ts`
@@ -979,7 +979,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 15：CredentialStore + SecureHandle
+### 任务 15：CredentialStore + SecureHandle ✅ — `262560a`
 
 **涉及文件：**
 - 创建：`src/credentials/store.ts`、`src/credentials/secure-handle.ts`

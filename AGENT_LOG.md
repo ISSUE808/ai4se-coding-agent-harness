@@ -160,6 +160,45 @@
 
 ---
 
+## 2026-08-01 13:10 Task 14：CredentialBackend 实现
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a6ab98dc`（实现完成但分类器中断无法 commit——主 agent 代完成）
+- **Prompt 要点**：3 个后端（keytar/加密文件/环境变量）；AES-256-GCM + PBKDF2 100k；EnvBackend 只读
+- **产出**：
+  - Commit: `04bd2be`
+  - 涉及文件: 4 source + 3 test files + .gitignore + SPEC.md
+  - 测试: 21 new + 282 existing = 303/303, tsc clean
+- **人工干预**：
+  - subagent 因分类器中断无法执行 git——主 agent 代完成 commit 并标注
+  - keytar mock 修复：`vi.mock('keytar')` 返回对象补 `default` 属性（CJS 模块 default import）
+  - **.gitignore 基线缺陷修复**：`credentials/` → `/credentials/`——无锚点模式误伤 `src/credentials/` 源码目录（SPEC §12.2 同步修改）
+- **教训**：
+  - CR 评审发现 `KeytarBackend.isAvailable()` 是恒真式——static import 要么成功要么崩溃，无法检测 keytar 不可用。留待 Task 15 用动态 import 修复
+  - 加密文件后端设计正确：整个 SecretMap 加密（无明文元数据），0o600 权限，GCM tag 验证错误密码
+
+---
+
+## 2026-08-01 14:15 Task 15：CredentialStore + SecureHandle
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a5497084`（RED `b702ab1` → GREEN `262560a`）
+- **Prompt 要点**：优先级链探测 + SecureHandle 闭包 + keytar 动态 import 修复（Task 14 CR）
+- **产出**：
+  - Commits: `b702ab1`（RED）, `262560a`（GREEN）, `12bd574`（主 agent CR fix）
+  - 涉及文件: `secure-handle.ts`, `store.ts`, `keytar-backend.ts`（动态 import）, `types.ts` (+CredentialBackend) + 2 test files
+  - 测试: 19 new + 303 existing = 324/324, tsc clean
+- **人工干预**：CR 评审 2 个 IMPORTANT 修复：
+  - probe 异常保护——`isAvailable()` 抛出视为不可用，继续降级（§3.7 精神）
+  - `CredentialBackend` 接口移至 `types.ts`——删除 backend.ts（re-export 违反 CLAUDE.md "不做 re-export"），4 个文件 import 更新
+- **教训**：
+  - SecureHandle 用 `#private` 字段——`Object.keys`/`JSON.stringify`/`structuredClone` 都拿不到 key，只有闭包可达。这是 SPEC §3.7 "闭包限制传播" 的完整实现
+  - 差点重蹈 Task 2 provider.ts 覆辙：最初想保留 backend.ts 做 re-export——CLAUDE.md 明确禁止，删除是最干净的
+  - keytar 在 optionalDependencies 的调整留给 Task 21（分发）——动态 import 修复使 optional 化变得安全
+
+---
+---
+
 ## 2026-07-28 18:57 Task 10：ActionClassifier + ValidatorSelector（反馈闭环第1-2层）
 
 - **触发技能**：`subagent-driven-development`, `requesting-code-review`
