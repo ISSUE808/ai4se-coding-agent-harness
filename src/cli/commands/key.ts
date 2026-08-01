@@ -6,6 +6,7 @@ import type { LoadConfigOptions } from '../../config/loader.js';
 import { defaultConfigOptions } from '../options.js';
 import { promptHidden, readKeyWithConfirm } from '../prompt.js';
 import { adviceFor } from '../errors.js';
+import { maskSecret } from '../../credentials/mask.js';
 
 /**
  * `key` commands (SPEC §4.2/§4.3/§8.2-8.3): status shows only a masked
@@ -42,11 +43,6 @@ function keyIdentity(deps: KeyCommandDeps): KeyIdentity {
     service: deps.service ?? config.llm.apiKeyService,
     account: deps.account ?? config.llm.provider,
   };
-}
-
-/** Mask a secret to its last 4 characters — never echoes plaintext (SPEC §4.2). */
-function maskSecret(secret: string): string {
-  return secret.length > 4 ? `****-${secret.slice(-4)}` : '****';
 }
 
 async function runKeyAction(

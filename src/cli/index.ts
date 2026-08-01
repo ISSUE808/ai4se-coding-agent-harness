@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
 import { Command } from 'commander';
 import { createKeyCommand } from './commands/key.js';
 import type { KeyCommandDeps } from './commands/key.js';
@@ -80,7 +79,9 @@ export function createProgram(deps: ProgramDeps = {}, options: ProgramOptions = 
 const isDirectExecution = ((): boolean => {
   if (!process.argv[1]) return false;
   try {
-    return resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+    // realpath on both sides — under npm -g the bin is a symlink and
+    // argv[1] may resolve differently from import.meta.url (C2 CR)
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }

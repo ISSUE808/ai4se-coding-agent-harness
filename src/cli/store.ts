@@ -12,7 +12,14 @@ import type { CredentialBackend } from '../types.js';
  * The keytar probe runs eagerly here so the master password is only prompted
  * (hidden input) when the encrypted-file fallback is actually needed
  * (SPEC §8.5: keytar unavailable → encrypted file).
+ *
+ * `apiKeySource` (SPEC §4.2/§8.1) selects which storage is consulted:
+ * - `'keytar'` (default): keytar when available, else encrypted file.
+ * - `'encrypted_file'`: encrypted file only.
+ * - `'env'`: env only — SPEC §4.2: `.env` is only read when the user
+ *   explicitly opts in, never silently.
  */
+
 export interface BuildCredentialStoreOptions {
   /** Mock/probe override for tests; `undefined` = real KeytarBackend, `null` = skip. */
   keytarBackend?: CredentialBackend | null;
@@ -22,38 +29,51 @@ export interface BuildCredentialStoreOptions {
   filePath?: string;
   /** Hidden input used to prompt for the master password when needed. */
   readHidden?: (label: string) => Promise<string>;
+  /** Explicit credential source selection (SPEC §4.2/§8.1); default 'keytar'. */
+  apiKeySource?: 'keytar' | 'encrypted_file' | 'env';
 }
 
 export async function buildCredentialStore(
   options: BuildCredentialStoreOptions = {},
 ): Promise<CredentialStore> {
+  const source = options.apiKeySource ?? 'keytar';
   const backends: CredentialBackend[] = [];
 
-  const keytar =
-    options.keytarBackend === undefined ? new KeytarBackend() : options.keytarBackend;
-  if (keytar) {
-    let available = false;
-    try {
-      available = await keytar.isAvailable();
-    } catch {
-      // Throwing probe = unavailable (keytar native binding failure, Task 14 CR)
-      available = false;
-    }
-    if (available) {
-      backends.push(keytar);
+  if (source === 'env') {
+    backends.push(new EnvBackend());
+    return new CredentialStore(backends);
+  }
+
+  if (source === 'keytar') {
+    const keytar =
+      options.keytarBackend === undefined ? new KeytarBackend() : options.keytarBackend;
+    if (keytar) {
+      let available = false;
+      try {
+        available = await keytar.isAvailable();
+      } catch {
+        // Throwing probe = unavailable (keytar native binding failure, Task 14 CR)
+        available = false;
+      }
+      if (available) {
+        backends.push(keytar);
+      }
     }
   }
 
-  let masterPassword = options.masterPassword;
-  if (backends.length === 0 && masterPassword === undefined && options.readHidden) {
-    masterPassword = await options.readHidden(
-      'Master password for encrypted key storage: ',
-    );
-  }
-  if (masterPassword) {
-    backends.push(new EncryptedFileBackend(masterPassword, options.filePath));
+  // Encrypted file — used when source is 'encrypted_file', or as the fallback
+  // when keytar is unavailable/not selected.
+  if (backends.length === 0) {
+    let masterPassword = options.masterPassword;
+    if (masterPassword === undefined && options.readHidden) {
+      masterPassword = await options.readHidden(
+        'Master password for encrypted key storage: ',
+      );
+    }
+    if (masterPassword) {
+      backends.push(new EncryptedFileBackend(masterPassword, options.filePath));
+    }
   }
 
-  backends.push(new EnvBackend());
   return new CredentialStore(backends);
 }

@@ -1,5 +1,6 @@
 import type { CredentialBackend } from '../types.js';
 import { SecureHandle } from './secure-handle.js';
+import { maskSecret } from './mask.js';
 
 /** Thrown when no configured backend passes its availability probe. */
 export class NoBackendAvailableError extends Error {
@@ -15,11 +16,6 @@ export class CredentialNotFoundError extends Error {
     super(`No credential found for ${service}/${account}`);
     this.name = 'CredentialNotFoundError';
   }
-}
-
-/** Mask a secret to its last 4 characters (SPEC §4.3: never echo plaintext). */
-function maskKey(key: string): string {
-  return key.length > 4 ? `****-${key.slice(-4)}` : '****';
 }
 
 /**
@@ -80,7 +76,7 @@ export class CredentialStore {
   async status(service: string, account: string): Promise<string> {
     const backend = await this.getActiveBackend();
     const key = await backend.read(service, account);
-    return key === null ? 'not set' : maskKey(key);
+    return key === null ? 'not set' : maskSecret(key);
   }
 
   /** Persist a secret via the active backend. */

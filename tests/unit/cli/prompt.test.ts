@@ -2,6 +2,27 @@ import { describe, it, expect, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { promptHidden, readKeyWithConfirm } from '../../../src/cli/prompt.js';
 
+/** Fake TTY pair: isTTY + setRawMode/resume/pause so the raw-mode path runs. */
+function fakeTTY() {
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const rawModes: boolean[] = [];
+  (stdin as unknown as { isTTY: boolean }).isTTY = true;
+  (stdout as unknown as { isTTY: boolean }).isTTY = true;
+  (stdin as unknown as { setRawMode: (m: boolean) => void }).setRawMode = (m: boolean) => {
+    rawModes.push(m);
+  };
+  (stdin as unknown as { isRaw: boolean }).isRaw = false;
+  let written = '';
+  stdout.on('data', (chunk: Buffer) => {
+    written += chunk.toString();
+  });
+  const type = (data: string | Buffer): void => {
+    stdin.write(data);
+  };
+  return { stdin, stdout, rawModes, written: () => written, type };
+}
+
 /** Non-TTY fake IO (like CI / pipes): label written to stdout, line read from stdin. */
 function fakeIO() {
   const stdin = new PassThrough();
@@ -54,6 +75,43 @@ describe('promptHidden (SPEC §4.3: hidden input)', () => {
     const io = fakeIO();
     io.stdin.end();
     await expect(promptHidden('Key: ', io as never)).resolves.toBe('');
+  });
+});
+
+describe('promptHidden TTY raw-mode path (I1 CR: main interactive path)', () => {
+  it('masks every typed character with `*` and never echoes the value', async () => {
+    const io = fakeTTY();
+    const promise = promptHidden('Key: ', io as never);
+    io.type('sk-secret-123\r');
+    await expect(promise).resolves.toBe('sk-secret-123');
+    expect(io.written()).toContain('Key: ');
+    expect(io.written()).toContain('**********');
+    expect(io.written()).not.toContain('sk-secret-123');
+  });
+
+  it('enters raw mode for input and restores it on finish', async () => {
+    const io = fakeTTY();
+    const promise = promptHidden('Key: ', io as never);
+    expect(io.rawModes).toEqual([true]);
+    io.type('abc\r');
+    await promise;
+    expect(io.rawModes).toEqual([true, false]); // restored to pre-prompt state
+  });
+
+  it('handles backspace by removing the previous character', async () => {
+    const io = fakeTTY();
+    const promise = promptHidden('Key: ', io as never);
+    io.type('ab\x7fcd\r'); // typed a,b,backspace,c,d → "acd"
+    await expect(promise).resolves.toBe('acd');
+    expect(io.written()).not.toContain('ab');
+  });
+
+  it('rejects with Cancelled on Ctrl+C (0x03)', async () => {
+    const io = fakeTTY();
+    const promise = promptHidden('Key: ', io as never);
+    io.type(Buffer.from([0x03]));
+    await expect(promise).rejects.toThrow('Cancelled');
+    expect(io.rawModes).toEqual([true, false]); // raw mode restored on abort
   });
 });
 

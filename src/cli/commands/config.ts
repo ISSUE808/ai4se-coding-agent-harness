@@ -4,6 +4,7 @@ import { loadConfig } from '../../config/loader.js';
 import type { LoadConfigOptions } from '../../config/loader.js';
 import { defaultConfigOptions } from '../options.js';
 import { adviceFor } from '../errors.js';
+import { maskSecret } from '../../credentials/mask.js';
 
 /**
  * `config` commands: `config show` prints the merged configuration
@@ -20,20 +21,38 @@ export interface ConfigCommandDeps {
   errPrint?: (line: string) => void;
 }
 
-/** Mask a secret to its last 4 characters — never echoes plaintext. */
-function maskSecret(secret: string): string {
-  return secret.length > 4 ? `****-${secret.slice(-4)}` : '****';
-}
+/**
+ * Known secret field paths that must be masked in `config show` output
+ * (SPEC §4.2: never echo tokens to terminal/logs). An explicit whitelist —
+ * a name-based regex like `/key/` would falsely match `apiKeyService`.
+ */
+const SECRET_FIELDS: ReadonlyArray<{ path: string[]; kind: 'mask' | 'hide' }> = [
+  { path: ['webui', 'token'], kind: 'mask' },
+  { path: ['llm', 'apiKey'], kind: 'mask' },
+];
 
-/** Pretty-printed merged config JSON; the webui token is masked. */
+/** Pretty-printed merged config JSON; secrets are masked (never plaintext). */
 export function showConfig(config: Config): string {
-  const redacted: Config = {
-    ...config,
-    webui: {
-      ...config.webui,
-      token: config.webui.token ? maskSecret(config.webui.token) : 'not set',
-    },
-  };
+  const redacted = structuredClone(config) as unknown as Record<string, unknown>;
+  for (const { path } of SECRET_FIELDS) {
+    let node: Record<string, unknown> = redacted;
+    for (let i = 0; i < path.length - 1; i++) {
+      const part = path[i];
+      const next = node[part];
+      if (typeof next !== 'object' || next === null) break;
+      node = next as Record<string, unknown>;
+    }
+    const leaf = path[path.length - 1];
+    const value = node[leaf];
+    if (typeof value === 'string' && value.length > 0) {
+      node[leaf] = maskSecret(value);
+    }
+  }
+  // Absent token reads as "not set" (undefined or empty string)
+  const webui = redacted.webui as Record<string, unknown>;
+  if (webui.token === undefined || webui.token === '') {
+    webui.token = 'not set';
+  }
   return JSON.stringify(redacted, null, 2);
 }
 

@@ -84,18 +84,41 @@ describe('buildCredentialStore (SPEC §3.7 priority chain from the CLI)', () => 
     expect(readHidden).not.toHaveBeenCalled();
   });
 
-  it('falls back to the env backend when keytar is unavailable and no master password is given', async () => {
+  it('does NOT consult env unless apiKeySource is explicitly "env" (I2 CR, SPEC §4.2)', async () => {
+    // SPEC §4.2: `.env` is only read when the user explicitly sets
+    // apiKeySource: 'env' — never silently. With keytar unavailable and no
+    // master password, the chain must be empty (throws) instead of falling
+    // back to the environment.
     process.env.CODEHARNESS_API_KEY = 'sk-env-test';
     const readHidden = vi.fn(async () => '');
+    await expect(
+      buildCredentialStore({ keytarBackend: null, readHidden }),
+    ).rejects.toThrow(/at least one backend/);
+  });
+
+  it('uses the env backend when apiKeySource is explicitly "env"', async () => {
+    process.env.CODEHARNESS_API_KEY = 'sk-env-test';
     const store = await buildCredentialStore({
       keytarBackend: null,
-      readHidden,
+      apiKeySource: 'env',
     });
     expect((await store.getActiveBackend()).name).toBe('env');
     // Env backend is read-only but serves the key (masked status)
     await expect(store.status('codeharness/deepseek', 'deepseek')).resolves.toBe(
       '****-test',
     );
+  });
+
+  it('uses only the encrypted-file backend when apiKeySource is "encrypted_file"', async () => {
+    const keytar = fakeKeytar(true); // must NOT be probed for 'encrypted_file'
+    const store = await buildCredentialStore({
+      keytarBackend: keytar,
+      apiKeySource: 'encrypted_file',
+      masterPassword: 'provided-pass',
+      filePath: tmpSecretsPath(),
+    });
+    expect((await store.getActiveBackend()).name).toBe('encrypted-file');
+    expect(keytar.isAvailable).not.toHaveBeenCalled();
   });
 
   it('handles a throwing keytar probe by degrading (Task 14 CR behavior)', async () => {

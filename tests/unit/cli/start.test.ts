@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -38,6 +38,10 @@ import { mockBackend, parseCaptured } from './helpers.js';
  * stdout, bootstraps the API key on first run. All loops use MockProvider —
  * deterministic, zero network.
  */
+
+afterEach(() => {
+  process.exitCode = 0;
+});
 
 let workspaceRoot: string;
 
@@ -118,6 +122,21 @@ describe('runStartTask', () => {
     });
     expect(session.status).toBe('failed');
     expect(printed.some((l) => l.includes('status=failed'))).toBe(true);
+  });
+
+  it('sets exit code 1 when the session ends without completing (I3 CR)', async () => {
+    const printed: string[] = [];
+    const cmd = createStartCommand({
+      config: {
+        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+      },
+      buildAgentLoop: buildMockAgentLoop([]), // no responses → loop fails
+      print: (line) => printed.push(line),
+    });
+    await parseCaptured(cmd, ['start', 'explode']);
+    expect(printed.some((l) => l.includes('status=failed'))).toBe(true);
+    expect(process.exitCode).toBe(1);
   });
 
   it('unsubscribes event listeners after the run (no leaked output)', async () => {

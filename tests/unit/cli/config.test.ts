@@ -63,6 +63,19 @@ describe('showConfig', () => {
     expect(printed).toContain('"token": "****"');
     expect(printed).not.toContain('abcd');
   });
+
+  it('masks unknown secret fields a user may have mis-placed in config (I4 CR)', () => {
+    const dir = tmpDir();
+    const config = loadConfig({
+      ...missingOptions(dir),
+      cliArgs: {
+        llm: { apiKey: 'sk-misplaced-9zzz' } as unknown as Record<string, never>,
+      },
+    });
+    const printed = showConfig(config);
+    expect(printed).toContain('"apiKey": "****-9zzz"');
+    expect(printed).not.toContain('sk-misplaced-9zzz');
+  });
 });
 
 describe('createConfigCommand wiring (SPEC §3.6 three-layer merge)', () => {

@@ -57,8 +57,10 @@ function createLineReader(stdin: NodeJS.ReadableStream): LineReader {
   });
   rl.on('close', () => {
     // EOF: no more input — pending prompts resolve to an empty line instead
-    // of hanging (or the process exiting mid-prompt).
+    // of hanging (or the process exiting mid-prompt). Release the reader so
+    // closed streams don't stay referenced for the process lifetime (C4 CR).
     closed = true;
+    lineReaders.delete(stdin);
     for (const waiter of waiters.splice(0)) waiter('');
   });
 
@@ -77,7 +79,7 @@ export function promptHidden(label: string, io: PromptIO = DEFAULT_IO): Promise<
   if (!stdin.isTTY || !stdout.isTTY) {
     // Non-TTY fallback: no raw mode available; echo cannot be suppressed
     // anyway (nothing is typed in CI), so just read the line.
-    stdout.write(label);
+    stdout.write(`${label}\n`);
     return getLineReader(stdin).next();
   }
 

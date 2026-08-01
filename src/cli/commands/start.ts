@@ -170,7 +170,12 @@ function buildDefaultAgentLoop(deps: StartCommandDeps): BuildAgentLoop {
   return async ({ config, events }) => {
     const readHidden = deps.readHidden ?? promptHidden;
     const storeFactory =
-      deps.storeFactory ?? (() => buildCredentialStore({ readHidden }));
+      deps.storeFactory ??
+      (() =>
+        buildCredentialStore({
+          readHidden,
+          apiKeySource: config.llm.apiKeySource, // SPEC §4.2: explicit source only
+        }));
     const store = await storeFactory();
     const llm = await createLLMProvider(config, store, { readHidden });
 
@@ -225,12 +230,17 @@ export function createStartCommand(deps: StartCommandDeps = {}): Command {
       }
       const config = (deps.loadConfig ?? loadConfig)(options);
       const buildAgentLoop = deps.buildAgentLoop ?? buildDefaultAgentLoop(deps);
-      await runStartTask({
+      const session = await runStartTask({
         task,
         config,
         buildAgentLoop,
         print: deps.print,
       });
+      // I3 (CR): failed/paused sessions exit non-zero so scripts can detect
+      // "the task did not complete" (key/config already use exit code 1).
+      if (session.status !== 'completed') {
+        process.exitCode = 1;
+      }
     } catch (err) {
       (deps.errPrint ?? console.error)(`codeharness start: ${adviceFor(err)}`);
       process.exitCode = 1;
