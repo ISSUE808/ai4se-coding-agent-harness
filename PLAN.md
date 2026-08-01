@@ -1066,8 +1066,8 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** `npm run build` 无报错；SessionDetail 页面三栏布局正确；MessageList 可展开 tool call、绿色/红色反馈标记；ApprovalCard 含批准/编辑/拒绝按钮；FileDiff 使用 Monaco Editor 展示 diff；所有样式引用 `design-tokens.ts`。
 
-- [ ] **步骤 1：SessionDetail（核心页面）**——3 栏布局：文件变更 | 消息流 | 上下文信息。MessageStream 含可展开的 tool call、绿色/红色反馈标记。内联 HITL `ApprovalCard`（批准/编辑/拒绝）。Monaco `FileDiff` 展示 agent 文件变更。底部消息输入框。页面头部：暂停/恢复/停止按钮。
-- [ ] **步骤 2：提交**
+- [x] **步骤 1：SessionDetail（核心页面）**——3 栏布局：文件变更 | 消息流 | 上下文信息。MessageStream 含可展开的 tool call、绿色/红色反馈标记。内联 HITL `ApprovalCard`（批准/编辑/拒绝）。Monaco `FileDiff` 展示 agent 文件变更。底部消息输入框。页面头部：暂停/恢复/停止按钮（commit `184b682`；WS 实时驱动，6 种事件 → 纯 reducer 状态机，id 去重）
+- [x] **步骤 2：提交**（client 115/115 + 主项目 413/413 全绿；build 通过；无硬编码 grep 零命中）
 
 提交：`feat: WebUI SessionDetail with MessageList, ApprovalCard, FileDiff components`
 
