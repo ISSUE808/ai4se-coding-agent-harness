@@ -1021,11 +1021,11 @@ describe('Agent Main Loop (integration)', () => {
 
 **产出：** Express + WebSocket 服务器监听 `config.webui.port`，REST API 处理 sessions/approvals/keys/config，WebSocket 事件广播。
 
-- [ ] **步骤 1：Express + WebSocket 脚手架**——HTTP 服务器、同端口 WSS、JSON 中间件
-- [ ] **步骤 2：REST API 路由**——POST/GET `/api/sessions`、GET `/api/sessions/:id`、POST message/pause/resume/stop、POST `/api/approvals/:id`（approve/modify/deny）、GET/POST/DELETE `/api/keys/:provider`、GET/PUT `/api/config`
-- [ ] **步骤 3：WebSocket 广播**——将所有 HarnessEvents 转发到连接的客户端，按 `sessionId` 查询参数过滤
-- [ ] **步骤 4：API 集成测试**——使用 supertest 测试 HTTP，ws 测试 WebSocket
-- [ ] **步骤 5：提交**
+- [x] **步骤 1：Express + WebSocket 脚手架**——HTTP 服务器、同端口 WSS、JSON 中间件（commit `319c72a9`，CR 修复 `6fe864d`）
+- [x] **步骤 2：REST API 路由**——POST/GET `/api/sessions`、GET `/api/sessions/:id`、POST message/pause/resume/stop、POST `/api/approvals/:id`（approve/modify/deny）、GET/POST/DELETE `/api/keys/:provider`、GET/PUT `/api/config`（PUT 拒绝密钥字段，§3.6）
+- [x] **步骤 3：WebSocket 广播**——将所有 HarnessEvents 转发到连接的客户端，按 `sessionId` 查询参数过滤
+- [x] **步骤 4：API 集成测试**——使用 supertest 测试 HTTP，ws 测试 WebSocket（31 用例，413/413 全绿）
+- [x] **步骤 5：提交**
 
 提交：`feat: WebUI Express server + REST API + WebSocket event broadcast`
 
