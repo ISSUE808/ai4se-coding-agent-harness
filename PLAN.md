@@ -859,7 +859,7 @@ describe('shouldTerminate', () => {
 
 ---
 
-### 任务 13b：Agent 主循环 + 集成测试 ✅ — `03c6c97`
+### 任务 13b：Agent 主循环 + 集成测试 ✅ — `03c6c97` + CR fix `c13bfa3`
 
 **涉及文件：**
 - 创建：`src/core/main-loop.ts`
