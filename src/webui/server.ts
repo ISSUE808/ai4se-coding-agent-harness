@@ -1,0 +1,183 @@
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
+import type { Socket } from 'node:net';
+import type { IncomingMessage } from 'node:http';
+import express from 'express';
+import type { Express, NextFunction, Request, Response } from 'express';
+import { WebSocketServer } from 'ws';
+import type { WebSocket } from 'ws';
+import type { Config } from '../types.js';
+import type { HarnessEvents } from '../events.js';
+import type { HarnessEventMap } from '../events.js';
+import type { CredentialStore } from '../credentials/store.js';
+import type { HITLManager } from '../guardrail/hitl-manager.js';
+import type { SessionStore } from './session-store.js';
+import { createSessionsRouter } from './api/sessions.js';
+import { createApprovalsRouter } from './api/approvals.js';
+import { createKeysRouter } from './api/keys.js';
+import { createConfigRouter } from './api/config.js';
+
+/**
+ * WebUI backend (PLAN Task 17, SPEC §5.1): an Express HTTP server with a
+ * same-port WebSocket channel (ws `noServer` + `upgrade`). All core
+ * dependencies (SessionStore, HarnessEvents, CredentialStore, Config,
+ * HITLManager) are constructor-injected — never global singletons — so the
+ * backend is fully testable in isolation; Task 19 wires it into the running
+ * agent loop in-process.
+ *
+ * WebSocket framing: every HarnessEventMap event is serialized as
+ * `{ type, data }` JSON. Clients may pass `?sessionId=` to filter
+ * session-scoped events; events whose payload carries no sessionId
+ * (`message:added`, `tool:executed`, …) are broadcast to every client.
+ */
+
+export interface WebUIServerDeps {
+  sessionStore: SessionStore;
+  events: HarnessEvents;
+  credentialStore: CredentialStore;
+  /** Merged config the server starts with (SPEC §6.1 `webui.port`). */
+  config: Config;
+  hitl: HITLManager;
+  /** Injectable config persistence (defaults to writing the project file). */
+  persistConfig?: (config: Config) => Promise<void>;
+}
+
+export interface WebUIServer {
+  app: Express;
+  server: Server;
+  wss: WebSocketServer;
+  /** Listen on `port` (0 = ephemeral); resolves with the actual port. */
+  listen(port?: number): Promise<number>;
+  /** Terminate WS clients and close the HTTP server. */
+  close(): Promise<void>;
+}
+
+/** All event types forwarded to WebSocket clients (SPEC §5.1 WebUI). */
+const EVENT_TYPES: ReadonlyArray<keyof HarnessEventMap> = [
+  'message:added',
+  'tool:executed',
+  'feedback:completed',
+  'guardrail:triggered',
+  'session:status',
+  'round:changed',
+];
+
+function jsonErrorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
+  const status = typeof (err as { status?: unknown }).status === 'number'
+    ? (err as { status: number }).status
+    : 500;
+  const message = status >= 500
+    ? 'internal server error'
+    : (err instanceof Error ? err.message : String(err));
+  res.status(status).json({ error: message });
+}
+
+export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
+  const app = express();
+  app.use(express.json());
+
+  app.use(
+    '/api/sessions',
+    createSessionsRouter({ sessionStore: deps.sessionStore, events: deps.events }),
+  );
+  app.use(
+    '/api/approvals',
+    createApprovalsRouter({
+      sessionStore: deps.sessionStore,
+      hitl: deps.hitl,
+      events: deps.events,
+    }),
+  );
+  app.use(
+    '/api/keys',
+    createKeysRouter({
+      credentialStore: deps.credentialStore,
+      service: deps.config.llm.apiKeyService,
+    }),
+  );
+  app.use(
+    '/api/config',
+    createConfigRouter({ config: deps.config, persistConfig: deps.persistConfig }),
+  );
+
+  // Unknown API paths → JSON 404 (never the HTML default)
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'Not found' });
+  });
+  app.use(jsonErrorHandler);
+
+  const server = createServer(app);
+  const wss = new WebSocketServer({ noServer: true });
+
+  // Same-port WebSocket: intercept the upgrade, only for the /ws endpoint.
+  server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    if (url.pathname !== '/ws') {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit('connection', ws, req);
+    });
+  });
+
+  /** Per-client session filter (`?sessionId=`); undefined = receive all. */
+  const filters = new Map<WebSocket, string | undefined>();
+  wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    filters.set(ws, url.searchParams.get('sessionId') ?? undefined);
+    ws.on('close', () => {
+      filters.delete(ws);
+    });
+  });
+
+  function broadcast(type: keyof HarnessEventMap, data: HarnessEventMap[keyof HarnessEventMap]): void {
+    const frame = JSON.stringify({ type, data });
+    for (const client of wss.clients) {
+      if (client.readyState !== client.OPEN) {
+        continue;
+      }
+      const filter = filters.get(client);
+      // Only session:status carries a sessionId in its payload; events
+      // without one are broadcast to every connected client.
+      if (filter !== undefined && type === 'session:status') {
+        if ((data as { sessionId: string }).sessionId !== filter) {
+          continue;
+        }
+      }
+      client.send(frame);
+    }
+  }
+
+  for (const type of EVENT_TYPES) {
+    deps.events.on(type, (data) => {
+      broadcast(type, data as HarnessEventMap[keyof HarnessEventMap]);
+    });
+  }
+
+  function listen(port = 0): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const onError = (err: Error): void => reject(err);
+      server.once('error', onError);
+      server.listen(port, () => {
+        server.off('error', onError);
+        const addr = server.address();
+        resolve(typeof addr === 'object' && addr !== null ? addr.port : port);
+      });
+    });
+  }
+
+  function close(): Promise<void> {
+    return new Promise((resolve) => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      wss.close(() => {
+        server.close(() => resolve());
+      });
+    });
+  }
+
+  return { app, server, wss, listen, close };
+}
