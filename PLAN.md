@@ -995,18 +995,18 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 16：CLI + Key 管理
+### 任务 16：CLI + Key 管理 ✅ — `d3c2bdf` + CR fix `13536ba`
 
 **涉及文件：**
 - 创建：`src/cli/index.ts`、`src/cli/commands/start.ts`、`src/cli/commands/key.ts`、`src/cli/commands/config.ts`
 
 **产出：** CLI 入口，命令：`start`、`key status|update|reset`、`config show`。
 
-- [ ] **步骤 1：CLI 脚手架**——commander 程序，含名称/版本
-- [ ] **步骤 2：Key 管理命令**——`key status`（脱敏显示）、`key update`（隐藏输入提示）、`key reset`
-- [ ] **步骤 3：Config 显示**——打印合并后的配置，key 脱敏
-- [ ] **步骤 4：Start 命令**——`start <task>` 初始化会话，运行主循环，将消息输出到 stdout
-- [ ] **步骤 5：提交**
+- [x] **步骤 1：CLI 脚手架**——commander 程序，含名称/版本
+- [x] **步骤 2：Key 管理命令**——`key status`（脱敏显示）、`key update`（隐藏输入提示）、`key reset`
+- [x] **步骤 3：Config 显示**——打印合并后的配置，key 脱敏
+- [x] **步骤 4：Start 命令**——`start <task>` 初始化会话，运行主循环，将消息输出到 stdout
+- [x] **步骤 5：提交**
 
 提交：`feat: CLI with start, key management, and config commands`
 

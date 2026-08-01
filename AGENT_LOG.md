@@ -307,3 +307,28 @@
   - 全项目 332 测试全部通过，零网络调用——MockProvider 确定性验证目标达成
 
 ---
+## 2026-08-01 22:26 Task 16：CLI + Key 管理
+
+- **触发技能**：`test-driven-development`, `requesting-code-review`
+- **Subagent**：`a4ef9d14`（GREEN `d3c2bdf` 一次完成；subagent 无法访问自身 agentId，commit 中标注了 CLAUDE_CODE_SESSION_ID 前缀 `095f64f2`，实为主会话标识——已在 AGENT_LOG 记录此偏差）
+- **Prompt 要点**：commander 脚手架 + `start`/`key status|update|reset`/`config show` 四条命令；key 必须经 CredentialStore + SecureHandle 闭包；`start` 测试用 MockProvider；所有 IO 可注入
+- **产出**：
+  - Commits: `d3c2bdf`（GREEN，subagent）, `13536ba`（主 agent CR fix）
+  - 涉及文件: `src/cli/` 下 8 文件（index/commands/prompt/store/options/errors）+ `tests/unit/cli/` 6 测试文件
+  - 测试: 42 new + 332 existing = 374/374；CR 修复后 382/382, tsc clean
+- **人工干预**（8 项，commit `13536ba`）：
+  - **I1（IMPORTANT）** TTY raw 模式零测试——补 4 个 fake-TTY 测试（掩码回显/raw 恢复/backspace/Ctrl+C）
+  - **I2（IMPORTANT）** `config.llm.apiKeySource` 死配置——`buildCredentialStore` 现在消费该字段：`'env'` 仅显式选择才读（SPEC §4.2），`'encrypted_file'` 只走加密文件，默认 `'keytar'` 回退加密文件；不再静默 push EnvBackend；start.ts 默认 wiring 传入 `config.llm.apiKeySource`
+  - **I3（IMPORTANT）** 会话失败 exit 0——`start` action 中 `session.status !== 'completed'` → exit 1（CI 可判断成败）
+  - **I4（IMPORTANT）** `config show` 只脱敏 webui.token——新增 SECRET_FIELDS 白名单（webui.token + llm.apiKey），误放的秘密字段也掩码；空 token 保持 `not set`
+  - **C1** mask 逻辑三处重复——新建 `src/credentials/mask.ts` 共享（store/key/config 三处统一）
+  - **C2** `isDirectExecution` 原始路径比较——两侧 `realpathSync`（npm -g symlink 场景）
+  - **C3** start.test.ts 缺 `afterEach(exitCode=0)`——补上
+  - **C4** prompt.ts `lineReaders` 永不清理——close 事件中从 Map 删除
+  - **C6** 非 TTY 提示无换行——label 后补 `\n`
+  - 跳过：C5（`StartCommandDeps.config` 命名过载，低风险）、C7（低风险覆盖缺口）
+- **教训**：
+  - **subagent 无法访问自身 agentId 时会用 session id 前缀冒充**——派发 prompt 应显式告知 subagent 如何获取 agentId，或主 agent 事后核对 commit 标注
+  - `apiKeySource` 死配置是本轮最有价值的发现：Task 6/7 定义了字段但无人消费，直到 CLI 装配（Task 16）才暴露——类型定义了 ≠ 功能实现了，评审要 grep 消费点
+  - 改造行为语义（如"不再静默读 env"）必须同步更新断言旧行为的测试——I2 修复直接改了 1 个旧测试的期望并新增 2 个
+  - 非 TTY 顺序 prompt 的共享 LineReader 是真实 bug（smoke test 暴露）：每个 prompt 新建 readline 会缓冲整段 piped 输入
