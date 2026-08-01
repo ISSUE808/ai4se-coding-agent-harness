@@ -266,3 +266,19 @@
   - keytar 在 optionalDependencies 的调整留给 Task 21（分发）——动态 import 修复使 optional 化变得安全
 
 ---
+
+## 2026-08-01 20:39 Task 13a：停机判断器
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a8bd360f`（RED `8bb3d36` → GREEN `237cfcc`）
+- **Prompt 要点**：`shouldTerminate(response, currentRound, maxRounds)`——4 条停机规则全部确定性
+- **产出**：
+  - Commits: `8bb3d36`（RED）, `237cfcc`（GREEN）
+  - 涉及文件: `src/core/termination.ts`, `tests/unit/core/termination.test.ts`
+  - 测试: 5 new + 324 existing = 329/329, tsc clean
+- **人工干预**：无
+- **教训**：
+  - 5 个测试用例直接匹配 PLAN 模板——最简单的 task，但却是主循环集成前的最后一块拼图
+  - CR 评审无 CRITICAL——smallest module, cleanest review。停机判断逻辑简单到不可能出错
+
+---
