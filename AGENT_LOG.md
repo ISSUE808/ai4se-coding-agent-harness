@@ -368,3 +368,22 @@
   - Monaco 本地打包（loader.config({monaco}) + ESM workers）是离线演示的关键决策，代价是 3.5MB chunk
   - jsdom 下 fetch 需要绝对 URL（client 加 `location.origin` 前缀）；RTL cleanup 需显式注册 setup——两个前端测试基建坑，一次踩完
   - 分类器（deepseek-v4-flash）不可用时派发 subagent 可能失败——重试即可；完成后主 agent 需更严格复核（本 task 全部完成条件主 agent 亲验）
+
+---
+## 2026-08-02 02:40 Task 18b：WebUI——SessionDetail + 核心组件
+
+- **触发技能**：`test-driven-development`, `requesting-code-review`
+- **Subagent**：`aa0fccea`（GREEN `184b682`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：三栏驾驶舱（文件变更|消息流|上下文）；WS 实时驱动（原生 WebSocket `/ws?sessionId=`，6 种事件 → 纯 reducer 状态机）；ApprovalCard 语义对齐 Task 17 后端（modify 必带 modifiedCommand、409 处理）；FileDiff 用 Monaco（token 主题，不伪造 diff 端点）；REST 快照与 WS 广播按 id 去重；无硬编码约束延续
+- **产出**：
+  - Commit: `184b682`（19 files, +3348/−33）
+  - 涉及文件: SessionDetail.tsx、MessageList.tsx、ApprovalCard.tsx、FileDiff.tsx、hooks/useSessionEvents.ts、lib/{ws-state,ws-source,session-messages}.ts（+ 各自测试）
+  - 测试: client 31→115（+84，先红后绿）+ 主项目 413 全绿；build 通过
+- **评审**：0 CRITICAL / 0 IMPORTANT（主 agent 亲验：硬编码 grep 零命中、dist 未跟踪、双测试套件 + build 全绿）
+- **人工干预**：无
+- **教训**：
+  - **WS 实时 UI 的正确分层**：纯 reducer（输入校验 + 白名单，可确定性单测）→ 可注入事件源的 hook（connectionKey 重连）→ 组件订阅。三层分离是 84 个新测试全部确定性的前提
+  - **后端广播 + REST 快照的重复消息**：前端 upsert by id 是唯一正确去重姿势；快照只在到达时合并一次（WS 帧更新）
+  - **API 值 ≠ 显示态**：approval decision（approve/modify/deny）与卡片状态（approved/modified/denied）是两套枚举，`as` cast 会掩盖类型错误——subagent 踩坑后改显式映射，这是真实 bug 修复
+  - **文件变更标记的推断限制**：无基线快照时只能"首次提及=A、再次=M"，D 无法从后端数据推断——已注释文档化
+  - 浏览器端原生 WebSocket 即可（无需 ws 库），vite dev proxy 配 `ws:true` 即可穿透
