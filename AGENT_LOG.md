@@ -332,3 +332,20 @@
   - `apiKeySource` 死配置是本轮最有价值的发现：Task 6/7 定义了字段但无人消费，直到 CLI 装配（Task 16）才暴露——类型定义了 ≠ 功能实现了，评审要 grep 消费点
   - 改造行为语义（如"不再静默读 env"）必须同步更新断言旧行为的测试——I2 修复直接改了 1 个旧测试的期望并新增 2 个
   - 非 TTY 顺序 prompt 的共享 LineReader 是真实 bug（smoke test 暴露）：每个 prompt 新建 readline 会缓冲整段 piped 输入
+
+---
+## 2026-08-01 23:50 Task 17：WebUI——Express 服务器 + API 路由
+
+- **触发技能**：`test-driven-development`, `requesting-code-review`
+- **Subagent**：`a1b5ad5b`（GREEN `319c72a9`；commit 标注沿用主会话前缀 `095f64f2`，同 Task 16 已知偏差）
+- **Prompt 要点**：Express + WS 同端口（`noServer` + upgrade）；REST 五组路由（sessions/approvals/keys/config）；全部依赖构造注入（SessionStore/HarnessEvents/CredentialStore/Config/HITLManager）供 Task 19 进程内接线，禁全局单例；密钥只在服务端掩码（复用 `mask.ts` 与 CLI SECRET_FIELDS 白名单）；supertest + ws 集成测试零网络零 LLM
+- **产出**：
+  - Commits: `319c72a9`（GREEN，subagent）, `6fe864d`（主 agent CR fix）
+  - 涉及文件: `src/webui/server.ts`、`src/webui/session-store.ts`、`src/webui/api/{sessions,approvals,keys,config}.ts` + `tests/integration/webui-api.test.ts`（31 用例）
+  - 测试: 30 new + 382 existing = 412/412；CR 修复后 413/413, tsc clean
+- **人工干预**（1 项，commit `6fe864d`）：
+  - **I1（IMPORTANT）** `PUT /api/config` 可持久化明文密钥——违反 SPEC §3.6「配置不包含 API Key，Key 走独立凭据通道」：body 含 `llm.apiKey`/`webui.token` 时 400 + 指引 `POST /api/keys/:provider`；补 1 个测试（拒绝 + 未持久化断言）。`.gitignore` 基线（§12.2）不含 `.codeharness.json` 且不得自行补充，故不能靠 ignore 规避
+- **教训**：
+  - **新增 API 面最容易违反 SPEC 的是"隐性写路径"**：GET 掩码大家都会做，PUT 持久化才是泄密点——评审 REST 设计要追踪每个写端点把什么落盘、落在哪（git 可追踪？）
+  - §3.6 的"Key 走独立凭据通道"是硬约束，不是建议：WebUI 的 key 管理必须走 `/api/keys/:provider`，config 端点永不接受密钥字段
+  - `ws` 的 `noServer` + upgrade 拦截是测 WS 的正确姿势（supertest 只测 HTTP，WS 需真 socket）——测试基础设施（内存 backend/内存 session store/fixture）一次搭好，31 用例零网络
