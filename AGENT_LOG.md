@@ -349,3 +349,22 @@
   - **新增 API 面最容易违反 SPEC 的是"隐性写路径"**：GET 掩码大家都会做，PUT 持久化才是泄密点——评审 REST 设计要追踪每个写端点把什么落盘、落在哪（git 可追踪？）
   - §3.6 的"Key 走独立凭据通道"是硬约束，不是建议：WebUI 的 key 管理必须走 `/api/keys/:provider`，config 端点永不接受密钥字段
   - `ws` 的 `noServer` + upgrade 拦截是测 WS 的正确姿势（supertest 只测 HTTP，WS 需真 socket）——测试基础设施（内存 backend/内存 session store/fixture）一次搭好，31 用例零网络
+
+---
+## 2026-08-02 02:10 Task 18a：WebUI——Open Design 设计 + 项目脚手架 + Dashboard + Settings
+
+- **触发技能**：`test-driven-development`, `requesting-code-review`
+- **Subagent**：`ac097ac0`（GREEN `ce8627e`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：步骤 0 由人工完成（Open Design 设计 + design-tokens.ts 落地，commit `f5aaffc`）；token 是唯一视觉约束源（无硬编码色值/字号/间距）；API 直连 Task 17 后端不 mock；Monaco 本地打包禁 CDN；TDD 先红后绿
+- **产出**：
+  - Commits: `f5aaffc`（步骤 0 交付物，主 agent）, `ce8627e`（GREEN，subagent）
+  - 涉及文件: `src/webui/client/` 全新 Vite+React 独立项目（26 个源码文件：pages/Dashboard+Settings、components/StatusBadge、lib/api+format+config-json+monaco-theme、31 个测试/5 文件）
+  - 测试: 31 client + 413 main = 全绿；`npm run build`（client）通过
+- **评审**：0 CRITICAL / 0 IMPORTANT（主 agent 亲验：硬编码 grep 零命中、dist/node_modules 未跟踪、测试断言直接引用 token 值）
+- **人工干预**：无（步骤 0 设计为人工部分，非干预）
+- **教训**：
+  - **需求文档要分"约束 vs 方向"两层**：布局/配色是 AI 的创作空间（写死了反而僵硬），token 结构契约与信息架构必须硬——Open Design 交付物超出预期正因如此
+  - **验收"无硬编码"的闭环做法**：grep 检查是静态层；组件测试里 `toHaveStyle({ color: designTokens.colors.statusRunning })` 是动态层——两层的 token 约束才锁得住
+  - Monaco 本地打包（loader.config({monaco}) + ESM workers）是离线演示的关键决策，代价是 3.5MB chunk
+  - jsdom 下 fetch 需要绝对 URL（client 加 `location.origin` 前缀）；RTL cleanup 需显式注册 setup——两个前端测试基建坑，一次踩完
+  - 分类器（deepseek-v4-flash）不可用时派发 subagent 可能失败——重试即可；完成后主 agent 需更严格复核（本 task 全部完成条件主 agent 亲验）
