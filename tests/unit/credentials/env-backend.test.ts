@@ -13,11 +13,11 @@ describe('EnvBackend', () => {
     expect(backend.name).toBe('env');
   });
 
-  it('isAvailable is false when the env var is missing and true when set', () => {
+  it('isAvailable is false when the env var is missing and true when set', async () => {
     vi.stubEnv(envKey, '');
-    expect(backend.isAvailable()).toBe(false);
+    await expect(backend.isAvailable()).resolves.toBe(false);
     vi.stubEnv(envKey, 'sk-env-test');
-    expect(backend.isAvailable()).toBe(true);
+    await expect(backend.isAvailable()).resolves.toBe(true);
   });
 
   it('read returns the env var value when set', async () => {

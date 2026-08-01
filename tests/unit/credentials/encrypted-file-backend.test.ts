@@ -23,10 +23,10 @@ describe('EncryptedFileBackend', () => {
   const account = 'openai';
   const secret = 'sk-test-abc123';
 
-  it('has name "encrypted-file" and is always available', () => {
+  it('has name "encrypted-file" and is always available', async () => {
     const backend = new EncryptedFileBackend(masterPassword, filePath);
     expect(backend.name).toBe('encrypted-file');
-    expect(backend.isAvailable()).toBe(true);
+    await expect(backend.isAvailable()).resolves.toBe(true);
   });
 
   it('save writes an encrypted file, not plaintext', async () => {

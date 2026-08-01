@@ -22,9 +22,23 @@ describe('KeytarBackend', () => {
     vi.clearAllMocks();
   });
 
-  it('has name "keytar" and is available when keytar module is present', () => {
+  it('has name "keytar"', () => {
     expect(backend.name).toBe('keytar');
-    expect(backend.isAvailable()).toBe(true);
+  });
+
+  it('isAvailable resolves true when the keytar module loads', async () => {
+    await expect(backend.isAvailable()).resolves.toBe(true);
+  });
+
+  it('isAvailable resolves false when the keytar native binding fails to load (Task 14 CR fix)', async () => {
+    // Simulate a broken native binding: the keytar module itself must not load.
+    vi.doMock('keytar', () => {
+      throw new Error('keytar native binding load failed');
+    });
+    const probing = new KeytarBackend();
+    await expect(probing.isAvailable()).resolves.toBe(false);
+    // Restore the shared mock for the remaining tests.
+    vi.doMock('keytar', () => ({ default: keytarMock }));
   });
 
   it('save stores the secret via keytar.setPassword', async () => {
