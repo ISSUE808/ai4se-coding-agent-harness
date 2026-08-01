@@ -266,3 +266,44 @@
   - keytar 在 optionalDependencies 的调整留给 Task 21（分发）——动态 import 修复使 optional 化变得安全
 
 ---
+
+## 2026-08-01 20:39 Task 13a：停机判断器
+
+- **触发技能**：`subagent-driven-development`, `requesting-code-review`
+- **Subagent**：`a8bd360f`（RED `8bb3d36` → GREEN `237cfcc`）
+- **Prompt 要点**：`shouldTerminate(response, currentRound, maxRounds)`——4 条停机规则全部确定性
+- **产出**：
+  - Commits: `8bb3d36`（RED）, `237cfcc`（GREEN）
+  - 涉及文件: `src/core/termination.ts`, `tests/unit/core/termination.test.ts`
+  - 测试: 5 new + 324 existing = 329/329, tsc clean
+- **人工干预**：无
+- **教训**：
+  - 5 个测试用例直接匹配 PLAN 模板——最简单的 task，但却是主循环集成前的最后一块拼图
+  - CR 评审无 CRITICAL——smallest module, cleanest review。停机判断逻辑简单到不可能出错
+
+---
+## 2026-08-01 21:06 Task 13b：Agent 主循环 + 集成测试
+
+- **触发技能**：`test-driven-development`, `requesting-code-review`
+- **Subagent**：`c767ce5c`（RED 无单独 commit，GREEN `03c6c97` 一次完成）
+- **Prompt 要点**：编排所有已有模块（LLM/工具/护栏/反馈/记忆/事件/配置/停机判断），遵循 SPEC §3.1 伪代码；3 个集成测试全部使用 MockProvider；主 agent 事后评审（`a546a02a`）并修复 F1-F5
+- **产出**：
+  - Commits: `03c6c97`（GREEN，subagent）, `c13bfa3`（主 agent CR fix）
+  - 涉及文件: `src/core/main-loop.ts`, `tests/integration/main-loop.test.ts`
+  - 测试: 3 new + 329 existing = 332/332, tsc clean
+- **人工干预**：
+  - 两阶段评审无 CRITICAL；修复 5 项（commit `c13bfa3`）：
+    1. **F1（IMPORTANT）** HITL 置 paused 后外层循环未停止——needsApproval 分支改为 `break outer`，会话真正暂停而非继续烧轮次
+    2. **F2（IMPORTANT）** `chain.run()` 无异常兜底——try/catch 包裹，异常转为结构化 FeedbackResult（`validator:'loop'`）
+    3. **F3（CONVENTION）** 测试标题"4 轮反馈失败"实为 3 轮失败后第 4 轮进入前触发——修正标题
+    4. **F4（CONVENTION）** HITL requestApproval 静默 catch——改为 treat as blocked，避免 stale pendingCommand 被静默覆盖
+    5. **F5（CONVENTION）** guardMsg 文案重复前缀"Guardrail blocked: Blocked: rule"——reason 只放规则名
+  - subagent 实现中的 3 个集成调试（`createToolRegistry`→`new ToolRegistry()`、ScopeFence 相对路径预解析、`triggerHITL` 前同步 currentRound）由 subagent 自行完成，如实记录
+- **教训**：
+  - **HITL 暂停 ≠ 循环结束**——任何 paused 状态必须立即终止主循环，否则继续调用 LLM 烧 token，直接违反用户故事 2/5
+  - 主循环是验证型评审重点：8 步流程顺序、5 个 maxRounds 检查点（循环顶/parse_error 后/无 action 后/反馈失败后/轮次递增后）、4 条 continue 路径是否递增轮次——评审逐条推演 3 个测试全部路径确认无死循环
+  - ValidatorChain 的 `Validator[]` 实例与 `ValidatorSelector` 返回的 `string[]` 名称之间存在映射缺口——主循环用 `Map<string, Validator>` 桥接
+  - SPEC §3.1 步骤 7/8 顺序：反馈失败 → 回灌 → 下一轮（不查停机）；反馈通过 → 才查停机
+  - 全项目 332 测试全部通过，零网络调用——MockProvider 确定性验证目标达成
+
+---

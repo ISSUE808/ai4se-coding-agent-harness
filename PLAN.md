@@ -792,7 +792,7 @@ describe('RoundManager', () => {
 
 ---
 
-### 任务 13a：停机判断器
+### 任务 13a：停机判断器 ✅ — `237cfcc`
 
 **涉及文件：**
 - 创建：`src/core/termination.ts`
@@ -859,7 +859,7 @@ describe('shouldTerminate', () => {
 
 ---
 
-### 任务 13b：Agent 主循环 + 集成测试
+### 任务 13b：Agent 主循环 + 集成测试 ✅ — `03c6c97` + CR fix `c13bfa3`
 
 **涉及文件：**
 - 创建：`src/core/main-loop.ts`
@@ -869,7 +869,7 @@ describe('shouldTerminate', () => {
 
 **完成条件：** `npx vitest run tests/integration/main-loop.test.ts` 3 个集成测试全部通过；所有测试使用 MockProvider，零网络调用；`npx vitest run` 全项目测试通过。
 
-- [ ] **步骤 1：编写集成测试（先红）**
+- [x] **步骤 1：编写集成测试（先红）**
 
 `tests/integration/main-loop.test.ts`：
 
@@ -955,7 +955,7 @@ describe('Agent Main Loop (integration)', () => {
 
 运行：`npx vitest run tests/integration/main-loop.test.ts` → FAIL（AgentLoop 类未定义）。
 
-- [ ] **步骤 2：实现 Agent 主循环**——遵循 SPEC §3.1 伪代码 → 通过集成测试 → 提交
+- [x] **步骤 2：实现 Agent 主循环**——遵循 SPEC §3.1 伪代码 → 通过集成测试 → 提交
 
 提交：`feat: agent main loop with full MockProvider integration tests`
 
