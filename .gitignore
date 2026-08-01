@@ -6,7 +6,7 @@
 *.p12
 *.pfx
 secrets/
-credentials/
+/credentials/
 *.cred
 *_credentials.*
 

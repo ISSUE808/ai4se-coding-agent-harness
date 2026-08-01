@@ -587,7 +587,7 @@ Coding 领域的特点决定了四类机制的具体形态：
 *.p12
 *.pfx
 secrets/
-credentials/
+/credentials/
 *.cred
 *_credentials.*
 
