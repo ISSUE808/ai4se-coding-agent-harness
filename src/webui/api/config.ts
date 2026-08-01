@@ -92,6 +92,22 @@ export function createConfigRouter(deps: ConfigRouterDeps): Router {
       res.status(400).json({ error: 'config body must be a JSON object' });
       return;
     }
+    // SPEC §3.6: config never holds keys — reject secret fields outright so a
+    // user cannot persist a plaintext key into the project config file.
+    for (const { path } of SECRET_FIELDS) {
+      let node: Record<string, unknown> | undefined = body as Record<string, unknown>;
+      for (let i = 0; i < path.length - 1 && node !== undefined; i++) {
+        const next = node[path[i]];
+        if (typeof next !== 'object' || next === null) break;
+        node = next as Record<string, unknown>;
+      }
+      if (node !== undefined && path[path.length - 1] in node) {
+        res.status(400).json({
+          error: `${path.join('.')} cannot be set via config — use POST /api/keys/:provider instead (SPEC §3.6)`,
+        });
+        return;
+      }
+    }
     const merged = mergeConfig(current, body as Record<string, unknown>);
     persist(merged)
       .then(() => {

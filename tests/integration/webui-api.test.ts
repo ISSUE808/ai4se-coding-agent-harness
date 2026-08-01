@@ -429,6 +429,24 @@ describe('REST /api/config', () => {
     const res = await request(web.app).put('/api/config').send([1, 2, 3]);
     expect(res.status).toBe(400);
   });
+
+  it('PUT rejects llm.apiKey / webui.token with 400 — SPEC §3.6: config never holds keys', async () => {
+    const { web, getPersisted } = await makeFixture(secretConfig());
+    const keyRes = await request(web.app).put('/api/config').send({ llm: { apiKey: 'sk-leak' } });
+    expect(keyRes.status).toBe(400);
+    expect(keyRes.body.error).toContain('/api/keys');
+    const tokenRes = await request(web.app).put('/api/config').send({ webui: { token: 'tok-leak' } });
+    expect(tokenRes.status).toBe(400);
+    // Non-secret fields in the same body are also rejected (whole-request 400)
+    const mixed = await request(web.app).put('/api/config').send({
+      webui: { port: 4000, token: 'tok-leak' },
+    });
+    expect(mixed.status).toBe(400);
+    // Nothing was persisted
+    const persisted = getPersisted();
+    expect(persisted).toBeNull();
+    expect(JSON.stringify(persisted)).not.toContain('sk-leak');
+  });
 });
 
 describe('WebSocket /ws', () => {
