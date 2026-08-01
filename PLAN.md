@@ -1042,15 +1042,15 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** `npm run build`（在 client 目录下）无报错；Dashboard 页面渲染正常；Settings 页面渲染正常；所有颜色/字号/间距引用 `design-tokens.ts` 中的变量，无硬编码值。
 
-- [ ] **步骤 0：使用 Open Design 桌面应用设计 UI**——在编写任何 React 代码之前：
-  1. 启动 Open Design 桌面应用
-  2. 可视化设计三页（Dashboard、SessionDetail、Settings）的布局、颜色方案、间距系统、组件 spec
-  3. 导出设计 token 为 `src/webui/client/src/design-tokens.ts`（包含颜色、字体、间距、圆角、阴影等设计变量）
-  4. 此文件是后续 subagent (18a, 18b) 生成所有 React UI 代码的**约束源**——所有组件必须引用此 token 文件中的变量，不得硬编码颜色/字号/间距
+- [x] **步骤 0：使用 Open Design 桌面应用设计 UI**——在编写任何 React 代码之前（commit `f5aaffc`）：
+  1. 完成（人工）：需求文档 `DESIGN_BRIEF.md` → Open Design AI 设计三页
+  2. 完成：可视化设计三页（Dashboard、SessionDetail、Settings）的布局、颜色方案、间距系统、组件 spec
+  3. 完成：导出设计 token 为 `src/webui/client/src/design-tokens.ts`（颜色/字体/间距/圆角/阴影，语义命名）
+  4. 此文件是后续 subagent (18a, 18b) 生成所有 React UI 代码的**约束源**——所有组件必须引用此 token 文件中的变量，不得硬编码颜色/字号/间距（测试断言 token 引用值验证）
 
-- [ ] **步骤 1：Dashboard**——活跃会话列表（状态/任务/运行时长/token 数），"新建会话"按钮 → POST /api/sessions
-- [ ] **步骤 2：Settings**——key 管理（脱敏显示、更新/删除），Monaco JSON 配置编辑器（带 schema 校验），配置预览
-- [ ] **步骤 3：提交**
+- [x] **步骤 1：Dashboard**——活跃会话列表（状态/任务/运行时长/token 数），"新建会话"按钮 → POST /api/sessions（commit `ce8627e`）
+- [x] **步骤 2：Settings**——key 管理（脱敏显示、更新/删除），Monaco JSON 配置编辑器（带 schema 校验），配置预览
+- [x] **步骤 3：提交**（31 client 测试 + 413 main 全绿；无硬编码 grep 零命中）
 
 提交：`feat: WebUI project scaffold + Open Design tokens + Dashboard + Settings`
 
