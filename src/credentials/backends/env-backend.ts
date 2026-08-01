@@ -11,7 +11,7 @@ const ENV_KEY = 'CODEHARNESS_API_KEY';
 export class EnvBackend implements CredentialBackend {
   readonly name = 'env';
 
-  isAvailable(): boolean {
+  async isAvailable(): Promise<boolean> {
     return Boolean(process.env[ENV_KEY]);
   }
 

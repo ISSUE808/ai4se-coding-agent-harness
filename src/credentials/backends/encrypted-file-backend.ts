@@ -48,7 +48,7 @@ export class EncryptedFileBackend implements CredentialBackend {
   }
 
   /** Pure-stdlib crypto, always available. */
-  isAvailable(): boolean {
+  async isAvailable(): Promise<boolean> {
     return true;
   }
 
