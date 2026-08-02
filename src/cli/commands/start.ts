@@ -203,7 +203,10 @@ export async function executeApprovedActionImpl(
     approved.tool === 'run_shell'
       ? String(approved.params.command ?? '')
       : `${approved.tool}: ${JSON.stringify(approved.params)}`;
-  const record = `[HITL] Approved operation executed: ${label}\n${outcome}`.trim();
+  // Unambiguous wording: the LLM must read "executed" as done. The first line
+  // carries the verdict (SUCCESS/FAILED) so it cannot be missed even when the
+  // output is long.
+  const record = `[HITL] ✅ Operation executed (${result.success ? 'SUCCESS' : 'FAILED'}): ${label}\n${outcome}`.trim();
   const message: Message = {
     id: crypto.randomUUID(),
     role: 'system',

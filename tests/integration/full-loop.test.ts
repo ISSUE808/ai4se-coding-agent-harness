@@ -416,7 +416,7 @@ describe('full integration — start --web wiring (Task 19)', () => {
 
     const paused = await waitForStatus(sessionStore, id, 'paused');
     expect(paused.messages.some((m) => m.metadata?.approvalRequired === true)).toBe(true);
-    expect(paused.messages.some((m) => m.content.includes('Guardrail blocked'))).toBe(true);
+    expect(paused.messages.some((m) => m.content.includes('Operation paused for human approval'))).toBe(true);
 
     // Human approves via the REST API.
     const approve = await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
@@ -431,8 +431,10 @@ describe('full integration — start --web wiring (Task 19)', () => {
 
     // SPEC §3.4: approval authorizes EXECUTION — the harness ran the command
     // directly (never delegated to the LLM re-issuing it).
-    const executed = done.messages.filter((m) =>
-      m.content.includes('Approved operation executed: git push --force origin feature/x'),
+    const executed = done.messages.filter(
+      (m) =>
+        m.content.includes('Operation executed (') &&
+        m.content.includes('git push --force origin feature/x'),
     );
     expect(executed.length).toBe(1);
     // The execution result (failure: not a git repo) is visible to the LLM.

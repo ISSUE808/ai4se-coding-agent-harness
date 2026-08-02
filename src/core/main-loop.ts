@@ -101,7 +101,8 @@ function shellReadsOutside(command: string, workspaceRoot: string): string | nul
  */
 function shellWritesOutside(command: string, workspaceRoot: string): string | null {
   const writePatterns = [
-    /(>>|>)\s*["']?([^"'\s|;&]+)/, // redirection target
+    // Redirection target — but NOT `2>` (stderr redirect, e.g. `ls 2>/dev/null`).
+    /(^|[^0-9])(>|>>)\s*["']?([^"'\s|;&]+)/,
     /\b(rm|del|unlink)\s+(-[a-z]+\s+)?["']?([^"'\s|;&]+)/,
     /\b(mv|move|ren|rename)\s+["']?([^"'\s|;&]+)\s+["']?([^"'\s|;&]+)/,
     /\b(mkdir|touch)\s+["']?([^"'\s|;&]+)/,
@@ -359,13 +360,16 @@ export class AgentLoop {
         // Step 4: Guardrail checks
         const guardResult = this.runGuardrails(action, session);
         if (guardResult.blocked) {
-          // Blocked by guardrail. The command/rule ride on the message so a
+          // Paused by guardrail. The command/rule ride on the message so a
           // WebUI refresh can rebuild the pending approval card from the REST
-          // snapshot (approval state is not persisted separately).
+          // snapshot (approval state is not persisted separately). Wording
+          // matters: "blocked" reads as a permanent denial to LLMs — this
+          // operation is PAUSED for a human decision, and after approval the
+          // harness executes it (result arrives as a follow-up message).
           const guardMsg: Message = {
             id: generateId(),
             role: 'system',
-            content: `Guardrail blocked: ${guardResult.reason}`,
+            content: `Operation paused for human approval: ${guardResult.reason}`,
             metadata: {
               approvalRequired: guardResult.needsApproval,
               guardrailRule: guardResult.reason ?? undefined,
@@ -386,7 +390,7 @@ export class AgentLoop {
             action.params,
             {
               success: false,
-              error: `Guardrail blocked: ${guardResult.reason}`,
+              error: `Operation paused for human approval: ${guardResult.reason}`,
               duration_ms: 0,
             },
             action.id,

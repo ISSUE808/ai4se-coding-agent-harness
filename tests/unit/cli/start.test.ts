@@ -148,7 +148,13 @@ describe('runStartTask', () => {
     expect(session.status).toBe('completed');
     // The approved shell command was executed by the harness (it fails — not
     // a git repo — but it RAN), and the loop resumed to completion.
-    expect(session.messages.some((m) => m.content.includes('Approved operation executed: git push --force origin feature/x'))).toBe(true);
+    expect(
+      session.messages.some(
+        (m) =>
+          m.content.includes('Operation executed (') &&
+          m.content.includes('git push --force origin feature/x'),
+      ),
+    ).toBe(true);
     expect(session.messages.some((m) => m.content.includes('fatal'))).toBe(true);
   });
 
