@@ -387,3 +387,21 @@
   - **API 值 ≠ 显示态**：approval decision（approve/modify/deny）与卡片状态（approved/modified/denied）是两套枚举，`as` cast 会掩盖类型错误——subagent 踩坑后改显式映射，这是真实 bug 修复
   - **文件变更标记的推断限制**：无基线快照时只能"首次提及=A、再次=M"，D 无法从后端数据推断——已注释文档化
   - 浏览器端原生 WebSocket 即可（无需 ws 库），vite dev proxy 配 `ws:true` 即可穿透
+
+---
+
+## 2026-08-02 15:32 Task 18b 修订：原型完全复刻 + 用户反馈修复（Phase 10 收尾）
+
+- **触发技能**：无（用户直接要求"完全复刻参考原型"，主 agent 直接实现，未派发 subagent）
+- **Subagent**：主 agent（commit 标注 `— by 主 agent`）
+- **Prompt 要点**：无派发；需求 = 对照 `Web-Prototype/codeharness-webui.html` 逐元素复刻 + 三个用户反馈问题（maxRounds 是否有用/头像是否有用/设置缺失板块）
+- **产出**：
+  - Commit: `ab7a932`（21 files, +2393/−764；PR #8 合并 `8c70155`）
+  - 涉及文件: App/Dashboard/SessionDetail/MessageList/ApprovalCard/Settings（client）+ termination/round-manager/session-store/api/sessions（backend）+ 6 个测试文件 + 新增 App.test.tsx、global.css
+  - 测试: 主项目 419/419 + client 120/120 + tsc 0 错误 + 构建成功 + 端到端 curl 验证
+- **人工干预**：无
+- **教训**：
+  - **页面测试全绿 ≠ 整棵树可渲染**：TopBar 的 `isActive` 作用域 bug（style 函数参数在 JSX 体外被引用）导致浏览器白屏，而所有测试只渲染页面组件不渲染 App——tsc 也没抓到（作用域误判）。修复后新增 App.test.tsx 渲染整个壳。**结论：改 App 壳/布局组件必须配壳级测试**
+  - **用户问"字段有没有用"是真实 bug 探测器**：POST /api/sessions 静默丢弃 maxRounds（store 固定 defaultMaxRounds=3）——WebUI 里"最大轮次"一直无效。修复为透传 + `0 = 无上限`语义（RoundManager/shouldTerminate 支持 0）。**教训：UI 字段与后端消费链必须端到端核对，不能只看前端**（端到端 curl 验证才暴露）
+  - **原型复刻的诚实性取舍**：原型是演示数据——"显示密钥明文"（安全约束拒绝）、Token 输入/输出明细（后端无数据）、模型/工作目录字段（创建 API 不支持）都不造假，用占位/说明替代并在汇报中明示
+  - **旧 dev 进程不热重载**：`npx tsx`（非 watch）启动的后端不感知代码改动——改后端后必须重启进程，前端 HMR 推送后旧实例会白屏（HMR 状态损坏），强刷或换新端口实例

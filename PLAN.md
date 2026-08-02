@@ -1068,8 +1068,11 @@ describe('Agent Main Loop (integration)', () => {
 
 - [x] **步骤 1：SessionDetail（核心页面）**——3 栏布局：文件变更 | 消息流 | 上下文信息。MessageStream 含可展开的 tool call、绿色/红色反馈标记。内联 HITL `ApprovalCard`（批准/编辑/拒绝）。Monaco `FileDiff` 展示 agent 文件变更。底部消息输入框。页面头部：暂停/恢复/停止按钮（commit `184b682`；WS 实时驱动，6 种事件 → 纯 reducer 状态机，id 去重）
 - [x] **步骤 2：提交**（client 115/115 + 主项目 413/413 全绿；build 通过；无硬编码 grep 零命中）
-
-提交：`feat: WebUI SessionDetail with MessageList, ApprovalCard, FileDiff components`
+- [x] **步骤 3：原型完全复刻 + 用户反馈修复**（commit `ab7a932`，主 agent 直接实现）：
+  1. 完全复刻 `Web-Prototype/codeharness-webui.html`：TopBar segmented tabs + ws 状态胶囊 + 搜索框；Dashboard 统计卡/筛选器/行操作/原型空态；SessionDetail mini-tabs/用户气泡/系统 pill/tool-arg/HITL 卡/停止 modal/上下文 5 区；Settings 导航/editor-bar/danger-zone
+  2. **maxRounds 无上限**：原先 POST /api/sessions 静默丢弃 maxRounds（固定 3）——修复为透传；`RoundManager`/`shouldTerminate` 支持 `0 = 无上限`；WebUI 新建会话默认无上限，可勾选限制轮次（client 120/120 + 主项目 419/419）
+  3. Settings 新增「模型与护栏」「通用」板块（真实 config 数据）；删除装饰头像
+  4. 修复 TopBar `isActive` 未定义白屏 bug + 新增 App.test.tsx 防回归
 
 ---
 
@@ -1080,6 +1083,14 @@ describe('Agent Main Loop (integration)', () => {
 - 创建：`tests/integration/full-loop.test.ts`
 
 - [ ] **步骤 1：接入 `--web` 标志**——在同一进程中同时启动 agent 循环和 Express 服务器
+
+**需求备注（Phase 10 收尾时用户决策）**：会话级工作目录绑定（"打开/新建项目"）统一在 Task 19 实现——
+- `Session` 增加 `workspaceRoot` 字段（当前为全局 `config.agent.workspaceRoot`，会话无项目绑定）
+- `POST /api/sessions` 接受并校验 workspaceRoot（目录存在/可写）；`SessionStore.create` 支持
+- `AgentLoop.run` 按会话 workspaceRoot 构建 ToolContext/验证器 cwd/scope-fence 基准（当前单项目进程模型）
+- WebUI 新建会话 modal 加「工作目录」字段（默认当前 workspaceRoot）；会话详情显示项目路径
+- CLI `start` 加 `--cwd` 选项（可选增强）
+- 安全面：WebUI 指定任意目录 = 授权 agent 在该目录执行命令，需确认 + 越界护栏按会话基准
 - [ ] **步骤 2：使用 MockProvider 进行完整集成测试**——启动 agent → tool call → 反馈管线 → 会话完成；护栏 HITL → 用户通过 API 批准 → agent 继续；反馈失败 3 次 → 升级 → 用户介入
 - [ ] **步骤 3：运行全部测试** → `npx vitest run` → 每个测试均通过
 - [ ] **步骤 4：提交**
