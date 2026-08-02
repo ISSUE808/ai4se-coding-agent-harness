@@ -71,9 +71,17 @@ export default function MessageList({ messages, approval }: MessageListProps) {
       }}
     >
       {messages.map((message) => (
-        <MessageRow key={message.id} message={message} />
+        // flexShrink: 0 — a long feed must scroll, never compress its cards
+        // (overflow:hidden cards would collapse into a 1px line otherwise).
+        <div key={message.id} style={{ flexShrink: 0 }}>
+          <MessageRow message={message} />
+        </div>
       ))}
-      {approval !== null && approval !== undefined && <ApprovalCard {...approval} />}
+      {approval !== null && approval !== undefined && (
+        <div style={{ flexShrink: 0 }}>
+          <ApprovalCard {...approval} />
+        </div>
+      )}
       {paused && (
         <button
           type="button"
