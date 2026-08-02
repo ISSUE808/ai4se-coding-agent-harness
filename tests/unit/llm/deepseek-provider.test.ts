@@ -345,6 +345,64 @@ describe('DeepSeekProvider', () => {
     ]);
   });
 
+  it('keeps tool responses contiguous after an assistant tool_calls message (feedback system messages move after the pairs)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    // Round order as produced by the main loop: assistant declares 2 calls,
+    // action 1 executes (tool), its feedback lands (→ system), action 2
+    // executes (tool). DeepSeek 400s when a non-tool message sits between an
+    // assistant's tool_calls and its tool responses.
+    const messages: Message[] = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '',
+        metadata: {
+          toolInput: {
+            toolCalls: [
+              { id: 'call_1', name: 'run_shell', arguments: { command: 'pwd' } },
+              { id: 'call_2', name: 'list_directory', arguments: { path: '.' } },
+            ],
+          },
+        },
+        timestamp: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 't1',
+        role: 'tool',
+        content: 'ok',
+        metadata: { toolCallId: 'call_1' },
+        timestamp: '2026-01-01T00:00:01.000Z',
+      },
+      {
+        id: 'f1',
+        role: 'feedback',
+        content: 'tsc: no errors',
+        timestamp: '2026-01-01T00:00:02.000Z',
+      },
+      {
+        id: 't2',
+        role: 'tool',
+        content: 'entries',
+        metadata: { toolCallId: 'call_2' },
+        timestamp: '2026-01-01T00:00:03.000Z',
+      },
+    ];
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(messages, []);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    const roles = callArgs.messages.map((m: { role: string }) => m.role);
+    expect(roles).toEqual(['assistant', 'tool', 'tool', 'system']);
+    // The system (feedback) message must come after both tool responses.
+    expect(callArgs.messages[1].tool_call_id).toBe('call_1');
+    expect(callArgs.messages[2].tool_call_id).toBe('call_2');
+    expect(callArgs.messages[3]).toEqual({ role: 'system', content: 'tsc: no errors' });
+  });
+
   it('passes through already-standard JSON Schema parameters unchanged', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'OK' } }],

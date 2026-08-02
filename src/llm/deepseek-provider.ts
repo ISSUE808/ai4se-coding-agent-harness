@@ -15,6 +15,43 @@ export interface DeepSeekConfig {
  * `type: "object"` with 400. Already-standard schemas (carrying `type` or
  * `properties`) pass through unchanged.
  */
+
+interface OpenAIMessage {
+  role: string;
+  content: string;
+  tool_calls?: unknown[];
+  tool_call_id?: string;
+}
+
+/**
+ * DeepSeek (OpenAI protocol) requires tool responses to be contiguous after
+ * the assistant message that declared them — an interleaved system message
+ * (our feedback → system mapping) triggers 400 "insufficient tool messages
+ * following tool_calls". Stable-partition each assistant tool-call block:
+ * tool responses first (in order), then the interleaved non-tool messages.
+ */
+function stabilizeToolPairs(msgs: OpenAIMessage[]): OpenAIMessage[] {
+  const out: OpenAIMessage[] = [];
+  let i = 0;
+  while (i < msgs.length) {
+    const m = msgs[i];
+    out.push(m);
+    i++;
+    if (m.role !== 'assistant' || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0) {
+      continue;
+    }
+    // Collect everything until the next assistant message.
+    const block: OpenAIMessage[] = [];
+    while (i < msgs.length && msgs[i].role !== 'assistant') {
+      block.push(msgs[i]);
+      i++;
+    }
+    const tools = block.filter((b) => b.role === 'tool');
+    const rest = block.filter((b) => b.role !== 'tool');
+    out.push(...tools, ...rest);
+  }
+  return out;
+}
 export function toOpenAIToolParameters(
   parameters: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -74,7 +111,11 @@ export class DeepSeekProvider implements LLMProvider {
       // reach the LLM (it drives the correction loop), so send it as system.
       const role = m.role === 'feedback' ? 'system' : m.role;
       return { role, content: m.content };
-    });
+    }) as OpenAIMessage[];
+
+    // Tool responses must be contiguous after their declaring assistant
+    // message — feedback-as-system messages interleave otherwise.
+    const stabilized = stabilizeToolPairs(openaiMessages);
 
     const openaiTools = tools.map((t) => ({
       type: 'function' as const,
@@ -87,7 +128,7 @@ export class DeepSeekProvider implements LLMProvider {
 
     const response = await this.client.chat.completions.create({
       model: this.model,
-      messages: openaiMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+      messages: stabilized as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       tools: openaiTools.length > 0 ? openaiTools : undefined,
       max_tokens: this.maxTokens,
     });
