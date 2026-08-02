@@ -318,6 +318,32 @@ export class AgentLoop {
         }
       }
 
+      // Final protocol backstop: every tool_call_id this round declared must
+      // have a paired tool response, no matter what interrupted execution.
+      // DeepSeek 400s on the next call if any pair is missing.
+      const declared = response.toolCalls ?? [];
+      for (const call of declared) {
+        if (!call.id) {
+          continue;
+        }
+        const paired = session.messages.some(
+          (m) => m.role === 'tool' && m.metadata?.toolCallId === call.id,
+        );
+        if (!paired) {
+          this.addToolMessage(
+            session,
+            call.name,
+            call.arguments,
+            {
+              success: false,
+              error: 'Skipped: the loop did not execute this tool call',
+              duration_ms: 0,
+            },
+            call.id,
+          );
+        }
+      }
+
       // If guardrail blocked or feedback failed — check upgrade & continue
       if (!allFeedbackPassed) {
         // Re-check upgrade in case feedback failure pushed us over limit
@@ -428,6 +454,20 @@ export class AgentLoop {
    * Run guardrails: PatternGuard for shell commands, ScopeFence for file operations.
    */
   private runGuardrails(
+    action: Action,
+    session: Session,
+  ): { blocked: boolean; needsApproval: boolean; reason?: string } {
+    try {
+      return this.runGuardrailsInner(action, session);
+    } catch (err: unknown) {
+      // A crashing guardrail must fail closed — and it must not abort the
+      // action loop (which would leave tool_calls unpaired → next LLM 400).
+      const msg = err instanceof Error ? err.message : String(err);
+      return { blocked: true, needsApproval: false, reason: `guardrail error: ${msg}` };
+    }
+  }
+
+  private runGuardrailsInner(
     action: Action,
     session: Session,
   ): { blocked: boolean; needsApproval: boolean; reason?: string } {

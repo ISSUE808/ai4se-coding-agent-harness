@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -87,6 +87,7 @@ function createMockExec() {
 function buildLoopFactory(
   provider: LLMProvider,
   validators?: Map<string, Validator>,
+  guardOverrides?: { patternGuard?: PatternGuard; scopeFence?: ScopeFence },
 ): BuildAgentLoop {
   return async ({ config, events, hitl }) => {
     const tools = new ToolRegistry();
@@ -96,8 +97,8 @@ function buildLoopFactory(
 
     const memory = new SessionMemory(config);
     const guard = {
-      patternGuard: new PatternGuard(),
-      scopeFence: new ScopeFence(),
+      patternGuard: guardOverrides?.patternGuard ?? new PatternGuard(),
+      scopeFence: guardOverrides?.scopeFence ?? new ScopeFence(),
       // Task 19: share the harness's HITLManager so the approvals API gates
       // the loop's own guardrail decisions.
       hitl: hitl ?? new HITLManager(),
@@ -177,6 +178,7 @@ async function makeHarness(
   config: Config,
   provider: LLMProvider,
   validators?: Map<string, Validator>,
+  guardOverrides?: { patternGuard?: PatternGuard; scopeFence?: ScopeFence },
 ): Promise<Fixture> {
   const events = createEventBus();
   const credentialStore = new CredentialStore([memoryBackend()]);
@@ -186,7 +188,7 @@ async function makeHarness(
     events,
     credentialStore,
     sessionStore,
-    buildAgentLoop: buildLoopFactory(provider, validators),
+    buildAgentLoop: buildLoopFactory(provider, validators, guardOverrides),
     persistConfig: async () => {
       // Test-only: never touch the project config file.
     },
@@ -323,6 +325,44 @@ describe('full integration — start --web wiring (Task 19)', () => {
     );
     expect(doneFrame.data.status).toBe('completed');
     expect(harness).toBeDefined();
+  });
+
+  it('keeps tool_call pairing intact when guardrails crash — loop never 400s on the next call', async () => {
+    // A guardrail that throws must not leave declared tool_calls unpaired.
+    const crashingGuard = new PatternGuard();
+    vi.spyOn(crashingGuard, 'check').mockImplementation(() => {
+      throw new Error('pattern guard exploded');
+    });
+
+    const mock = new MockProvider([
+      { toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'git status' } }] },
+      { content: 'done' },
+    ]);
+    const { harness, sessionStore } = await makeHarness(
+      makeConfig(configRoot, { maxRounds: 10 }),
+      mock,
+      undefined,
+      { patternGuard: crashingGuard },
+    );
+    const created = await request(harness.web.app).post('/api/sessions').send({ task: 't' });
+    const session = await waitForStatus(sessionStore, created.body.id, 'completed');
+
+    const declaredIds = new Set<string>();
+    for (const m of session.messages) {
+      const calls = m.metadata?.toolInput?.toolCalls as { id?: string }[] | undefined;
+      if (m.role === 'assistant' && Array.isArray(calls)) {
+        for (const c of calls) {
+          if (c.id) {
+            declaredIds.add(c.id);
+          }
+        }
+      }
+    }
+    expect(declaredIds.size).toBeGreaterThan(0);
+    for (const id of declaredIds) {
+      const paired = session.messages.filter((m) => m.role === 'tool' && m.metadata?.toolCallId === id);
+      expect(paired.length, `tool_call_id ${id} must have exactly one tool response`).toBe(1);
+    }
   });
 
   it('pairs every assistant tool_call with a tool message, including guardrail-blocked actions (OpenAI protocol)', async () => {
