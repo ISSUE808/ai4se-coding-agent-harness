@@ -1,8 +1,9 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createInterface } from 'node:readline';
 import { Command } from 'commander';
-import type { Config, LLMProvider, Session, ToolResult, Validator } from '../../types.js';
+import type { Config, LLMProvider, Message, Session, ToolResult, Validator } from '../../types.js';
 import { AgentLoop } from '../../core/main-loop.js';
 import { MockProvider } from '../../llm/mock-provider.js';
 import { DeepSeekProvider } from '../../llm/deepseek-provider.js';
@@ -80,6 +81,10 @@ export interface StartCommandDeps {
   errPrint?: (line: string) => void;
   /** Task 19: config persistence for PUT /api/config (defaults to project file). */
   persistConfig?: (config: Config) => Promise<void>;
+  /** Shared HITL manager for the CLI interactive approval flow. */
+  hitl?: HITLManager;
+  /** Testable stdin prompt override. */
+  promptApproval?: (question: string) => Promise<boolean>;
   /** Task 19: how `start --web` blocks; injectable so tests don't hang. */
   waitForShutdown?: () => Promise<void>;
   /**
@@ -96,12 +101,121 @@ export interface RunStartTaskOptions {
   buildAgentLoop: BuildAgentLoop;
   events?: HarnessEvents;
   print?: (line: string) => void;
+  /** Shared HITL manager (createStartCommand wires one for both the loop and
+   *  the interactive approval flow). Testable via injection. */
+  hitl?: HITLManager;
+  /** Interactive decision prompt (CLI default reads stdin; tests inject). */
+  promptApproval?: (question: string) => Promise<boolean>;
+}
+
+/** Read a y/n decision from stdin (CLI human-in-the-loop default). */
+function promptApproval(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(`${question}\n> `, (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase() === 'y');
+    });
+  });
 }
 
 function formatMessageLine(data: HarnessEventMap['message:added']): string {
   const toolName =
     typeof data.metadata?.toolName === 'string' ? `:${data.metadata.toolName}` : '';
   return `[${data.role}${toolName}] ${data.content}`;
+}
+
+/**
+ * Execute a human-approved (or human-modified) operation directly — skipping
+ * the guardrail once, since the human already authorized it. Supports shell
+ * commands, file writes/edits and reads (human authorization overrides the
+ * tool's own scope check). The result lands as a system message so the
+ * resumed loop's LLM sees the outcome without an orphan tool message (OpenAI
+ * protocol). Shared by the WebUI harness and the CLI interactive flow.
+ */
+export async function executeApprovedActionImpl(
+  session: Session,
+  approved: { tool: string; params: Record<string, unknown> },
+  events: HarnessEvents,
+): Promise<void> {
+  const ctx = { workspaceRoot: session.workspaceRoot };
+  let result: ToolResult;
+  if (approved.tool === 'run_shell') {
+    result = await runShellTool.execute(approved.params, ctx);
+  } else if (approved.tool === 'write_file') {
+    const target = String(approved.params.path ?? '');
+    const start = Date.now();
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, String(approved.params.content ?? ''), 'utf8');
+      result = { success: true, output: `wrote ${target}`, duration_ms: Date.now() - start, filesChanged: [target] };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { success: false, error: msg, duration_ms: Date.now() - start };
+    }
+  } else if (approved.tool === 'edit_file') {
+    const target = String(approved.params.path ?? '');
+    const oldString = String(approved.params.oldString ?? '');
+    const newString = String(approved.params.newString ?? '');
+    const start = Date.now();
+    try {
+      const content = fs.readFileSync(target, 'utf8');
+      if (!content.includes(oldString)) {
+        result = { success: false, error: 'oldString not found', duration_ms: Date.now() - start };
+      } else {
+        fs.writeFileSync(target, content.replace(oldString, newString), 'utf8');
+        result = { success: true, output: `edited ${target}`, duration_ms: Date.now() - start, filesChanged: [target] };
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { success: false, error: msg, duration_ms: Date.now() - start };
+    }
+  } else if (approved.tool === 'read_file') {
+    const paths = Array.isArray(approved.params.paths)
+      ? (approved.params.paths as unknown[]).map(String)
+      : [String(approved.params.path ?? '')];
+    const start = Date.now();
+    try {
+      const files = paths.map((p) => {
+        try {
+          const content = fs.readFileSync(p, 'utf8');
+          return { path: p, content, lineCount: content.split('\n').length };
+        } catch (err) {
+          return { path: p, error: err instanceof Error ? err.message : String(err) };
+        }
+      });
+      result = { success: true, output: JSON.stringify(files), duration_ms: Date.now() - start };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { success: false, error: msg, duration_ms: Date.now() - start };
+    }
+  } else {
+    result = {
+      success: false,
+      error: `Unknown approved tool: ${approved.tool}`,
+      duration_ms: 0,
+    };
+  }
+  const outcome = result.success ? (result.output ?? '') : (result.error ?? '');
+  const label =
+    approved.tool === 'run_shell'
+      ? String(approved.params.command ?? '')
+      : `${approved.tool}: ${JSON.stringify(approved.params)}`;
+  const record = `[HITL] Approved operation executed: ${label}\n${outcome}`.trim();
+  const message: Message = {
+    id: crypto.randomUUID(),
+    role: 'system',
+    content: record,
+    timestamp: new Date().toISOString(),
+  };
+  session.messages.push(message);
+  events.emit('message:added', {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    metadata: message.metadata,
+    timestamp: message.timestamp,
+  });
 }
 
 /**
@@ -123,8 +237,45 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
   events.on('message:added', onMessage);
   events.on('session:status', onStatus);
   try {
-    const loop = await opts.buildAgentLoop({ config: opts.config, events });
-    const session = await loop.run(opts.task);
+    const hitl = opts.hitl ?? new HITLManager();
+    const loop = await opts.buildAgentLoop({ config: opts.config, events, hitl });
+    let session = await loop.run(opts.task);
+
+    // Human-in-the-loop (CLI): a warn/out-of-workspace pause asks on stdin
+    // (y/n) and resumes the SAME stored session — approve executes the
+    // authorized operation first, deny records the decision and continues.
+    const ask = opts.promptApproval ?? promptApproval;
+    while (session.status === 'paused' && hitl.getPendingCommand() !== null) {
+      const pending = hitl.getPendingCommand() ?? 'unknown operation';
+      const approved = await ask(
+        `[HITL] 需要人工确认 — 批准执行该操作？\n  ${pending}\n  (y=批准执行 / n=拒绝)`,
+      );
+      if (approved) {
+        hitl.approve();
+        const action = hitl.getApprovedAction();
+        if (action) {
+          await executeApprovedActionImpl(session, action, events);
+        }
+      } else {
+        hitl.deny();
+        const deniedMsg: Message = {
+          id: crypto.randomUUID(),
+          role: 'system',
+          content: `[HITL] Command denied: ${pending}`,
+          timestamp: new Date().toISOString(),
+        };
+        session.messages.push(deniedMsg);
+        events.emit('message:added', {
+          id: deniedMsg.id,
+          role: deniedMsg.role,
+          content: deniedMsg.content,
+          metadata: deniedMsg.metadata,
+          timestamp: deniedMsg.timestamp,
+        });
+      }
+      session = await loop.run(opts.task, { session });
+    }
+
     print(
       `[session] done: ${session.id} status=${session.status} rounds=${session.currentRound}`,
     );
@@ -352,90 +503,10 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
    * a system message so the resumed loop's LLM sees the outcome without an
    * orphan tool message (OpenAI protocol).
    */
-  const executeApprovedAction = async (
+  const executeApprovedAction = (
     session: Session,
     approved: { tool: string; params: Record<string, unknown> },
-  ): Promise<void> => {
-    const ctx = { workspaceRoot: session.workspaceRoot };
-    let result: ToolResult;
-    if (approved.tool === 'run_shell') {
-      result = await runShellTool.execute(approved.params, ctx);
-    } else if (approved.tool === 'write_file') {
-      // Human authorization overrides the tool's own scope check — execute
-      // directly against the filesystem.
-      const target = String(approved.params.path ?? '');
-      const start = Date.now();
-      try {
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, String(approved.params.content ?? ''), 'utf8');
-        result = { success: true, output: `wrote ${target}`, duration_ms: Date.now() - start, filesChanged: [target] };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        result = { success: false, error: msg, duration_ms: Date.now() - start };
-      }
-    } else if (approved.tool === 'edit_file') {
-      const target = String(approved.params.path ?? '');
-      const oldString = String(approved.params.oldString ?? '');
-      const newString = String(approved.params.newString ?? '');
-      const start = Date.now();
-      try {
-        const content = fs.readFileSync(target, 'utf8');
-        if (!content.includes(oldString)) {
-          result = { success: false, error: 'oldString not found', duration_ms: Date.now() - start };
-        } else {
-          fs.writeFileSync(target, content.replace(oldString, newString), 'utf8');
-          result = { success: true, output: `edited ${target}`, duration_ms: Date.now() - start, filesChanged: [target] };
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        result = { success: false, error: msg, duration_ms: Date.now() - start };
-      }
-    } else if (approved.tool === 'read_file') {
-      const paths = Array.isArray(approved.params.paths)
-        ? (approved.params.paths as unknown[]).map(String)
-        : [String(approved.params.path ?? '')];
-      const start = Date.now();
-      try {
-        const files = paths.map((p) => {
-          try {
-            const content = fs.readFileSync(p, 'utf8');
-            return { path: p, content, lineCount: content.split('\n').length };
-          } catch (err) {
-            return { path: p, error: err instanceof Error ? err.message : String(err) };
-          }
-        });
-        result = { success: true, output: JSON.stringify(files), duration_ms: Date.now() - start };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        result = { success: false, error: msg, duration_ms: Date.now() - start };
-      }
-    } else {
-      result = {
-        success: false,
-        error: `Unknown approved tool: ${approved.tool}`,
-        duration_ms: 0,
-      };
-    }
-    const outcome = result.success ? (result.output ?? '') : (result.error ?? '');
-    const label =
-      approved.tool === 'run_shell'
-        ? String(approved.params.command ?? '')
-        : `${approved.tool}: ${JSON.stringify(approved.params)}`;
-    const record = `[HITL] Approved operation executed: ${label}\n${outcome}`.trim();
-    const message = sessionStore.appendMessage(session.id, {
-      role: 'system',
-      content: record,
-    });
-    if (message) {
-      events.emit('message:added', {
-        id: message.id,
-        role: message.role,
-        content: message.content,
-        metadata: message.metadata,
-        timestamp: message.timestamp,
-      });
-    }
-  };
+  ): Promise<void> => executeApprovedActionImpl(session, approved, events);
 
   const web = createWebUIServer({
     sessionStore,
@@ -572,11 +643,16 @@ export function createStartCommand(deps: StartCommandDeps = {}): Command {
     try {
       const config = loadStartConfig(deps);
       const buildAgentLoop = deps.buildAgentLoop ?? buildDefaultAgentLoop(deps);
+      // One shared HITL manager: the loop's guardrail and the interactive
+      // approval prompt operate on the same pending decision (CLI flow).
+      const hitl = deps.hitl ?? new HITLManager();
       const session = await runStartTask({
         task,
         config,
         buildAgentLoop,
         print: deps.print,
+        hitl,
+        promptApproval: deps.promptApproval,
       });
       // I3 (CR): failed/paused sessions exit non-zero so scripts can detect
       // "the task did not complete" (key/config already use exit code 1).

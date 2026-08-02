@@ -55,7 +55,15 @@ function makeConfig(root = workspaceRoot): Config {
 
 /** Real AgentLoop wired with MockProvider (mirrors the integration harness). */
 function buildMockAgentLoop(responses: LLMResponse[]) {
-  return async ({ config, events }: { config: Config; events: HarnessEvents }) => {
+  return async ({
+    config,
+    events,
+    hitl,
+  }: {
+    config: Config;
+    events: HarnessEvents;
+    hitl?: HITLManager;
+  }) => {
     const mockLLM = new MockProvider(responses);
     const tools = new ToolRegistry();
     tools.register(readFileTool);
@@ -63,7 +71,7 @@ function buildMockAgentLoop(responses: LLMResponse[]) {
     const guard = {
       patternGuard: new PatternGuard(),
       scopeFence: new ScopeFence(),
-      hitl: new HITLManager(),
+      hitl: hitl ?? new HITLManager(),
     };
     const validatorMap = new Map<string, Validator>();
     validatorMap.set('eslint', new EslintValidator());
@@ -123,6 +131,43 @@ describe('runStartTask', () => {
     });
     expect(session.status).toBe('failed');
     expect(printed.some((l) => l.includes('status=failed'))).toBe(true);
+  });
+
+  it('CLI interactive approval: approve executes the operation and resumes', async () => {
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { content: 'done' },
+    ];
+    const session = await runStartTask({
+      task: 'push',
+      config: makeConfig(),
+      buildAgentLoop: buildMockAgentLoop(responses),
+      hitl: new HITLManager(),
+      promptApproval: async () => true, // user says yes
+    });
+    expect(session.status).toBe('completed');
+    // The approved shell command was executed by the harness (it fails — not
+    // a git repo — but it RAN), and the loop resumed to completion.
+    expect(session.messages.some((m) => m.content.includes('Approved operation executed: git push --force origin feature/x'))).toBe(true);
+    expect(session.messages.some((m) => m.content.includes('fatal'))).toBe(true);
+  });
+
+  it('CLI interactive approval: deny records the decision and continues', async () => {
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { content: 'done' },
+    ];
+    const session = await runStartTask({
+      task: 'push',
+      config: makeConfig(),
+      buildAgentLoop: buildMockAgentLoop(responses),
+      hitl: new HITLManager(),
+      promptApproval: async () => false, // user says no
+    });
+    expect(session.status).toBe('completed');
+    expect(session.messages.some((m) => m.content.includes('Command denied'))).toBe(true);
+    // The command was NOT executed.
+    expect(session.messages.some((m) => m.content.includes('Approved operation executed'))).toBe(false);
   });
 
   it('sets exit code 1 when the session ends without completing (I3 CR)', async () => {
