@@ -125,8 +125,29 @@ function MessageRow({ message }: { message: SessionMessage }) {
       return <ToolCard message={message} />;
     case 'feedback':
       return <FeedbackCard message={message} />;
-    default:
-      // System note — center pill (prototype .sys-note).
+    default: {
+      // Short system notes render as a center pill (prototype .sys-note);
+      // long ones (e.g. "[HITL] Approved command executed" + output) would
+      // balloon the pill into a huge grey box — render them as plain left
+      // aligned mono text instead.
+      const isLong = message.content.includes('\n') || message.content.length > 80;
+      if (isLong) {
+        return (
+          <div
+            style={{
+              fontFamily: designTokens.typography.fontFamily.mono,
+              fontSize: designTokens.typography.fontSize.xs,
+              lineHeight: String(designTokens.typography.lineHeight.relaxed),
+              color: designTokens.colors.textMuted,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              padding: '2px 0',
+            }}
+          >
+            {message.content}
+          </div>
+        );
+      }
       return (
         <div
           style={{
@@ -145,19 +166,13 @@ function MessageRow({ message }: { message: SessionMessage }) {
               borderColor: designTokens.colors.border,
               padding: '3px 12px',
               borderRadius: designTokens.radius.pill,
-              // Multi-line system notes (e.g. [HITL] executed + output) must
-              // keep a comfortable line height — inline inherits it, but an
-              // explicit relaxed value prevents mono-font row overlap.
-              display: 'inline-block',
-              lineHeight: String(designTokens.typography.lineHeight.relaxed),
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
             }}
           >
             {message.content}
           </span>
         </div>
       );
+    }
   }
 }
 
