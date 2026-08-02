@@ -40,8 +40,10 @@ function nowISO(): string {
 export class InMemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, Session>();
 
+  // Defaults mirror DEFAULT_CONFIG (maxRounds 0 = unlimited) — callers that
+  // pass a config should always inject config.agent values explicitly.
   constructor(
-    private readonly defaultMaxRounds: number = 3,
+    private readonly defaultMaxRounds: number = 0,
     private readonly defaultWorkspaceRoot: string = process.cwd(),
   ) {}
 

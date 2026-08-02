@@ -126,7 +126,7 @@ describe('createConfigCommand wiring (SPEC §3.6 three-layer merge)', () => {
     await parseCaptured(cmd, ['show']);
     const printed = out.join('');
     expect(printed).toContain('"provider": "deepseek"');
-    expect(printed).toContain('"maxRounds": 3');
+    expect(printed).toContain('"maxRounds": 0');
     expect(printed).toContain('"token": "not set"');
   });
 });
