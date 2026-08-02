@@ -1,15 +1,34 @@
 import type { Validator, Action, ToolResult, ValidatorContext, FeedbackResult } from '../../types.js';
 import { execSync as nodeExecSync } from 'child_process';
+import { existsSync } from 'node:fs';
+import * as path from 'node:path';
+
+function defaultHasTsConfig(root: string): boolean {
+  return existsSync(path.join(root, 'tsconfig.json'));
+}
 
 export class TscValidator implements Validator {
   name = 'tsc';
   private _exec: typeof nodeExecSync;
+  private _hasConfig: (root: string) => boolean;
 
-  constructor(exec?: typeof nodeExecSync) {
+  constructor(exec?: typeof nodeExecSync, hasConfig?: (root: string) => boolean) {
     this._exec = exec ?? nodeExecSync;
+    this._hasConfig = hasConfig ?? defaultHasTsConfig;
   }
 
   async validate(_action: Action, _result: ToolResult, context: ValidatorContext): Promise<FeedbackResult> {
+    // Environment prerequisite (SPEC §10 未决问题 2): without a tsconfig.json
+    // `npx tsc` installs a bogus npm package named `tsc` — skip instead of
+    // feeding that noise back to the LLM as a code error.
+    if (!this._hasConfig(context.workspaceRoot)) {
+      return {
+        passed: true,
+        validator: 'tsc',
+        evidence: 'tsc skipped: no tsconfig.json in workspace',
+      };
+    }
+
     try {
       const raw = this._exec('npx tsc --noEmit', {
         cwd: context.workspaceRoot,
