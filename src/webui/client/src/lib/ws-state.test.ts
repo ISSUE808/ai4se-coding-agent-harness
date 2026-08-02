@@ -1,0 +1,116 @@
+import { describe, expect, it } from 'vitest';
+import {
+  createInitialRuntimeState,
+  reduceSessionEvent,
+  type SessionEventFrame,
+} from './ws-state';
+import type { SessionMessage } from './session-messages';
+
+function message(id: string, role: SessionMessage['role'] = 'assistant', content = 'hello'): SessionMessage {
+  return { id, role, content, timestamp: '2026-08-02T14:23:07.000Z' };
+}
+
+function frame(type: string, data: Record<string, unknown>): SessionEventFrame {
+  return { type, data };
+}
+
+describe('createInitialRuntimeState', () => {
+  it('starts empty without initial data', () => {
+    const state = createInitialRuntimeState();
+    expect(state.messages).toEqual([]);
+    expect(state.status).toBeNull();
+    expect(state.currentRound).toBeNull();
+    expect(state.pendingApproval).toBeNull();
+  });
+
+  it('seeds REST-loaded session data', () => {
+    const state = createInitialRuntimeState({
+      messages: [message('m1', 'user', 'task')],
+      status: 'running',
+      currentRound: 2,
+      maxRounds: 40,
+    });
+    expect(state.messages.map((m) => m.id)).toEqual(['m1']);
+    expect(state.status).toBe('running');
+    expect(state.currentRound).toBe(2);
+  });
+});
+
+describe('reduceSessionEvent — message:added', () => {
+  it('appends a new message', () => {
+    const next = reduceSessionEvent(createInitialRuntimeState(), frame('message:added', {
+      id: 'm1', role: 'tool', content: 'done', timestamp: '2026-08-02T14:23:07.000Z',
+    }));
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0]).toMatchObject({ id: 'm1', role: 'tool', content: 'done' });
+  });
+
+  it('dedupes by id against the REST-loaded list (server broadcasts message:added)', () => {
+    const state = createInitialRuntimeState({ messages: [message('m1')], status: 'running' });
+    const next = reduceSessionEvent(state, frame('message:added', {
+      id: 'm1', role: 'tool', content: 'updated', timestamp: '2026-08-02T14:24:00.000Z',
+    }));
+    expect(next.messages).toHaveLength(1);
+    expect(next.messages[0].content).toBe('updated');
+  });
+
+  it('keeps tool metadata (toolName, toolInput, toolResult) attached', () => {
+    const next = reduceSessionEvent(createInitialRuntimeState(), frame('message:added', {
+      id: 'm2', role: 'tool', content: 'ok', timestamp: '2026-08-02T14:23:07.000Z',
+      metadata: { toolName: 'edit_file', toolInput: { path: 'src/a.ts' }, toolResult: { success: true, duration_ms: 5, filesChanged: ['src/a.ts'] } },
+    }));
+    expect(next.messages[0].metadata?.toolName).toBe('edit_file');
+    expect(next.messages[0].metadata?.toolResult?.filesChanged).toEqual(['src/a.ts']);
+  });
+});
+
+describe('reduceSessionEvent — session:status', () => {
+  it('updates the session status', () => {
+    const next = reduceSessionEvent(createInitialRuntimeState(), frame('session:status', { sessionId: 's1', status: 'paused' }));
+    expect(next.status).toBe('paused');
+  });
+
+  it('ignores an unknown status value', () => {
+    const state = createInitialRuntimeState({ messages: [], status: 'running' });
+    const next = reduceSessionEvent(state, frame('session:status', { sessionId: 's1', status: 'teleported' }));
+    expect(next.status).toBe('running');
+  });
+});
+
+describe('reduceSessionEvent — round:changed', () => {
+  it('updates round progress', () => {
+    const next = reduceSessionEvent(createInitialRuntimeState(), frame('round:changed', { currentRound: 13, maxRounds: 40 }));
+    expect(next.currentRound).toBe(13);
+    expect(next.maxRounds).toBe(40);
+  });
+});
+
+describe('reduceSessionEvent — guardrail:triggered', () => {
+  it('records a warn-level command as pending human approval', () => {
+    const next = reduceSessionEvent(createInitialRuntimeState(), frame('guardrail:triggered', {
+      rule: 'prod-mutation', command: 'npm run migrate:prod', level: 'warn',
+    }));
+    expect(next.pendingApproval).toEqual({ rule: 'prod-mutation', command: 'npm run migrate:prod', level: 'warn' });
+  });
+
+  it('does not surface block-level commands for approval', () => {
+    const next = reduceSessionEvent(createInitialRuntimeState(), frame('guardrail:triggered', {
+      rule: 'no-network', command: 'curl http://x', level: 'block',
+    }));
+    expect(next.pendingApproval).toBeNull();
+  });
+});
+
+describe('reduceSessionEvent — malformed input', () => {
+  it('ignores unknown event types without touching state', () => {
+    const state = createInitialRuntimeState({ messages: [message('m1')], status: 'running' });
+    const next = reduceSessionEvent(state, frame('tool:executed', { toolName: 'x' }));
+    expect(next).toBe(state);
+  });
+
+  it('ignores frames with non-object data', () => {
+    const state = createInitialRuntimeState({ messages: [], status: 'running' });
+    const next = reduceSessionEvent(state, { type: 'session:status', data: 'paused' as unknown as Record<string, unknown> });
+    expect(next).toBe(state);
+  });
+});

@@ -27,4 +27,9 @@ describe('shouldTerminate', () => {
     const resp: LLMResponse = { content: null, toolCalls: [{ name: 'write_file', arguments: { path: 'a.ts', content: 'x' } }] };
     expect(shouldTerminate(resp, 3, 3)).toBe(false);
   });
+
+  it('maxRounds = 0（无上限）→ 轮数不触发终止', () => {
+    const resp: LLMResponse = { content: null, toolCalls: [{ name: 'write_file', arguments: { path: 'a.ts', content: 'x' } }] };
+    expect(shouldTerminate(resp, 999, 0)).toBe(false);
+  });
 });

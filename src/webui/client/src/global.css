@@ -1,0 +1,56 @@
+/**
+ * Global CSS — the small set of rules that cannot be expressed inline in
+ * React (keyframes, scrollbar chrome, focus ring). Mirrors the prototype's
+ * `codeharness-webui.html` base layer. All color values are consumed as CSS
+ * variables injected from design-tokens.ts by main.tsx (:root), so the token
+ * file stays the single visual source of truth — no raw hex here.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ch-border-strong);
+  border-radius: 8px;
+  border: 2px solid var(--ch-bg);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ch-focus-ring);
+  outline-offset: 1px;
+}
+
+@keyframes ch-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
