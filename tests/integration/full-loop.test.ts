@@ -31,7 +31,15 @@ import { ScopeFence } from '../../src/guardrail/scope-fence.js';
 import { HITLManager } from '../../src/guardrail/hitl-manager.js';
 import { SessionMemory } from '../../src/memory/session-memory.js';
 import { DEFAULT_CONFIG } from '../../src/config/schema.js';
-import type { Config, CredentialBackend, LLMResponse, Session, Tool, Validator } from '../../src/types.js';
+import type {
+  Config,
+  CredentialBackend,
+  LLMProvider,
+  LLMResponse,
+  Session,
+  Tool,
+  Validator,
+} from '../../src/types.js';
 import type { BuildAgentLoop } from '../../src/cli/commands/start.js';
 
 /**
@@ -77,7 +85,7 @@ function createMockExec() {
  * (HITL approval) continues consuming the scripted responses.
  */
 function buildLoopFactory(
-  mock: MockProvider,
+  provider: LLMProvider,
   validators?: Map<string, Validator>,
 ): BuildAgentLoop {
   return async ({ config, events, hitl }) => {
@@ -109,7 +117,21 @@ function buildLoopFactory(
       strategyMatcher: new StrategyMatcher(),
       roundManager: new RoundManager(config.agent.maxRounds),
     };
-    return new AgentLoop(mock, tools, guard, feedback, validatorMap, memory, events, config);
+    return new AgentLoop(provider, tools, guard, feedback, validatorMap, memory, events, config);
+  };
+}
+
+/**
+ * MockProvider wrapper with a per-call delay — lets REST control requests
+ * (pause/resume/stop) land while the loop is still mid-run.
+ */
+function slowMockProvider(responses: LLMResponse[], delayMs: number): LLMProvider {
+  const inner = new MockProvider(responses);
+  return {
+    async complete(messages, tools) {
+      await silence(delayMs);
+      return inner.complete(messages, tools);
+    },
   };
 }
 
@@ -153,7 +175,7 @@ afterEach(async () => {
 
 async function makeHarness(
   config: Config,
-  mock: MockProvider,
+  provider: LLMProvider,
   validators?: Map<string, Validator>,
 ): Promise<Fixture> {
   const events = createEventBus();
@@ -164,7 +186,7 @@ async function makeHarness(
     events,
     credentialStore,
     sessionStore,
-    buildAgentLoop: buildLoopFactory(mock, validators),
+    buildAgentLoop: buildLoopFactory(provider, validators),
     persistConfig: async () => {
       // Test-only: never touch the project config file.
     },
@@ -237,6 +259,26 @@ async function waitForStatus(
   }
   const current = store.get(id);
   throw new Error(`timeout waiting for session ${id} to reach ${status}, got ${current?.status}`);
+}
+
+/** Poll until `cond()` is true (the loop runs async; status may not change). */
+async function waitForCondition(
+  cond: () => boolean,
+  timeoutMs = 8000,
+  label = 'condition',
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (cond()) {
+      return;
+    }
+    await silence(20);
+  }
+  throw new Error(`timeout waiting for ${label}`);
+}
+
+function toolCount(store: SessionStore, id: string): number {
+  return store.get(id)?.messages.filter((m) => m.role === 'tool').length ?? 0;
 }
 
 describe('full integration — start --web wiring (Task 19)', () => {
@@ -396,5 +438,127 @@ describe('full integration — start --web wiring (Task 19)', () => {
     } finally {
       fs.rmSync(sessionRoot, { recursive: true, force: true });
     }
+  });
+
+  it('同一进程内第二次 warn → 批准卡再次出现 → 批准后 agent 继续执行（C1 HITL 可复用）', async () => {
+    const mock = new MockProvider([
+      // Round 1: first warn-level command → HITL pause.
+      { toolCalls: [{ name: 'run_shell', arguments: { command: 'git push --force origin feature/a' } }] },
+      // After approve 1: a SECOND warn command must raise a NEW approval card
+      // (not be silently swallowed as "HITL busy").
+      { toolCalls: [{ name: 'run_shell', arguments: { command: 'git clean -fd' } }] },
+      // After approve 2: the agent really executes the next command and finishes.
+      { toolCalls: [{ name: 'run_shell', arguments: { command: 'echo approved-work' } }] },
+      { content: '任务完成。' },
+    ]);
+    const { sessionStore, web } = await makeHarness(makeConfig(configRoot), mock);
+
+    const created = await request(web.app).post('/api/sessions').send({ task: '重复 warn' });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+
+    // First warn pause shows one approval card.
+    await waitForStatus(sessionStore, id, 'paused');
+    await waitForCondition(
+      () => (sessionStore.get(id)?.messages.filter((m) => m.metadata?.approvalRequired === true).length ?? 0) === 1,
+      8000,
+      'first approval card',
+    );
+
+    const approve1 = await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+    expect(approve1.status).toBe(200);
+
+    // Second warn → the approval card appears AGAIN (approvals API usable).
+    await waitForCondition(
+      () => (sessionStore.get(id)?.messages.filter((m) => m.metadata?.approvalRequired === true).length ?? 0) === 2,
+      8000,
+      'second approval card',
+    );
+    const approve2 = await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+    expect(approve2.status).toBe(200);
+
+    // After the second approval the agent executes a real command and completes.
+    const done = await waitForStatus(sessionStore, id, 'completed');
+    expect(done.messages.filter((m) => m.content.includes('Command approved'))).toHaveLength(2);
+    // The SECOND pending command was the one recorded on the second approval.
+    expect(done.messages.some((m) => m.content.includes('git clean -fd'))).toBe(true);
+    const shellMsgs = done.messages.filter((m) => m.role === 'tool' && m.metadata?.toolName === 'run_shell');
+    expect(shellMsgs.some((m) => m.metadata?.toolResult?.success)).toBe(true);
+  });
+
+  it('升级暂停（反馈失败 3 次）→ 人工恢复 → 上限提高并继续执行至完成（I1）', async () => {
+    const mock = new MockProvider([
+      { toolCalls: [{ name: 'write_file', arguments: { path: 'test.ts', content: 'const x: number = "str"' } }] },
+      { toolCalls: [{ name: 'write_file', arguments: { path: 'test.ts', content: 'const x: number = "str2"' } }] },
+      { toolCalls: [{ name: 'write_file', arguments: { path: 'test.ts', content: 'const x: number = "str3"' } }] },
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { content: '任务完成。' },
+    ]);
+    const { sessionStore, web } = await makeHarness(makeConfig(configRoot, { maxRounds: 3 }), mock);
+
+    const created = await request(web.app).post('/api/sessions').send({ task: '升级后恢复' });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+
+    // Upgrade pause: currentRound=4 > maxRounds=3.
+    const paused = await waitForStatus(sessionStore, id, 'paused');
+    expect(paused.currentRound).toBe(4);
+    expect(paused.maxRounds).toBe(3);
+    expect(paused.messages.some((m) => m.metadata?.approvalRequired === true)).toBe(true);
+
+    // Human resumes via the REST API — the harness raises the cap (persisted
+    // on the stored session) so the loop continues instead of re-upgrading.
+    const resumed = await request(web.app).post(`/api/sessions/${id}/resume`);
+    expect(resumed.status).toBe(200);
+    expect(resumed.body.status).toBe('running');
+    expect(resumed.body.maxRounds).toBe(7); // currentRound(4) + maxRounds(3)
+
+    const done = await waitForStatus(sessionStore, id, 'completed');
+    expect(done.maxRounds).toBe(7);
+    const toolMsgs = done.messages.filter((m) => m.role === 'tool');
+    expect(toolMsgs).toHaveLength(4); // 3 failed writes + 1 read after resume
+    expect(
+      toolMsgs.some((m) => m.metadata?.toolName === 'read_file' && m.metadata?.toolResult?.success),
+    ).toBe(true);
+  });
+
+  it('pause 真实停止 loop；resume 真实继续；stop 真实终止（I2）', async () => {
+    // 8 tool rounds with a 60ms-per-call LLM — long enough for the REST
+    // control requests to land while the loop is mid-run.
+    const responses: LLMResponse[] = Array.from({ length: 8 }, () => ({
+      toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }],
+    }));
+    const { sessionStore, web } = await makeHarness(makeConfig(configRoot), slowMockProvider(responses, 60));
+
+    const created = await request(web.app).post('/api/sessions').send({ task: '控制测试' });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+
+    // The loop is mid-run once the first tool message exists.
+    await waitForCondition(() => toolCount(sessionStore, id) >= 1, 8000, 'first tool round');
+
+    // Pause: status becomes paused AND the loop really stops.
+    const paused = await request(web.app).post(`/api/sessions/${id}/pause`);
+    expect(paused.status).toBe(200);
+    expect(paused.body.status).toBe('paused');
+    const countAtPause = toolCount(sessionStore, id);
+    await silence(300);
+    // At most the in-flight round may finish; a live loop would add ~5 more.
+    expect(toolCount(sessionStore, id)).toBeLessThanOrEqual(countAtPause + 1);
+
+    // Resume: the loop really continues.
+    const resumed = await request(web.app).post(`/api/sessions/${id}/resume`);
+    expect(resumed.status).toBe(200);
+    expect(resumed.body.status).toBe('running');
+    await waitForCondition(() => toolCount(sessionStore, id) > countAtPause, 8000, 'rounds after resume');
+
+    // Stop: status becomes completed AND the loop halts.
+    const stopped = await request(web.app).post(`/api/sessions/${id}/stop`);
+    expect(stopped.status).toBe(200);
+    expect(stopped.body.status).toBe('completed');
+    const countAtStop = toolCount(sessionStore, id);
+    await silence(300);
+    expect(toolCount(sessionStore, id)).toBeLessThanOrEqual(countAtStop + 1);
+    expect(sessionStore.get(id)?.status).toBe('completed');
   });
 });

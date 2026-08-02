@@ -80,6 +80,12 @@ export interface StartCommandDeps {
   persistConfig?: (config: Config) => Promise<void>;
   /** Task 19: how `start --web` blocks; injectable so tests don't hang. */
   waitForShutdown?: () => Promise<void>;
+  /**
+   * Test-only (M1): commander errors throw instead of process.exit so tests
+   * can assert them. Production must NOT enable this — `start --help` exits
+   * natively via process.exit(0).
+   */
+  exitOverride?: boolean;
 }
 
 export interface RunStartTaskOptions {
@@ -265,10 +271,22 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
   const sessionStore =
     opts.sessionStore ?? new InMemorySessionStore(config.agent.maxRounds, config.agent.workspaceRoot);
 
+  /** Live runs by session id — the pause/stop endpoints abort them (I2). */
+  const activeRuns = new Map<string, AbortController>();
+
   const runSession = async (session: Session): Promise<void> => {
+    // C1: restore HITL to IDLE before each run so a NEW warn-level command can
+    // request approval again — otherwise the post-decision state (EXECUTING /
+    // EXECUTING_MODIFIED / BLOCKED) silently swallows every later warn as
+    // "HITL busy". Known limitation (I3): single-session concurrency — this
+    // reset may clear ANOTHER session's pending approval; multi-session HITL
+    // keying is future work.
+    hitl.reset();
+    const controller = new AbortController();
+    activeRuns.set(session.id, controller);
     try {
       const loop = await buildAgentLoop({ config, events, hitl });
-      await loop.run(session.task, { session });
+      await loop.run(session.task, { session, signal: controller.signal });
     } catch (err) {
       // The loop never throws for LLM/tool failures, but guard against
       // wiring errors so the session is not left in 'running' forever.
@@ -282,7 +300,26 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
         timestamp: new Date().toISOString(),
       });
       events.emit('session:status', { sessionId: session.id, status: 'failed' });
+    } finally {
+      if (activeRuns.get(session.id) === controller) {
+        activeRuns.delete(session.id);
+      }
     }
+  };
+
+  /**
+   * Shared continuation path for /resume and post-approval runs — really
+   * starts the loop on the stored session (I2).
+   * I1: an upgrade-paused session (currentRound >= maxRounds) would re-upgrade
+   * at the top of the next run and re-pause forever; human intervention
+   * raises the cap, written back to the stored session so it persists.
+   */
+  const continueSession = (session: Session): void => {
+    if (session.maxRounds > 0 && session.currentRound >= session.maxRounds) {
+      session.maxRounds = session.currentRound + session.maxRounds;
+      session.updatedAt = new Date().toISOString();
+    }
+    void runSession(session);
   };
 
   const web = createWebUIServer({
@@ -299,7 +336,18 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
       // Only HITL-paused sessions are candidates for continuation — the loop
       // is idle exactly when the store says 'paused'.
       if (session.status === 'paused') {
-        void runSession(session);
+        continueSession(session);
+      }
+    },
+    onSessionResumed: (session) => {
+      continueSession(session);
+    },
+    onSessionControl: (session, action) => {
+      // pause/stop: abort the live run — the endpoint already set the final
+      // status; the loop stops at its next round boundary without overriding
+      // it (an in-flight LLM/tool call completes first).
+      if (action === 'pause' || action === 'stop') {
+        activeRuns.get(session.id)?.abort();
       }
     },
   });
@@ -375,8 +423,13 @@ export function createStartCommand(deps: StartCommandDeps = {}): Command {
   cmd.description('Run the coding agent on a task (or start the WebUI with --web)');
   cmd.argument('[task]', 'the task to complete (required without --web)');
   cmd.option('--web', 'start the WebUI server and run sessions from the browser (no task needed)');
-  // Commander errors throw instead of process.exit so tests can assert them.
-  cmd.exitOverride();
+  // M1: only tests opt in — production keeps commander's native process.exit
+  // so `start --help` exits 0 instead of surfacing as an error.
+  if (deps.exitOverride) {
+    cmd.exitOverride();
+  }
+  // Note (M2): PLAN's optional `--cwd` enhancement is NOT implemented — the
+  // session workspace root is specified per session from the WebUI instead.
   cmd.action(async (task: string | undefined, flags: { web?: boolean }) => {
     if (flags.web) {
       await runWebAction(deps);

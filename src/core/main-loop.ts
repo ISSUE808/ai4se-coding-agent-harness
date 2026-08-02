@@ -65,6 +65,13 @@ export interface AgentRunOptions {
   workspaceRoot?: string;
   /** Round cap; 0 = unlimited; defaults to config.agent.maxRounds. */
   maxRounds?: number;
+  /**
+   * Task 19 (I2): the WebUI pause/stop endpoints abort a live run between
+   * rounds. The REST endpoint already set the final status — the loop stops
+   * without overriding it. Cancellation is per-round: an in-flight LLM/tool
+   * call completes before the check takes effect.
+   */
+  signal?: AbortSignal;
 }
 
 export class AgentLoop {
@@ -144,6 +151,12 @@ export class AgentLoop {
     this.events.emit('session:status', { sessionId: session.id, status: 'running' });
 
     outer: while (true) {
+      // I2: pause/stop from the WebUI abort a live run; the endpoint already
+      // set the final status (paused/completed), so break without touching it.
+      if (options.signal?.aborted) {
+        break;
+      }
+
       // Keep session round tracking in sync
       session.currentRound = roundManager.currentRound;
 

@@ -20,6 +20,15 @@ export interface SessionsRouterDeps {
   events: HarnessEvents;
   /** Task 19: invoked after a session is created so the harness can run it. */
   onSessionCreated?: (session: Session) => void;
+  /**
+   * Task 19 (I2): invoked after pause/stop — the endpoint already set the
+   * final status; the harness aborts the live loop so it really halts.
+   */
+  onSessionControl?: (session: Session, action: 'pause' | 'stop') => void;
+  /**
+   * Task 19 (I2): invoked after resume so the harness really starts the loop.
+   */
+  onSessionResumed?: (session: Session) => void;
 }
 
 const MESSAGE_ROLES = ['user', 'assistant', 'tool', 'system', 'feedback'] as const;
@@ -167,6 +176,14 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
       const updated = sessionStore.updateStatus(session.id, transition.to);
       if (updated) {
         events.emit('session:status', { sessionId: updated.id, status: updated.status });
+        // Task 19 (I2): pause/stop abort the live loop (a status change alone
+        // does not stop it); resume hands the session back so the loop really
+        // starts on the stored object.
+        if (action === 'pause' || action === 'stop') {
+          deps.onSessionControl?.(updated, action);
+        } else {
+          deps.onSessionResumed?.(updated);
+        }
       }
       res.json(updated);
     });

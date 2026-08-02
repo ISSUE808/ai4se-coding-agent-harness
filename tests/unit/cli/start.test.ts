@@ -291,4 +291,31 @@ describe('createStartCommand wiring', () => {
     expect(errLines.join('')).toMatch(/task/i);
     expect(process.exitCode).toBe(1);
   });
+
+  it('`start --help` displays usage and exits cleanly (M1: no exitOverride in production)', async () => {
+    // Production (no deps.exitOverride): commander's help path is untouched —
+    // `start --help` must NOT throw a helpDisplayed error for index.ts to catch.
+    const cmd = createStartCommand({
+      config: {
+        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+      },
+    }) as unknown as { _exitCallback?: unknown };
+    expect(cmd._exitCallback).toBeNull();
+
+    // Test-injected exitOverride: help still displays, and the help exit
+    // surfaces as a distinguishable code-0 throw instead of process.exit.
+    const injected = createStartCommand({
+      config: {
+        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+      },
+      exitOverride: true,
+    });
+    const result = await parseCaptured(injected, ['start', '--help']);
+    expect(result.out).toContain('Usage');
+    const thrown = result.thrown as { code?: string; exitCode?: number };
+    expect(thrown?.code).toBe('commander.helpDisplayed');
+    expect(thrown?.exitCode).toBe(0);
+  });
 });

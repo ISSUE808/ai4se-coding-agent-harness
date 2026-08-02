@@ -1,5 +1,14 @@
 import * as path from 'node:path';
 
+/**
+ * ScopeFence — lexical path-prefix validation against the workspace root
+ * (SPEC §3.4). Known limitation (M3, Task 8 existing design): validation is
+ * lexical (string prefix), not canonical — a symlink INSIDE the workspace
+ * pointing outside is not resolved, so `validatePath` can be bypassed via a
+ * link target. Resolving symlinks (`fs.realpathSync`) before validation is
+ * future hardening; do not rely on this fence as the sole sandbox boundary.
+ */
+
 const DEFAULT_ENV_SAFELIST = [
   'PATH',
   'HOME',

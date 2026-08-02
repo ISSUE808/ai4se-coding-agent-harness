@@ -50,6 +50,16 @@ export interface WebUIServerDeps {
    * integrated harness can resume a paused session.
    */
   onApprovalResolved?: (session: Session) => void;
+  /**
+   * Task 19 (I2): invoked after pause/stop — the endpoint already set the
+   * final status; the harness aborts the live run so the loop really halts.
+   */
+  onSessionControl?: (session: Session, action: 'pause' | 'stop') => void;
+  /**
+   * Task 19 (I2): invoked after resume so the harness really starts the loop
+   * on the stored session (a status change alone would leave a fake running).
+   */
+  onSessionResumed?: (session: Session) => void;
 }
 
 export interface WebUIServer {
@@ -92,6 +102,8 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
       sessionStore: deps.sessionStore,
       events: deps.events,
       onSessionCreated: deps.onSessionCreated,
+      onSessionControl: deps.onSessionControl,
+      onSessionResumed: deps.onSessionResumed,
     }),
   );
   app.use(
