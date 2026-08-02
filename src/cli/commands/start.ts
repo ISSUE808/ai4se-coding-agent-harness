@@ -319,7 +319,47 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
       session.maxRounds = session.currentRound + session.maxRounds;
       session.updatedAt = new Date().toISOString();
     }
+    // HITL approval authorizes the command — the harness executes it directly
+    // (SPEC §3.4: approval = authorization to run, never a hint for the LLM
+    // to re-issue it; real LLMs do not re-issue after "[HITL] approved").
+    const approved = hitl.getApprovedCommand();
+    if (approved !== null) {
+      session.status = 'running';
+      events.emit('session:status', { sessionId: session.id, status: 'running' });
+      void executeApprovedCommand(session, approved).then(() => {
+        void runSession(session);
+      });
+      return;
+    }
     void runSession(session);
+  };
+
+  /**
+   * Execute a human-approved (or human-modified) command directly via the
+   * shell tool — skipping the guardrail once, since the human already
+   * authorized it. The result lands as a system message so the resumed loop's
+   * LLM sees the outcome without an orphan tool message (OpenAI protocol).
+   */
+  const executeApprovedCommand = async (session: Session, command: string): Promise<void> => {
+    const result = await runShellTool.execute(
+      { command },
+      { workspaceRoot: session.workspaceRoot },
+    );
+    const outcome = result.success ? (result.output ?? '') : (result.error ?? '');
+    const record = `[HITL] Approved command executed: ${command}\n${outcome}`.trim();
+    const message = sessionStore.appendMessage(session.id, {
+      role: 'system',
+      content: record,
+    });
+    if (message) {
+      events.emit('message:added', {
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        metadata: message.metadata,
+        timestamp: message.timestamp,
+      });
+    }
   };
 
   const web = createWebUIServer({

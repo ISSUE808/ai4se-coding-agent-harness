@@ -18,6 +18,19 @@ export class HITLManager {
     return this.pendingCommand;
   }
 
+  /**
+   * The command authorized by a human decision — the harness must EXECUTE it
+   * (SPEC §3.4: approval = authorization to run, not a hint to the LLM).
+   * Returns the original (approve) or modified (modify) command after a
+   * decision; null for deny or before any decision.
+   */
+  getApprovedCommand(): string | null {
+    if (this.state === HITLState.EXECUTING || this.state === HITLState.EXECUTING_MODIFIED) {
+      return this.pendingCommand;
+    }
+    return null;
+  }
+
   requestApproval(command: string): void {
     if (this.state !== HITLState.IDLE) {
       throw new Error(`Cannot request approval in state ${this.state}`);

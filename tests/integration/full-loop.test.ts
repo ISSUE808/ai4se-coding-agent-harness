@@ -428,6 +428,15 @@ describe('full integration — start --web wiring (Task 19)', () => {
     expect(done.messages.some((m) => m.content.includes('Command approved'))).toBe(true);
     const toolMsgs = done.messages.filter((m) => m.role === 'tool');
     expect(toolMsgs.some((m) => m.metadata?.toolName === 'read_file' && m.metadata?.toolResult?.success)).toBe(true);
+
+    // SPEC §3.4: approval authorizes EXECUTION — the harness ran the command
+    // directly (never delegated to the LLM re-issuing it).
+    const executed = done.messages.filter((m) =>
+      m.content.includes('Approved command executed: git push --force origin feature/x'),
+    );
+    expect(executed.length).toBe(1);
+    // The execution result (failure: not a git repo) is visible to the LLM.
+    expect(executed[0].content).toContain('fatal');
   });
 
   it('反馈失败 3 次 → 升级 → HITL 暂停（approvalRequired 消息）', async () => {
