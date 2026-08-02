@@ -205,12 +205,14 @@ export async function executeApprovedActionImpl(
       : `${approved.tool}: ${JSON.stringify(approved.params)}`;
   // Unambiguous wording: the LLM must read "executed" as done. The first line
   // carries the verdict (SUCCESS/FAILED) so it cannot be missed even when the
-  // output is long.
-  const record = `[HITL] ✅ Operation executed (${result.success ? 'SUCCESS' : 'FAILED'}): ${label}\n${outcome}`.trim();
+  // output is long; the trailing instruction tells the LLM to move on.
+  const record =
+    `[HITL] ✅ Operation executed (${result.success ? 'SUCCESS' : 'FAILED'}): ${label}\n${outcome}` +
+    '\n（操作已执行完毕，继续你的任务，无需再次请求批准。）';
   const message: Message = {
     id: crypto.randomUUID(),
     role: 'system',
-    content: record,
+    content: record.trim(),
     timestamp: new Date().toISOString(),
   };
   session.messages.push(message);

@@ -245,9 +245,10 @@ export class AgentLoop {
       id: generateId(),
       role: 'system',
       content:
-        '被安全护栏拦截的操作（含工作区外读写与高危命令）会暂停等待人工确认。' +
-        '人工批准后，系统会直接执行该操作，并以 "[HITL] Approved operation executed" 消息告知结果。' +
-        '看到该消息即表示操作已执行，不要再次请求批准、重复执行相同命令，或声称操作被拦截。',
+        '部分操作（工作区外读写与高危命令）会先收到 "Operation paused for human approval" 消息' +
+        '等待人工确认。人工批准后，系统会直接执行该操作，并发送 "[HITL] ✅ Operation executed (SUCCESS|FAILED)"' +
+        '消息告知结果。看到这条 ✅ 消息即表示操作已执行完毕——不要再次请求批准、不要重复执行相同命令、' +
+        '不要说操作被拦截或等待批准，直接继续你的任务。',
       timestamp: nowISO(),
     });
 
