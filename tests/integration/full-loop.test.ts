@@ -325,6 +325,40 @@ describe('full integration — start --web wiring (Task 19)', () => {
     expect(harness).toBeDefined();
   });
 
+  it('pairs every assistant tool_call with a tool message, including guardrail-blocked actions (OpenAI protocol)', async () => {
+    const mock = new MockProvider([
+      {
+        toolCalls: [
+          { id: 'call_block', name: 'run_shell', arguments: { command: 'rm -rf /' } },
+          { id: 'call_ok', name: 'write_file', arguments: { path: 'x.txt', content: 'hi' } },
+        ],
+      },
+      { content: 'done' },
+    ]);
+    const { harness, sessionStore } = await makeHarness(makeConfig(configRoot, { maxRounds: 10 }), mock);
+    const created = await request(harness.web.app).post('/api/sessions').send({ task: 't' });
+    const session = await waitForStatus(sessionStore, created.body.id, 'completed');
+
+    // OpenAI protocol: every tool_call_id declared by an assistant message must
+    // have exactly one tool-role response — DeepSeek 400s on missing pairs.
+    const declaredIds = new Set<string>();
+    for (const m of session.messages) {
+      const calls = m.metadata?.toolInput?.toolCalls as { id?: string }[] | undefined;
+      if (m.role === 'assistant' && Array.isArray(calls)) {
+        for (const c of calls) {
+          if (c.id) {
+            declaredIds.add(c.id);
+          }
+        }
+      }
+    }
+    expect(declaredIds.size).toBeGreaterThan(0);
+    for (const id of declaredIds) {
+      const paired = session.messages.filter((m) => m.role === 'tool' && m.metadata?.toolCallId === id);
+      expect(paired.length, `tool_call_id ${id} must have exactly one tool response`).toBe(1);
+    }
+  });
+
   it('护栏 HITL warn 触发 → 用户通过 API 批准 → agent 继续执行并完成', async () => {
     const mock = new MockProvider([
       // Round 1: warn-level command → HITL pause (approval required).

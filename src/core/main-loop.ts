@@ -252,7 +252,8 @@ export class AgentLoop {
 
       // Step 4-6: For each action — guardrail → execute → feedback
       let allFeedbackPassed = true;
-      for (const action of actions) {
+      for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
         // Step 4: Guardrail checks
         const guardResult = this.runGuardrails(action, session);
         if (guardResult.blocked) {
@@ -265,7 +266,38 @@ export class AgentLoop {
             timestamp: nowISO(),
           };
           this.addMessage(session, guardMsg);
+          // OpenAI protocol: every assistant tool_call needs a paired tool
+          // response — a blocked action must still answer its tool_call_id,
+          // or the next LLM call 400s (insufficient tool messages).
+          this.addToolMessage(
+            session,
+            action.tool,
+            action.params,
+            {
+              success: false,
+              error: `Guardrail blocked: ${guardResult.reason}`,
+              duration_ms: 0,
+            },
+            action.id,
+          );
           allFeedbackPassed = false;
+
+          // The LLM declared every call in this round — skipped actions still
+          // need a paired tool response (OpenAI protocol), so pair them before
+          // stopping further execution.
+          for (const skipped of actions.slice(i + 1)) {
+            this.addToolMessage(
+              session,
+              skipped.tool,
+              skipped.params,
+              {
+                success: false,
+                error: 'Skipped: guardrail blocked an earlier action in this round',
+                duration_ms: 0,
+              },
+              skipped.id,
+            );
+          }
 
           if (guardResult.needsApproval) {
             session.status = 'paused';
