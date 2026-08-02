@@ -145,6 +145,13 @@ function MessageRow({ message }: { message: SessionMessage }) {
               borderColor: designTokens.colors.border,
               padding: '3px 12px',
               borderRadius: designTokens.radius.pill,
+              // Multi-line system notes (e.g. [HITL] executed + output) must
+              // keep a comfortable line height — inline inherits it, but an
+              // explicit relaxed value prevents mono-font row overlap.
+              display: 'inline-block',
+              lineHeight: String(designTokens.typography.lineHeight.relaxed),
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
             }}
           >
             {message.content}
