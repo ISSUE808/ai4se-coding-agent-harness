@@ -254,9 +254,11 @@ describe('Agent Main Loop (integration)', () => {
         workspaceRoot,
       );
       const session = await harness.run('写会话目录外', { workspaceRoot: sessionRoot });
-      expect(session.status).toBe('completed');
-      // Blocked by the scope fence measured against the SESSION root.
-      expect(session.messages.some((m) => m.content.includes('Path outside workspace'))).toBe(true);
+      // Human-in-the-loop supervision: an out-of-workspace write pauses for
+      // a decision (it is not silently blocked anymore).
+      expect(session.status).toBe('paused');
+      expect(session.messages.some((m) => m.metadata?.approvalRequired === true)).toBe(true);
+      // Not executed until a human approves.
       expect(fs.existsSync(sneakPath)).toBe(false);
     } finally {
       fs.rmSync(sessionRoot, { recursive: true, force: true });

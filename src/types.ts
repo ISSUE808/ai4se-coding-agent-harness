@@ -8,6 +8,10 @@ export interface Message {
     toolResult?: ToolResult;
     /** OpenAI tool_call id — present on `tool` role result messages. */
     toolCallId?: string;
+    /** Guardrail rule + command on a blocked system message — lets the WebUI
+     *  rebuild the pending approval card from the REST snapshot. */
+    guardrailRule?: string;
+    guardrailCommand?: string;
     feedbackResult?: FeedbackResult;
     approvalRequired?: boolean;
     important?: boolean;

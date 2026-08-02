@@ -432,7 +432,7 @@ describe('full integration — start --web wiring (Task 19)', () => {
     // SPEC §3.4: approval authorizes EXECUTION — the harness ran the command
     // directly (never delegated to the LLM re-issuing it).
     const executed = done.messages.filter((m) =>
-      m.content.includes('Approved command executed: git push --force origin feature/x'),
+      m.content.includes('Approved operation executed: git push --force origin feature/x'),
     );
     expect(executed.length).toBe(1);
     // The execution result (failure: not a git repo) is visible to the LLM.
@@ -541,7 +541,7 @@ describe('full integration — start --web wiring (Task 19)', () => {
       expect(created.status).toBe(201);
       expect(created.body.workspaceRoot).toBe(sessionRoot);
 
-      const session = await waitForStatus(sessionStore, created.body.id, 'completed');
+      const session = await waitForStatus(sessionStore, created.body.id, 'paused');
 
       // Validators ran against the session root, not the config root.
       expect(recordedCwd.length).toBeGreaterThan(0);
@@ -555,9 +555,15 @@ describe('full integration — start --web wiring (Task 19)', () => {
       expect(write?.metadata?.toolResult?.success).toBe(true);
       expect(fs.existsSync(path.join(sessionRoot, 'b.ts'))).toBe(true);
 
-      // The sneaky absolute write was blocked by the session-scoped fence.
-      expect(session.messages.some((m) => m.content.includes('Path outside workspace'))).toBe(true);
+      // The sneaky absolute write now pauses for a human decision (not a
+      // silent block) — nothing was written yet.
+      expect(session.messages.some((m) => m.metadata?.approvalRequired === true)).toBe(true);
       expect(fs.existsSync(path.join(configRoot, 'sneak.txt'))).toBe(false);
+
+      // Human approves → the harness executes the authorized write.
+      await request(web.app).post(`/api/approvals/${created.body.id}`).send({ decision: 'approve' });
+      await waitForStatus(sessionStore, created.body.id, 'completed');
+      expect(fs.existsSync(path.join(configRoot, 'sneak.txt'))).toBe(true);
     } finally {
       fs.rmSync(sessionRoot, { recursive: true, force: true });
     }

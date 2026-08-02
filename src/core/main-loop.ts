@@ -35,6 +35,67 @@ function nowISO(): string {
   return new Date().toISOString();
 }
 
+/** First path-like parameter of a file-action (path | paths[0] | filePath). */
+function extractActionPath(action: Action): string | null {
+  if (typeof action.params.path === 'string') {
+    return action.params.path;
+  }
+  if (typeof action.params.filePath === 'string') {
+    return action.params.filePath;
+  }
+  if (Array.isArray(action.params.paths) && action.params.paths.length > 0) {
+    return String(action.params.paths[0]);
+  }
+  return null;
+}
+
+/** Credential-bearing paths — reads/writes always require a human decision. */
+function isSensitivePath(p: string): boolean {
+  const lower = p.toLowerCase();
+  return (
+    /(^|[\\/])\.env([\\/]|$)/.test(lower) ||
+    /(^|[\\/])\.ssh([\\/]|$)/.test(lower) ||
+    /(^|[\\/])secrets([\\/]|$)/.test(lower) ||
+    /\.codeharness([\\/]|$)/.test(lower) ||
+    /\.cred$/.test(lower) ||
+    /id_rsa|id_ed25519|\.pem$/.test(lower) ||
+    /\.npmrc|\.pypirc/.test(lower)
+  );
+}
+
+/**
+ * Detect a shell command that writes/deletes outside the workspace (e.g.
+ * `echo x > C:\path`, `rm C:\path`, `mv /etc/x /tmp`). Returns the offending
+ * target for the approval prompt, or null when the command looks contained.
+ * Heuristic, not a sandbox — advanced obfuscation can still slip through
+ * (documented limitation); the human-in-the-loop model is the real control.
+ */
+function shellWritesOutside(command: string, workspaceRoot: string): string | null {
+  const writePatterns = [
+    /(>>|>)\s*["']?([^"'\s|;&]+)/, // redirection target
+    /\b(rm|del|unlink)\s+(-[a-z]+\s+)?["']?([^"'\s|;&]+)/,
+    /\b(mv|move|ren|rename)\s+["']?([^"'\s|;&]+)\s+["']?([^"'\s|;&]+)/,
+    /\b(mkdir|touch)\s+["']?([^"'\s|;&]+)/,
+  ];
+  for (const pattern of writePatterns) {
+    const m = command.match(pattern);
+    if (!m) {
+      continue;
+    }
+    const candidate = m[m.length - 1];
+    if (!candidate || candidate.startsWith('-')) {
+      continue;
+    }
+    const abs = path.isAbsolute(candidate)
+      ? path.normalize(candidate)
+      : path.resolve(workspaceRoot, candidate);
+    if (!abs.startsWith(path.resolve(workspaceRoot) + path.sep) && abs !== path.resolve(workspaceRoot)) {
+      return abs;
+    }
+  }
+  return null;
+}
+
 interface GuardSet {
   patternGuard: PatternGuard;
   scopeFence: ScopeFence;
@@ -503,7 +564,7 @@ export class AgentLoop {
         });
         // Trigger HITL
         try {
-          this.guard.hitl.requestApproval(command);
+          this.guard.hitl.requestApproval(command, { tool: action.tool, params: action.params });
         } catch {
           // HITL already in another state — treat as blocked so the stale
           // pendingCommand is not silently overwritten
@@ -517,35 +578,84 @@ export class AgentLoop {
       }
     }
 
-    // ScopeFence — for file operations check path boundaries
-    const isFileOp = [
-      'read_file',
-      'write_file',
-      'edit_file',
-      'list_directory',
-      'search_content',
-    ].includes(action.tool);
-    if (isFileOp) {
-      const actionPath =
-        typeof action.params.path === 'string'
-          ? action.params.path
-          : Array.isArray(action.params.paths) && action.params.paths.length > 0
-            ? String(action.params.paths[0])
-            : null;
+    // Human-in-the-loop supervision model (user's decision, Claude Code style):
+    // reads are open (except sensitive credential paths), writes outside the
+    // workspace and destructive shell patterns require an explicit decision.
+    const actionPath = extractActionPath(action);
+    const resolvedPath = actionPath
+      ? path.resolve(session.workspaceRoot, actionPath)
+      : '';
 
-      const resolvedPath = actionPath
-        ? path.resolve(session.workspaceRoot, actionPath)
-        : '';
-      if (resolvedPath && !this.guard.scopeFence.validatePath(resolvedPath, session.workspaceRoot)) {
-        return {
-          blocked: true,
-          needsApproval: false,
-          reason: `Path outside workspace: ${actionPath}`,
-        };
+    // Sensitive credential paths — reading or writing them always asks.
+    if (actionPath && isSensitivePath(actionPath)) {
+      return this.requestApprovalFor(
+        action,
+        `Sensitive path: ${actionPath}`,
+        session,
+        command,
+      );
+    }
+
+    if (isShell && command.length > 0) {
+      // Destructive shell writes outside the workspace need a decision.
+      const outside = shellWritesOutside(command, session.workspaceRoot);
+      if (outside) {
+        return this.requestApprovalFor(
+          action,
+          `Shell write outside workspace: ${outside}`,
+          session,
+          command,
+        );
+      }
+    }
+
+    const isWriteOp = action.tool === 'write_file' || action.tool === 'edit_file';
+    const isReadOp = ['read_file', 'list_directory', 'search_content'].includes(action.tool);
+
+    if (isWriteOp && resolvedPath && !this.guard.scopeFence.validatePath(resolvedPath, session.workspaceRoot)) {
+      // Writing outside the workspace is authorized by the user per-operation.
+      return this.requestApprovalFor(
+        action,
+        `Write outside workspace: ${actionPath}`,
+        session,
+        command,
+      );
+    }
+
+    // Reads are open (Claude Code model) — keep ScopeFence only as a
+    // last-resort guard for accidental workspace-relative mistakes.
+    if (isReadOp && resolvedPath && actionPath) {
+      const rel = path.relative(session.workspaceRoot, resolvedPath);
+      if (rel.startsWith('..') && !isSensitivePath(actionPath)) {
+        // Intentional outside read — allowed without approval (user's machine).
+        return { blocked: false, needsApproval: false };
       }
     }
 
     return { blocked: false, needsApproval: false };
+  }
+
+  /** Request approval for an operation, emitting the guardrail event. */
+  private requestApprovalFor(
+    action: Action,
+    reason: string,
+    session: Session,
+    command: string,
+  ): { blocked: boolean; needsApproval: boolean; reason: string } {
+    this.events.emit('guardrail:triggered', {
+      rule: reason,
+      command: command || action.tool,
+      level: 'warn',
+    });
+    try {
+      this.guard.hitl.requestApproval(
+        command || `${action.tool}: ${reason}`,
+        { tool: action.tool, params: action.params },
+      );
+    } catch {
+      return { blocked: true, needsApproval: false, reason: `HITL busy: ${reason}` };
+    }
+    return { blocked: true, needsApproval: true, reason: `HITL required: ${reason}` };
   }
 
   /**

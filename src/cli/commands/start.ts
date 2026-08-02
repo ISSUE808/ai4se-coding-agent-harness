@@ -1,6 +1,8 @@
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { Command } from 'commander';
-import type { Config, LLMProvider, Session, Validator } from '../../types.js';
+import type { Config, LLMProvider, Session, ToolResult, Validator } from '../../types.js';
 import { AgentLoop } from '../../core/main-loop.js';
 import { MockProvider } from '../../llm/mock-provider.js';
 import { DeepSeekProvider } from '../../llm/deepseek-provider.js';
@@ -328,14 +330,14 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
       session.maxRounds = session.currentRound + session.maxRounds;
       session.updatedAt = new Date().toISOString();
     }
-    // HITL approval authorizes the command — the harness executes it directly
+    // HITL approval authorizes the operation — the harness executes it directly
     // (SPEC §3.4: approval = authorization to run, never a hint for the LLM
     // to re-issue it; real LLMs do not re-issue after "[HITL] approved").
-    const approved = hitl.getApprovedCommand();
+    const approved = hitl.getApprovedAction();
     if (approved !== null) {
       session.status = 'running';
       events.emit('session:status', { sessionId: session.id, status: 'running' });
-      void executeApprovedCommand(session, approved).then(() => {
+      void executeApprovedAction(session, approved).then(() => {
         void runSession(session);
       });
       return;
@@ -344,18 +346,82 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
   };
 
   /**
-   * Execute a human-approved (or human-modified) command directly via the
-   * shell tool — skipping the guardrail once, since the human already
-   * authorized it. The result lands as a system message so the resumed loop's
-   * LLM sees the outcome without an orphan tool message (OpenAI protocol).
+   * Execute a human-approved (or human-modified) operation directly —
+   * skipping the guardrail once, since the human already authorized it.
+   * Supports shell commands, file writes/edits and reads. The result lands as
+   * a system message so the resumed loop's LLM sees the outcome without an
+   * orphan tool message (OpenAI protocol).
    */
-  const executeApprovedCommand = async (session: Session, command: string): Promise<void> => {
-    const result = await runShellTool.execute(
-      { command },
-      { workspaceRoot: session.workspaceRoot },
-    );
+  const executeApprovedAction = async (
+    session: Session,
+    approved: { tool: string; params: Record<string, unknown> },
+  ): Promise<void> => {
+    const ctx = { workspaceRoot: session.workspaceRoot };
+    let result: ToolResult;
+    if (approved.tool === 'run_shell') {
+      result = await runShellTool.execute(approved.params, ctx);
+    } else if (approved.tool === 'write_file') {
+      // Human authorization overrides the tool's own scope check — execute
+      // directly against the filesystem.
+      const target = String(approved.params.path ?? '');
+      const start = Date.now();
+      try {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, String(approved.params.content ?? ''), 'utf8');
+        result = { success: true, output: `wrote ${target}`, duration_ms: Date.now() - start, filesChanged: [target] };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result = { success: false, error: msg, duration_ms: Date.now() - start };
+      }
+    } else if (approved.tool === 'edit_file') {
+      const target = String(approved.params.path ?? '');
+      const oldString = String(approved.params.oldString ?? '');
+      const newString = String(approved.params.newString ?? '');
+      const start = Date.now();
+      try {
+        const content = fs.readFileSync(target, 'utf8');
+        if (!content.includes(oldString)) {
+          result = { success: false, error: 'oldString not found', duration_ms: Date.now() - start };
+        } else {
+          fs.writeFileSync(target, content.replace(oldString, newString), 'utf8');
+          result = { success: true, output: `edited ${target}`, duration_ms: Date.now() - start, filesChanged: [target] };
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result = { success: false, error: msg, duration_ms: Date.now() - start };
+      }
+    } else if (approved.tool === 'read_file') {
+      const paths = Array.isArray(approved.params.paths)
+        ? (approved.params.paths as unknown[]).map(String)
+        : [String(approved.params.path ?? '')];
+      const start = Date.now();
+      try {
+        const files = paths.map((p) => {
+          try {
+            const content = fs.readFileSync(p, 'utf8');
+            return { path: p, content, lineCount: content.split('\n').length };
+          } catch (err) {
+            return { path: p, error: err instanceof Error ? err.message : String(err) };
+          }
+        });
+        result = { success: true, output: JSON.stringify(files), duration_ms: Date.now() - start };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        result = { success: false, error: msg, duration_ms: Date.now() - start };
+      }
+    } else {
+      result = {
+        success: false,
+        error: `Unknown approved tool: ${approved.tool}`,
+        duration_ms: 0,
+      };
+    }
     const outcome = result.success ? (result.output ?? '') : (result.error ?? '');
-    const record = `[HITL] Approved command executed: ${command}\n${outcome}`.trim();
+    const label =
+      approved.tool === 'run_shell'
+        ? String(approved.params.command ?? '')
+        : `${approved.tool}: ${JSON.stringify(approved.params)}`;
+    const record = `[HITL] Approved operation executed: ${label}\n${outcome}`.trim();
     const message = sessionStore.appendMessage(session.id, {
       role: 'system',
       content: record,

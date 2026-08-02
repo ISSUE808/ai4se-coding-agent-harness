@@ -6,9 +6,17 @@ export enum HITLState {
   BLOCKED = 'BLOCKED',
 }
 
+export interface PendingAction {
+  tool: string;
+  params: Record<string, unknown>;
+}
+
 export class HITLManager {
   private state: HITLState = HITLState.IDLE;
   private pendingCommand: string | null = null;
+  /** Full action behind the pending/approved decision — lets the harness
+   *  execute the authorized operation (shell command, file write, …). */
+  private pendingAction: PendingAction | null = null;
 
   getState(): HITLState {
     return this.state;
@@ -16,6 +24,11 @@ export class HITLManager {
 
   getPendingCommand(): string | null {
     return this.pendingCommand;
+  }
+
+  /** Full operation behind the pending/approved decision, if any. */
+  getPendingAction(): PendingAction | null {
+    return this.pendingAction;
   }
 
   /**
@@ -31,12 +44,21 @@ export class HITLManager {
     return null;
   }
 
-  requestApproval(command: string): void {
+  /** Full action behind an approved decision (null for deny/IDLE). */
+  getApprovedAction(): PendingAction | null {
+    if (this.state === HITLState.EXECUTING || this.state === HITLState.EXECUTING_MODIFIED) {
+      return this.pendingAction;
+    }
+    return null;
+  }
+
+  requestApproval(command: string, action?: PendingAction): void {
     if (this.state !== HITLState.IDLE) {
       throw new Error(`Cannot request approval in state ${this.state}`);
     }
     this.state = HITLState.AWAITING_APPROVAL;
     this.pendingCommand = command;
+    this.pendingAction = action ?? null;
   }
 
   approve(): void {
@@ -64,5 +86,6 @@ export class HITLManager {
   reset(): void {
     this.state = HITLState.IDLE;
     this.pendingCommand = null;
+    this.pendingAction = null;
   }
 }
