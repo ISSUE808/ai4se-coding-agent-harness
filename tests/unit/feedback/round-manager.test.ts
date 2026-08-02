@@ -62,4 +62,16 @@ describe('RoundManager', () => {
     rm.nextRound();
     expect(rm.shouldUpgrade()).toBe(true);  // round 3 > 2
   });
+
+  it('maxRounds = 0 means unlimited — shouldUpgrade() is always false', () => {
+    const rm = new RoundManager(0);
+    expect(rm.shouldUpgrade()).toBe(false);
+    for (let i = 0; i < 500; i++) rm.nextRound();
+    expect(rm.currentRound).toBe(501);
+    expect(rm.shouldUpgrade()).toBe(false);
+  });
+
+  it('rejects a negative maxRounds', () => {
+    expect(() => new RoundManager(-1)).toThrow(/>= 0/);
+  });
 });

@@ -66,7 +66,8 @@ describe('MessageList', () => {
 
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByText('{"path":"src/auth/token.ts","edits":"…2 处…"}')).toBeInTheDocument();
+    // The arg summary on the header row and the 参数 section both render the JSON.
+    expect(screen.getAllByText('{"path":"src/auth/token.ts","edits":"…2 处…"}').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('applied 2 edits · +84 −32')).toBeInTheDocument();
   });
 
@@ -157,7 +158,7 @@ describe('MessageList', () => {
     );
 
     expect(screen.getByText('需要人工审批 · HITL')).toBeInTheDocument();
-    expect(screen.getByText('npm run migrate:prod')).toBeInTheDocument();
+    expect(screen.getByLabelText('修改后的命令')).toHaveValue('npm run migrate:prod');
     expect(screen.getByRole('button', { name: '批准' })).toBeInTheDocument();
   });
 });

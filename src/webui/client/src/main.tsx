@@ -7,6 +7,7 @@ import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
 import designTokens from './design-tokens';
 import App from './App.tsx';
+import './global.css';
 
 // Monaco loaded from the local npm package (no CDN): wire the ESM workers and
 // hand the instance to @monaco-editor/react's loader.
@@ -27,6 +28,13 @@ body.style.background = designTokens.colors.bg;
 body.style.color = designTokens.colors.text;
 body.style.fontFamily = designTokens.typography.fontFamily.sans;
 body.style.fontSize = designTokens.typography.fontSize.base;
+
+// CSS variables consumed by global.css (scrollbar / focus / keyframes) — the
+// token file remains the only place raw values are written.
+const root = document.documentElement;
+root.style.setProperty('--ch-bg', designTokens.colors.bg);
+root.style.setProperty('--ch-border-strong', designTokens.colors.borderStrong);
+root.style.setProperty('--ch-focus-ring', designTokens.colors.focusRing);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

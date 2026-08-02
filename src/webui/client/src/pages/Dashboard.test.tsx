@@ -60,22 +60,25 @@ describe('Dashboard', () => {
 
     expect(await screen.findByText('s_8f3a21')).toBeInTheDocument();
     expect(screen.getByText('重构认证模块，把 JWT 换成旋转刷新令牌')).toBeInTheDocument();
-    expect(screen.getByText('运行中')).toBeInTheDocument();
-    expect(screen.getByText('12/40')).toBeInTheDocument();
-    expect(screen.getByText('06:41')).toBeInTheDocument();
-    expect(screen.getByText('128.4K')).toBeInTheDocument();
+    // Badge rows are scoped to the table — the filter tabs carry the same words.
+    const table = within(screen.getByRole('table'));
+    expect(table.getByText('运行中')).toBeInTheDocument();
+    expect(table.getByText('12/40')).toBeInTheDocument();
+    expect(table.getByText('06:41')).toBeInTheDocument();
+    expect(table.getByText('128.4K')).toBeInTheDocument();
 
-    expect(screen.getByText('已完成')).toBeInTheDocument();
-    expect(screen.getByText('31/31')).toBeInTheDocument();
+    expect(table.getByText('已完成')).toBeInTheDocument();
+    expect(table.getByText('31/31')).toBeInTheDocument();
   });
 
   it('colors status badges from the design tokens', async () => {
     fetchSessionsMock.mockResolvedValue([RUNNING, COMPLETED]);
     renderDashboard();
 
-    const running = await screen.findByText('运行中');
+    const table = within(await screen.findByRole('table'));
+    const running = await table.findByText('运行中');
     expect(running).toHaveStyle({ color: designTokens.colors.statusRunning });
-    expect(screen.getByText('已完成')).toHaveStyle({ color: designTokens.colors.statusCompleted });
+    expect(table.getByText('已完成')).toHaveStyle({ color: designTokens.colors.statusCompleted });
   });
 
   it('shows an empty-state guide when there are no sessions', async () => {
@@ -83,7 +86,8 @@ describe('Dashboard', () => {
     renderDashboard();
 
     expect(await screen.findByText(/还没有会话/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '新建会话' })).toBeInTheDocument();
+    // The empty-state card and the page head both offer a 新建会话 button.
+    expect(screen.getAllByRole('button', { name: '新建会话' }).length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows an error state with a backend hint when the API is unreachable, and retries', async () => {
@@ -98,19 +102,20 @@ describe('Dashboard', () => {
     expect(await screen.findByText('s_8f3a21')).toBeInTheDocument();
   });
 
-  it('creates a session from the modal and navigates to its detail placeholder', async () => {
+  it('creates a session from the modal with a custom cap and navigates to its detail placeholder', async () => {
     fetchSessionsMock.mockResolvedValue([]);
     createSessionMock.mockResolvedValue({ ...RUNNING, id: 's_new_1', maxRounds: 40 });
     renderDashboard();
     await screen.findByText(/还没有会话/);
 
-    await userEvent.click(screen.getByRole('button', { name: '新建会话' }));
+    await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
     const dialog = await screen.findByRole('dialog');
     await userEvent.type(within(dialog).getByLabelText('任务描述'), '实现支付回调幂等');
+    await userEvent.click(within(dialog).getByLabelText('限制最大轮次（不勾选则无上限）'));
     const rounds = within(dialog).getByLabelText('最大轮次');
     await userEvent.clear(rounds);
     await userEvent.type(rounds, '40');
-    await userEvent.click(within(dialog).getByRole('button', { name: '创建' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: '创建并启动' }));
 
     await waitFor(() => {
       expect(createSessionMock).toHaveBeenCalledWith('实现支付回调幂等', 40);
@@ -118,12 +123,28 @@ describe('Dashboard', () => {
     expect(await screen.findByText('会话详情占位')).toBeInTheDocument();
   });
 
+  it('defaults to unlimited rounds (0) when 限制轮次 is not checked', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    createSessionMock.mockResolvedValue({ ...RUNNING, id: 's_new_2' });
+    renderDashboard();
+    await screen.findByText(/还没有会话/);
+
+    await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText('任务描述'), '无上限任务');
+    await userEvent.click(within(dialog).getByRole('button', { name: '创建并启动' }));
+
+    await waitFor(() => {
+      expect(createSessionMock).toHaveBeenCalledWith('无上限任务', 0);
+    });
+  });
+
   it('does not submit an empty task from the modal', async () => {
     fetchSessionsMock.mockResolvedValue([]);
     renderDashboard();
     await screen.findByText(/还没有会话/);
 
-    await userEvent.click(screen.getByRole('button', { name: '新建会话' }));
+    await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
     await screen.findByRole('dialog');
     expect(createSessionMock).not.toHaveBeenCalled();
   });

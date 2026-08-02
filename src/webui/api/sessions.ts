@@ -34,7 +34,18 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
       res.status(400).json({ error: 'task is required' });
       return;
     }
-    const session = sessionStore.create(task);
+    // Optional round cap: 0 = unlimited, undefined = store default. Anything
+    // else must be a non-negative integer (SPEC §3.1 hard termination rule).
+    const { maxRounds } = req.body ?? {};
+    let rounds: number | undefined;
+    if (maxRounds !== undefined) {
+      if (typeof maxRounds !== 'number' || !Number.isInteger(maxRounds) || maxRounds < 0) {
+        res.status(400).json({ error: 'maxRounds must be a non-negative integer (0 = unlimited)' });
+        return;
+      }
+      rounds = maxRounds;
+    }
+    const session = sessionStore.create(task, rounds);
     const message = sessionStore.appendMessage(session.id, { role: 'user', content: task });
     if (message) {
       events.emit('message:added', {

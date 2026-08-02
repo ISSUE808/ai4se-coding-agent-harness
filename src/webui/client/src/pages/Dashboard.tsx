@@ -1,12 +1,21 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Loader2, Plus, RefreshCw, SquareTerminal, X } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Loader2, Pause, Play, Plus, RefreshCw, SquareTerminal, X } from 'lucide-react';
 import designTokens from '../design-tokens';
-import { createSession, fetchSessions, type SessionSummary } from '../lib/api';
+import { createSession, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
 import { formatDuration, formatTokens } from '../lib/format';
 import StatusBadge from '../components/StatusBadge';
 
 type Phase = 'loading' | 'ready' | 'error';
+
+type Filter = 'all' | 'running' | 'paused' | 'done';
+
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'running', label: '运行中' },
+  { key: 'paused', label: '已暂停' },
+  { key: 'done', label: '已完成' },
+];
 
 /** Wall-clock span between createdAt and updatedAt, as MM:SS / HH:MM:SS. */
 function sessionDuration(s: SessionSummary): string {
@@ -23,11 +32,26 @@ function roundPercent(s: SessionSummary): string {
   return `${pct}%`;
 }
 
+function matchesFilter(s: SessionSummary, filter: Filter): boolean {
+  switch (filter) {
+    case 'running':
+      return s.status === 'running';
+    case 'paused':
+      return s.status === 'paused';
+    case 'done':
+      return s.status === 'completed' || s.status === 'failed';
+    default:
+      return true;
+  }
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [phase, setPhase] = useState<Phase>('loading');
   const [modalOpen, setModalOpen] = useState(false);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setPhase('loading');
@@ -43,6 +67,36 @@ export default function Dashboard() {
     void load();
   }, [load]);
 
+  const visible = useMemo(() => sessions.filter((s) => matchesFilter(s, filter)), [sessions, filter]);
+
+  /** Pause/resume from a table row action, then refresh the list. */
+  async function togglePause(s: SessionSummary): Promise<void> {
+    if (rowBusy !== null) {
+      return;
+    }
+    setRowBusy(s.id);
+    try {
+      await sessionControl(s.id, s.status === 'running' ? 'pause' : 'resume');
+      await load();
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
+  const activeCount = sessions.filter((s) => s.status === 'running' || s.status === 'paused').length;
+  const runningCount = sessions.filter((s) => s.status === 'running').length;
+  const pausedCount = sessions.filter((s) => s.status === 'paused').length;
+  const tokenTotal = sessions.reduce((sum, s) => sum + s.tokenCount, 0);
+  const finished = sessions.filter((s) => s.status === 'completed' || s.status === 'failed');
+  const avgDuration =
+    finished.length > 0
+      ? formatDuration(
+          finished.reduce((sum, s) => sum + Math.max(0, new Date(s.updatedAt).getTime() - new Date(s.createdAt).getTime()), 0) /
+            finished.length /
+            1000,
+        )
+      : '—';
+
   return (
     <main
       style={{
@@ -52,15 +106,15 @@ export default function Dashboard() {
         color: designTokens.colors.text,
       }}
     >
-      <div style={{ maxWidth: 1120, marginInline: 'auto', padding: designTokens.spacing[6] }}>
+      <div style={{ maxWidth: 1240, marginInline: 'auto', padding: `${designTokens.spacing[6]} ${designTokens.spacing[8]} ${designTokens.spacing[10]}` }}>
         {/* page head */}
         <header
           style={{
             display: 'flex',
-            alignItems: 'flex-start',
+            alignItems: 'flex-end',
             justifyContent: 'space-between',
             gap: designTokens.spacing[4],
-            marginBottom: designTokens.spacing[5],
+            marginBottom: designTokens.spacing[6],
           }}
         >
           <div>
@@ -69,7 +123,7 @@ export default function Dashboard() {
                 margin: 0,
                 fontSize: designTokens.typography.fontSize.xl,
                 fontWeight: designTokens.typography.fontWeight.semibold,
-                letterSpacing: '-0.01em',
+                letterSpacing: '-0.02em',
               }}
             >
               会话
@@ -121,193 +175,275 @@ export default function Dashboard() {
           </div>
         )}
 
-        {phase === 'ready' && sessions.length === 0 && (
-          <div style={centerStateStyle}>
-            <SquareTerminal size={22} style={{ color: designTokens.colors.textMuted }} />
-            <p style={stateTitleStyle}>还没有会话</p>
-            <p style={stateSubStyle}>
-              创建第一个会话，让 CodeHarness 的 agent 开始为你处理任务。
-            </p>
-          </div>
-        )}
+        {phase === 'ready' && (
+          <>
+            {/* stat cards (prototype .stat-row) */}
+            <div style={statRowStyle}>
+              <StatCard
+                label="活跃会话"
+                value={String(activeCount)}
+                sub={`${runningCount} 运行中 · ${pausedCount} 已暂停`}
+                accent
+              />
+              <StatCard label="总会话" value={String(sessions.length)} sub={`共 ${sessions.length} 个会话`} />
+              <StatCard label="Token 消耗" value={formatTokens(tokenTotal)} sub="输入 + 输出" />
+              <StatCard label="平均时长" value={avgDuration} sub="完成任务" ok />
+            </div>
 
-        {phase === 'ready' && sessions.length > 0 && (
-          <section
-            style={{
-              borderWidth: 1,
-              borderStyle: 'solid',
-              borderColor: designTokens.colors.border,
-              borderRadius: designTokens.radius.lg,
-              background: designTokens.colors.surface,
-              overflow: 'hidden',
-            }}
-          >
-            <div
+            {/* session panel */}
+            <section
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: `${designTokens.spacing[3]} ${designTokens.spacing[4]}`,
-                borderBottomWidth: 1,
-                borderBottomStyle: 'solid',
-                borderBottomColor: designTokens.colors.border,
+                borderWidth: 1,
+                borderStyle: 'solid',
+                borderColor: designTokens.colors.border,
+                borderRadius: designTokens.radius.lg,
+                background: designTokens.colors.surface,
+                overflow: 'hidden',
               }}
             >
-              <span
+              <div
                 style={{
-                  fontWeight: designTokens.typography.fontWeight.semibold,
-                  fontSize: designTokens.typography.fontSize.md,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: designTokens.spacing[4],
+                  padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+                  borderBottomWidth: 1,
+                  borderBottomStyle: 'solid',
+                  borderBottomColor: designTokens.colors.border,
                 }}
               >
-                活跃会话{' '}
                 <span
                   style={{
-                    fontFamily: designTokens.typography.fontFamily.mono,
-                    color: designTokens.colors.textMuted,
-                    fontSize: designTokens.typography.fontSize.sm,
+                    fontSize: designTokens.typography.fontSize.base,
+                    fontWeight: designTokens.typography.fontWeight.semibold,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: designTokens.spacing[2],
                   }}
                 >
-                  {sessions.length}
-                </span>
-              </span>
-              <button
-                type="button"
-                onClick={() => void load()}
-                title="刷新"
-                aria-label="刷新会话列表"
-                style={ghostIconButtonStyle}
-              >
-                <RefreshCw size={14} />
-              </button>
-            </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  {['会话', '任务', '状态', '轮次', '时长', 'Token'].map((h) => (
-                    <th
-                      key={h}
-                      style={{
-                        textAlign: 'left',
-                        padding: `${designTokens.spacing[2]} ${designTokens.spacing[4]}`,
-                        color: designTokens.colors.textMuted,
-                        fontSize: designTokens.typography.fontSize.sm,
-                        fontWeight: designTokens.typography.fontWeight.medium,
-                        borderBottomWidth: 1,
-                        borderBottomStyle: 'solid',
-                        borderBottomColor: designTokens.colors.border,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sessions.map((s) => (
-                  <tr
-                    key={s.id}
-                    onClick={() => navigate(`/sessions/${s.id}`)}
+                  活跃会话
+                  <span
                     style={{
-                      cursor: 'pointer',
-                      borderBottomWidth: 1,
-                      borderBottomStyle: 'solid',
-                      borderBottomColor: designTokens.colors.border,
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = designTokens.colors.surfaceHover;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent';
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '2px 8px',
+                      borderRadius: designTokens.radius.pill,
+                      borderWidth: 1,
+                      borderStyle: 'solid',
+                      borderColor: designTokens.colors.border,
+                      color: designTokens.colors.textMuted,
+                      fontSize: designTokens.typography.fontSize.xs,
+                      fontFamily: designTokens.typography.fontFamily.mono,
                     }}
                   >
-                    <td style={cellStyle}>
-                      <span
-                        style={{
-                          fontFamily: designTokens.typography.fontFamily.mono,
-                          fontSize: designTokens.typography.codeSize.md,
-                          color: designTokens.colors.textSubtle,
-                        }}
+                    {sessions.length}
+                  </span>
+                </span>
+                <div style={{ display: 'flex', gap: designTokens.spacing[2], alignItems: 'center' }}>
+                  {/* segmented filter (prototype .seg) */}
+                  <div style={segStyle}>
+                    {FILTERS.map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => setFilter(f.key)}
+                        style={segButtonStyle(f.key === filter)}
                       >
-                        {s.id}
-                      </span>
-                    </td>
-                    <td style={cellStyle}>
-                      <span
-                        style={{
-                          display: 'block',
-                          maxWidth: 320,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {s.task}
-                      </span>
-                    </td>
-                    <td style={cellStyle}>
-                      <StatusBadge status={s.status} />
-                    </td>
-                    <td style={cellStyle}>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: designTokens.spacing[2],
-                          fontFamily: designTokens.typography.fontFamily.mono,
-                          fontSize: designTokens.typography.codeSize.md,
-                          color: designTokens.colors.textSubtle,
-                        }}
-                      >
-                        <span
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void load()}
+                    title="刷新"
+                    aria-label="刷新会话列表"
+                    style={ghostIconButtonStyle}
+                  >
+                    <RefreshCw size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {visible.length > 0 ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      {['会话 ID', '任务描述', '状态', '轮次', '时长', 'Token', ''].map((h, i) => (
+                        <th
+                          key={h === '' ? `op-${i}` : h}
                           style={{
-                            display: 'inline-block',
-                            width: 64,
-                            height: 4,
-                            borderRadius: designTokens.radius.pill,
-                            background: designTokens.colors.well,
-                            overflow: 'hidden',
+                            textAlign: h === '时长' || h === 'Token' || h === '轮次' ? 'right' : 'left',
+                            fontFamily: designTokens.typography.fontFamily.mono,
+                            fontSize: designTokens.typography.fontSize.xs,
+                            letterSpacing: '0.06em',
+                            textTransform: 'uppercase',
+                            color: designTokens.colors.textMuted,
+                            fontWeight: designTokens.typography.fontWeight.medium,
+                            padding: '10px 20px',
+                            borderBottomWidth: 1,
+                            borderBottomStyle: 'solid',
+                            borderBottomColor: designTokens.colors.border,
+                            whiteSpace: 'nowrap',
                           }}
                         >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.map((s) => (
+                      <tr
+                        key={s.id}
+                        onClick={() => navigate(`/sessions/${s.id}`)}
+                        style={{
+                          cursor: 'pointer',
+                          transition: 'background 0.12s',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = designTokens.colors.surfaceHover;
+                          const actions = e.currentTarget.querySelector<HTMLElement>('[data-row-actions]');
+                          if (actions) {
+                            actions.style.opacity = '1';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'transparent';
+                          const actions = e.currentTarget.querySelector<HTMLElement>('[data-row-actions]');
+                          if (actions) {
+                            actions.style.opacity = '0';
+                          }
+                        }}
+                      >
+                        <td style={cellStyle}>
+                          <span
+                            style={{
+                              fontFamily: designTokens.typography.fontFamily.mono,
+                              fontSize: designTokens.typography.codeSize.md,
+                              color: designTokens.colors.primary,
+                            }}
+                          >
+                            {s.id}
+                          </span>
+                        </td>
+                        <td style={cellStyle}>
                           <span
                             style={{
                               display: 'block',
-                              width: roundPercent(s),
-                              height: '100%',
-                              background: statusBarColor(s.status),
+                              maxWidth: 340,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
                             }}
-                          />
-                        </span>
-                        {s.currentRound}/{s.maxRounds}
-                      </span>
-                    </td>
-                    <td style={cellStyle}>
-                      <span
-                        style={{
-                          fontFamily: designTokens.typography.fontFamily.mono,
-                          fontSize: designTokens.typography.codeSize.md,
-                          color: designTokens.colors.textSubtle,
-                        }}
-                      >
-                        {sessionDuration(s)}
-                      </span>
-                    </td>
-                    <td style={cellStyle}>
-                      <span
-                        style={{
-                          fontFamily: designTokens.typography.fontFamily.mono,
-                          fontSize: designTokens.typography.codeSize.md,
-                          color: designTokens.colors.textSubtle,
-                        }}
-                      >
-                        {formatTokens(s.tokenCount)}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
+                          >
+                            {s.task}
+                          </span>
+                        </td>
+                        <td style={cellStyle}>
+                          <StatusBadge status={s.status} />
+                        </td>
+                        <td style={{ ...cellStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          {s.maxRounds > 0 ? (
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: designTokens.spacing[2],
+                                fontFamily: designTokens.typography.fontFamily.mono,
+                                fontSize: designTokens.typography.codeSize.md,
+                                color: designTokens.colors.textSubtle,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  display: 'inline-block',
+                                  width: 72,
+                                  height: 5,
+                                  borderRadius: designTokens.radius.pill,
+                                  background: designTokens.colors.well,
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    display: 'block',
+                                    width: roundPercent(s),
+                                    height: '100%',
+                                    borderRadius: designTokens.radius.pill,
+                                    background: statusBarColor(s.status),
+                                  }}
+                                />
+                              </span>
+                              {s.currentRound}/{s.maxRounds}
+                            </span>
+                          ) : (
+                            <span
+                              style={{
+                                fontFamily: designTokens.typography.fontFamily.mono,
+                                fontSize: designTokens.typography.codeSize.md,
+                                color: designTokens.colors.textSubtle,
+                              }}
+                            >
+                              {s.currentRound}/∞
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ ...cellStyle, textAlign: 'right' }}>
+                          <span style={numStyle}>{sessionDuration(s)}</span>
+                        </td>
+                        <td style={{ ...cellStyle, textAlign: 'right' }}>
+                          <span style={numStyle}>{formatTokens(s.tokenCount)}</span>
+                        </td>
+                        <td style={{ ...cellStyle, textAlign: 'right' }}>
+                          <span data-row-actions style={rowActionsStyle}>
+                            {(s.status === 'running' || s.status === 'paused') && (
+                              <button
+                                type="button"
+                                title={s.status === 'running' ? '暂停' : '恢复'}
+                                aria-label={s.status === 'running' ? `暂停 ${s.id}` : `恢复 ${s.id}`}
+                                disabled={rowBusy !== null}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void togglePause(s);
+                                }}
+                                style={iconBtnStyle}
+                              >
+                                {s.status === 'running' ? <Pause size={13} /> : <Play size={13} />}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              title="打开"
+                              aria-label={`打开 ${s.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate(`/sessions/${s.id}`);
+                              }}
+                              style={iconBtnStyle}
+                            >
+                              <ChevronRight size={13} />
+                            </button>
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <EmptyState
+                  title={sessions.length === 0 ? '还没有会话' : '当前筛选下没有会话'}
+                  sub={
+                    sessions.length === 0
+                      ? '启动一个新会话，让 agent 开始工作。'
+                      : '调整筛选条件，或启动一个新会话。'
+                  }
+                  onNewSession={() => setModalOpen(true)}
+                />
+              )}
+            </section>
+          </>
         )}
       </div>
 
@@ -318,6 +454,111 @@ export default function Dashboard() {
         />
       )}
     </main>
+  );
+}
+
+// ─── Stat card (prototype .stat-card) ────────────────────────────────────────
+
+function StatCard({
+  label,
+  value,
+  sub,
+  accent,
+  ok,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  accent?: boolean;
+  ok?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        background: designTokens.colors.surface,
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: designTokens.colors.border,
+        borderRadius: designTokens.radius.lg,
+        padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: designTokens.typography.fontFamily.mono,
+          fontSize: designTokens.typography.fontSize.xs,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: designTokens.colors.textMuted,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontFamily: designTokens.typography.fontFamily.mono,
+          fontSize: 26,
+          fontWeight: designTokens.typography.fontWeight.semibold,
+          letterSpacing: '-0.02em',
+          marginTop: 6,
+          fontVariantNumeric: 'tabular-nums',
+          color: accent
+            ? designTokens.colors.primary
+            : ok
+              ? designTokens.colors.success
+              : designTokens.colors.text,
+        }}
+      >
+        {value}
+      </div>
+      <div style={{ fontSize: 11.5, color: designTokens.colors.textMuted, marginTop: 2 }}>{sub}</div>
+    </div>
+  );
+}
+
+// ─── Empty state (prototype .empty) ──────────────────────────────────────────
+
+function EmptyState({ title, sub, onNewSession }: { title: string; sub: string; onNewSession: () => void }) {
+  return (
+    <div
+      style={{
+        padding: `${designTokens.spacing[10]} ${designTokens.spacing[8]}`,
+        textAlign: 'center',
+      }}
+    >
+      <div
+        style={{
+          width: 56,
+          height: 56,
+          margin: '0 auto 16px',
+          borderRadius: designTokens.radius.lg,
+          background: designTokens.colors.well,
+          borderWidth: 1,
+          borderStyle: 'dashed',
+          borderColor: designTokens.colors.borderStrong,
+          display: 'grid',
+          placeItems: 'center',
+          color: designTokens.colors.textMuted,
+          fontFamily: designTokens.typography.fontFamily.mono,
+          fontSize: 22,
+        }}
+      >
+        &gt;_
+      </div>
+      <h3 style={{ margin: 0, marginBottom: 6, fontSize: designTokens.typography.fontSize.md, fontWeight: designTokens.typography.fontWeight.semibold }}>
+        {title}
+      </h3>
+      <p style={{ color: designTokens.colors.textMuted, margin: 0, marginBottom: designTokens.spacing[5], fontSize: designTokens.typography.fontSize.base }}>
+        {sub}
+      </p>
+      <button type="button" onClick={onNewSession} style={primaryButtonStyle}>
+        <Plus size={14} />
+        新建会话
+      </button>
+    </div>
   );
 }
 
@@ -345,12 +586,14 @@ function NewSessionModal({
   onCreated: (session: SessionSummary) => void;
 }) {
   const [task, setTask] = useState('');
-  // Keep rounds as text so typing "40" over the default is not clamped mid-edit.
-  const [roundsText, setRoundsText] = useState('3');
+  // Unlimited by default (maxRounds = 0); checking 限制轮次 reveals the input.
+  const [limitChecked, setLimitChecked] = useState(false);
+  const [roundsText, setRoundsText] = useState('40');
+
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const maxRounds = Math.max(1, Number(roundsText) || 1);
+  const maxRounds = limitChecked ? Math.max(1, Number(roundsText) || 1) : 0;
 
   async function submit(): Promise<void> {
     if (task.trim() === '') {
@@ -376,6 +619,7 @@ function NewSessionModal({
         position: 'fixed',
         inset: 0,
         background: designTokens.colors.overlay,
+        backdropFilter: 'blur(3px)',
         display: 'grid',
         placeItems: 'center',
         zIndex: 50,
@@ -392,8 +636,8 @@ function NewSessionModal({
           borderStyle: 'solid',
           borderColor: designTokens.colors.borderStrong,
           borderRadius: designTokens.radius.lg,
-          boxShadow: designTokens.shadows.lg,
-          padding: designTokens.spacing[5],
+          boxShadow: designTokens.shadows.md,
+          overflow: 'hidden',
         }}
       >
         <div
@@ -401,18 +645,21 @@ function NewSessionModal({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            marginBottom: designTokens.spacing[4],
+            padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+            borderBottomWidth: 1,
+            borderBottomStyle: 'solid',
+            borderBottomColor: designTokens.colors.border,
           }}
         >
-          <h2
+          <h3
             style={{
               margin: 0,
-              fontSize: designTokens.typography.fontSize.lg,
+              fontSize: designTokens.typography.fontSize.md,
               fontWeight: designTokens.typography.fontWeight.semibold,
             }}
           >
             新建会话
-          </h2>
+          </h3>
           <button
             type="button"
             onClick={onClose}
@@ -423,70 +670,99 @@ function NewSessionModal({
           </button>
         </div>
 
-        <label
-          htmlFor="new-session-task"
-          style={{
-            display: 'block',
-            marginBottom: designTokens.spacing[2],
-            fontSize: designTokens.typography.fontSize.sm,
-            color: designTokens.colors.textMuted,
-            fontWeight: designTokens.typography.fontWeight.medium,
-          }}
-        >
-          任务描述
-        </label>
-        <textarea
-          id="new-session-task"
-          value={task}
-          onChange={(e) => setTask(e.target.value)}
-          rows={3}
-          placeholder="描述你想让 agent 完成的任务…"
-          style={inputStyle}
-        />
-
-        <label
-          htmlFor="new-session-rounds"
-          style={{
-            display: 'block',
-            marginTop: designTokens.spacing[3],
-            marginBottom: designTokens.spacing[2],
-            fontSize: designTokens.typography.fontSize.sm,
-            color: designTokens.colors.textMuted,
-            fontWeight: designTokens.typography.fontWeight.medium,
-          }}
-        >
-          最大轮次
-        </label>
-        <input
-          id="new-session-rounds"
-          type="number"
-          min={1}
-          value={roundsText}
-          onChange={(e) => setRoundsText(e.target.value)}
-          style={{ ...inputStyle, width: 120 }}
-        />
-
-        {error !== null && (
-          <p
+        <div style={{ padding: designTokens.spacing[5] }}>
+          <label
+            htmlFor="new-session-task"
+            style={{ ...fieldLabelStyle, marginBottom: designTokens.spacing[1] }}
+          >
+            任务描述
+          </label>
+          <textarea
+            id="new-session-task"
+            value={task}
+            onChange={(e) => setTask(e.target.value)}
+            rows={3}
+            placeholder="例如：给 /api/orders 加分页，并补全测试"
+            style={inputStyle}
+          />
+          <span
             style={{
-              margin: `${designTokens.spacing[3]} 0 0`,
-              color: designTokens.colors.danger,
+              display: 'block',
+              marginTop: designTokens.spacing[1],
               fontSize: designTokens.typography.fontSize.sm,
+              color: designTokens.colors.textMuted,
             }}
           >
-            {error}
-          </p>
-        )}
+            清晰描述目标与验收标准，agent 将自主规划执行。
+          </span>
+
+          <label
+            htmlFor="new-session-limit-rounds"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: designTokens.spacing[2],
+              marginTop: designTokens.spacing[4],
+              marginBottom: designTokens.spacing[1],
+              fontSize: designTokens.typography.fontSize.base,
+              color: designTokens.colors.text,
+              fontWeight: designTokens.typography.fontWeight.medium,
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              id="new-session-limit-rounds"
+              type="checkbox"
+              checked={limitChecked}
+              onChange={(e) => setLimitChecked(e.target.checked)}
+            />
+            限制最大轮次（不勾选则无上限）
+          </label>
+          {limitChecked && (
+            <label
+              htmlFor="new-session-rounds"
+              style={{ ...fieldLabelStyle, marginBottom: designTokens.spacing[1] }}
+            >
+              最大轮次
+            </label>
+          )}
+          {limitChecked && (
+            <input
+              id="new-session-rounds"
+              type="number"
+              min={1}
+              value={roundsText}
+              onChange={(e) => setRoundsText(e.target.value)}
+              style={{ ...inputStyle, width: 120, fontFamily: designTokens.typography.fontFamily.mono }}
+            />
+          )}
+
+          {error !== null && (
+            <p
+              style={{
+                margin: `${designTokens.spacing[3]} 0 0`,
+                color: designTokens.colors.danger,
+                fontSize: designTokens.typography.fontSize.sm,
+              }}
+            >
+              {error}
+            </p>
+          )}
+        </div>
 
         <div
           style={{
             display: 'flex',
             justifyContent: 'flex-end',
             gap: designTokens.spacing[2],
-            marginTop: designTokens.spacing[5],
+            padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+            borderTopWidth: 1,
+            borderTopStyle: 'solid',
+            borderTopColor: designTokens.colors.border,
+            background: designTokens.colors.well,
           }}
         >
-          <button type="button" onClick={onClose} style={secondaryButtonStyle}>
+          <button type="button" onClick={onClose} style={ghostButtonStyle}>
             取消
           </button>
           <button
@@ -496,7 +772,7 @@ function NewSessionModal({
             style={{ ...primaryButtonStyle, opacity: busy || task.trim() === '' ? 0.5 : 1 }}
           >
             {busy ? <Loader2 size={14} /> : <Plus size={14} />}
-            创建
+            创建并启动
           </button>
         </div>
       </div>
@@ -506,9 +782,74 @@ function NewSessionModal({
 
 // ─── Shared inline style primitives (token-derived, no hardcoded values) ─────
 
+const statRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
+  gap: designTokens.spacing[4],
+  marginBottom: designTokens.spacing[6],
+};
+
+const segStyle: CSSProperties = {
+  display: 'flex',
+  gap: '2px',
+  background: designTokens.colors.well,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.border,
+  borderRadius: designTokens.radius.md,
+  padding: '2px',
+};
+
+function segButtonStyle(active: boolean): CSSProperties {
+  return {
+    border: 'none',
+    background: active ? designTokens.colors.surface : 'transparent',
+    color: active ? designTokens.colors.text : designTokens.colors.textMuted,
+    fontSize: designTokens.typography.fontSize.sm,
+    padding: '4px 11px',
+    borderRadius: 6,
+    cursor: 'pointer',
+    boxShadow: active ? designTokens.shadows.sm : 'none',
+  };
+}
+
 const cellStyle: CSSProperties = {
-  padding: `${designTokens.spacing[3]} ${designTokens.spacing[4]}`,
+  padding: '13px 20px',
+  borderBottomWidth: 1,
+  borderBottomStyle: 'solid',
+  borderBottomColor: designTokens.colors.border,
   fontSize: designTokens.typography.fontSize.base,
+  verticalAlign: 'middle',
+};
+
+const numStyle: CSSProperties = {
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.codeSize.md,
+  fontVariantNumeric: 'tabular-nums',
+  color: designTokens.colors.textSubtle,
+};
+
+/** Row actions appear on row hover (prototype .row-actions). */
+const rowActionsStyle: CSSProperties = {
+  display: 'inline-flex',
+  gap: '2px',
+  justifyContent: 'flex-end',
+  opacity: 0,
+  transition: 'opacity 0.12s',
+};
+
+const iconBtnStyle: CSSProperties = {
+  width: 28,
+  height: 28,
+  display: 'grid',
+  placeItems: 'center',
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'transparent',
+  background: 'transparent',
+  color: designTokens.colors.textMuted,
+  cursor: 'pointer',
 };
 
 const centerStateStyle: CSSProperties = {
@@ -545,7 +886,8 @@ const primaryButtonStyle: CSSProperties = {
   background: designTokens.colors.primary,
   color: designTokens.colors.onPrimary,
   fontSize: designTokens.typography.fontSize.base,
-  fontWeight: designTokens.typography.fontWeight.medium,
+  fontWeight: designTokens.typography.fontWeight.semibold,
+  boxShadow: designTokens.shadows.primary,
   cursor: 'pointer',
 };
 
@@ -565,6 +907,19 @@ const secondaryButtonStyle: CSSProperties = {
   cursor: 'pointer',
 };
 
+const ghostButtonStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: designTokens.spacing[1],
+  padding: `${designTokens.spacing[2]} ${designTokens.spacing[3]}`,
+  borderRadius: designTokens.radius.md,
+  border: 'none',
+  background: 'transparent',
+  color: designTokens.colors.textMuted,
+  fontSize: designTokens.typography.fontSize.base,
+  cursor: 'pointer',
+};
+
 const ghostIconButtonStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -576,6 +931,13 @@ const ghostIconButtonStyle: CSSProperties = {
   background: 'transparent',
   color: designTokens.colors.textMuted,
   cursor: 'pointer',
+};
+
+const fieldLabelStyle: CSSProperties = {
+  display: 'block',
+  fontSize: designTokens.typography.fontSize.sm,
+  color: designTokens.colors.textSubtle,
+  fontWeight: designTokens.typography.fontWeight.medium,
 };
 
 const inputStyle: CSSProperties = {

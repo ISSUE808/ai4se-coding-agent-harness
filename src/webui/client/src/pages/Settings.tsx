@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import Editor from '@monaco-editor/react';
 import {
   AlertTriangle,
@@ -25,7 +25,30 @@ const PROVIDERS = ['deepseek', 'openai', 'anthropic'];
 
 const NOT_SET = 'not set';
 
+/** Left-nav entries (prototype .settings-nav). */
+const NAV_ITEMS: { label: string; target: string }[] = [
+  { label: 'API Keys', target: 'settings-keys' },
+  { label: '配置编辑', target: 'settings-config' },
+  { label: '模型与护栏', target: 'settings-model' },
+  { label: '通用', target: 'settings-general' },
+];
+
 export default function Settings() {
+  const scrollTo = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // Masked backend config for the 模型与护栏 / 通用 cards (fetched once here;
+  // the JSON editor card loads its own copy for editing).
+  const [config, setConfig] = useState<ConfigValue | null>(null);
+  useEffect(() => {
+    fetchConfig()
+      .then(setConfig)
+      .catch(() => {
+        // Backend unreachable — the cards render their empty/loading states.
+      });
+  }, []);
+
   return (
     <main
       style={{
@@ -35,14 +58,14 @@ export default function Settings() {
         color: designTokens.colors.text,
       }}
     >
-      <div style={{ maxWidth: 1120, marginInline: 'auto', padding: designTokens.spacing[6] }}>
-        <header style={{ marginBottom: designTokens.spacing[5] }}>
+      <div style={{ maxWidth: 1240, marginInline: 'auto', padding: `${designTokens.spacing[6]} ${designTokens.spacing[8]} ${designTokens.spacing[10]}` }}>
+        <header style={{ marginBottom: designTokens.spacing[6] }}>
           <h1
             style={{
               margin: 0,
               fontSize: designTokens.typography.fontSize.xl,
               fontWeight: designTokens.typography.fontWeight.semibold,
-              letterSpacing: '-0.01em',
+              letterSpacing: '-0.02em',
             }}
           >
             设置
@@ -58,9 +81,56 @@ export default function Settings() {
           </p>
         </header>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: designTokens.spacing[5] }}>
-          <KeyManagementCard />
-          <ConfigEditorCard />
+        {/* prototype .settings-grid: 200px nav + content column */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '200px minmax(0,1fr)',
+            gap: designTokens.spacing[8],
+            alignItems: 'start',
+          }}
+        >
+          <nav
+            aria-label="设置导航"
+            style={{
+              position: 'sticky',
+              top: designTokens.spacing[6],
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '2px',
+            }}
+          >
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => scrollTo(item.target)}
+                style={{
+                  padding: `${designTokens.spacing[2]} ${designTokens.spacing[3]}`,
+                  borderRadius: designTokens.radius.md,
+                  color: designTokens.colors.textMuted,
+                  fontSize: designTokens.typography.fontSize.base,
+                  textAlign: 'left',
+                  border: 'none',
+                  background: 'transparent',
+                  borderLeftWidth: 2,
+                  borderLeftStyle: 'solid',
+                  borderLeftColor: 'transparent',
+                  cursor: 'pointer',
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: designTokens.spacing[6], minWidth: 0 }}>
+            <KeyManagementCard />
+            <ConfigEditorCard />
+            <ModelGuardrailCard config={config} />
+            <GeneralCard config={config} />
+            <DangerZone />
+          </div>
         </div>
       </div>
     </main>
@@ -72,6 +142,7 @@ export default function Settings() {
 function KeyManagementCard() {
   return (
     <section
+      id="settings-keys"
       style={{
         borderWidth: 1,
         borderStyle: 'solid',
@@ -83,7 +154,7 @@ function KeyManagementCard() {
     >
       <div
         style={{
-          padding: `${designTokens.spacing[3]} ${designTokens.spacing[4]}`,
+          padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
           borderBottomWidth: 1,
           borderBottomStyle: 'solid',
           borderBottomColor: designTokens.colors.border,
@@ -92,7 +163,7 @@ function KeyManagementCard() {
         <h2
           style={{
             margin: 0,
-            fontSize: designTokens.typography.fontSize.lg,
+            fontSize: designTokens.typography.fontSize.md,
             fontWeight: designTokens.typography.fontWeight.semibold,
           }}
         >
@@ -117,6 +188,18 @@ function KeyManagementCard() {
   );
 }
 
+/** Provider logo tint (prototype .key-logo): deepseek=accent, openai=success, anthropic=warning. */
+function logoColors(provider: string): { fg: string; bg: string } {
+  switch (provider) {
+    case 'openai':
+      return { fg: designTokens.colors.success, bg: designTokens.colors.successSoft };
+    case 'anthropic':
+      return { fg: designTokens.colors.warning, bg: designTokens.colors.warningSoft };
+    default:
+      return { fg: designTokens.colors.primary, bg: designTokens.colors.primarySoft };
+  }
+}
+
 function KeyRow({ provider }: { provider: string }) {
   const [status, setStatus] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -137,6 +220,7 @@ function KeyRow({ provider }: { provider: string }) {
   }, [load]);
 
   const configured = status !== null && status !== NOT_SET;
+  const logo = logoColors(provider);
 
   async function handleSave(): Promise<void> {
     if (keyText.trim() === '') {
@@ -177,8 +261,8 @@ function KeyRow({ provider }: { provider: string }) {
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: designTokens.spacing[3],
-        padding: `${designTokens.spacing[3]} ${designTokens.spacing[4]}`,
+        gap: designTokens.spacing[4],
+        padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
         borderBottomWidth: 1,
         borderBottomStyle: 'solid',
         borderBottomColor: designTokens.colors.border,
@@ -188,17 +272,15 @@ function KeyRow({ provider }: { provider: string }) {
         style={{
           display: 'grid',
           placeItems: 'center',
-          width: 32,
-          height: 32,
+          width: 34,
+          height: 34,
           borderRadius: designTokens.radius.md,
-          background: designTokens.colors.primarySoft,
-          borderWidth: 1,
-          borderStyle: 'solid',
-          borderColor: designTokens.colors.primaryBorder,
-          color: designTokens.colors.primary,
+          background: logo.bg,
+          color: logo.fg,
           fontFamily: designTokens.typography.fontFamily.mono,
-          fontSize: designTokens.typography.fontSize.sm,
           fontWeight: designTokens.typography.fontWeight.semibold,
+          fontSize: designTokens.typography.fontSize.sm,
+          flexShrink: 0,
         }}
       >
         {provider.slice(0, 2)}
@@ -210,8 +292,8 @@ function KeyRow({ provider }: { provider: string }) {
             display: 'flex',
             alignItems: 'center',
             gap: designTokens.spacing[2],
-            fontSize: designTokens.typography.fontSize.md,
-            fontWeight: designTokens.typography.fontWeight.medium,
+            fontSize: designTokens.typography.fontSize.base,
+            fontWeight: designTokens.typography.fontWeight.semibold,
           }}
         >
           {provider}
@@ -230,7 +312,7 @@ function KeyRow({ provider }: { provider: string }) {
                 fontWeight: designTokens.typography.fontWeight.medium,
               }}
             >
-              已配置
+              已连接
             </span>
           ) : (
             <span
@@ -252,10 +334,10 @@ function KeyRow({ provider }: { provider: string }) {
         </div>
         <div
           style={{
-            marginTop: designTokens.spacing[1],
+            marginTop: 3,
             fontFamily: designTokens.typography.fontFamily.mono,
             fontSize: designTokens.typography.codeSize.md,
-            color: configured ? designTokens.colors.textSubtle : designTokens.colors.textMuted,
+            color: configured ? designTokens.colors.textMuted : designTokens.colors.textMuted,
           }}
         >
           {configured ? status : '未设置密钥'}
@@ -408,6 +490,7 @@ function ConfigEditorCard() {
 
   return (
     <section
+      id="settings-config"
       style={{
         borderWidth: 1,
         borderStyle: 'solid',
@@ -423,7 +506,7 @@ function ConfigEditorCard() {
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: designTokens.spacing[4],
-          padding: `${designTokens.spacing[3]} ${designTokens.spacing[4]}`,
+          padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
           borderBottomWidth: 1,
           borderBottomStyle: 'solid',
           borderBottomColor: designTokens.colors.border,
@@ -433,7 +516,7 @@ function ConfigEditorCard() {
           <h2
             style={{
               margin: 0,
-              fontSize: designTokens.typography.fontSize.lg,
+              fontSize: designTokens.typography.fontSize.md,
               fontWeight: designTokens.typography.fontWeight.semibold,
             }}
           >
@@ -473,7 +556,7 @@ function ConfigEditorCard() {
         </div>
       </div>
 
-      <div style={{ padding: designTokens.spacing[4] }}>
+      <div style={{ padding: designTokens.spacing[5] }}>
         <div
           style={{
             borderWidth: 1,
@@ -481,9 +564,32 @@ function ConfigEditorCard() {
             borderColor: designTokens.colors.border,
             borderRadius: designTokens.radius.md,
             overflow: 'hidden',
-            background: designTokens.colors.well,
+            background: designTokens.colors.codeBg,
           }}
         >
+          {/* editor chrome bar (prototype .editor-bar) */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: designTokens.spacing[2],
+              padding: '8px 12px',
+              background: designTokens.colors.well,
+              borderBottomWidth: 1,
+              borderBottomStyle: 'solid',
+              borderBottomColor: designTokens.colors.border,
+              fontFamily: designTokens.typography.fontFamily.mono,
+              fontSize: designTokens.typography.fontSize.xs,
+              color: designTokens.colors.textMuted,
+            }}
+          >
+            <span style={{ width: 10, height: 10, borderRadius: designTokens.radius.pill, background: designTokens.colors.danger }} />
+            <span style={{ width: 10, height: 10, borderRadius: designTokens.radius.pill, background: designTokens.colors.warning }} />
+            <span style={{ width: 10, height: 10, borderRadius: designTokens.radius.pill, background: designTokens.colors.success }} />
+            <span style={{ marginLeft: 6 }}>config.json — Monaco</span>
+            <span style={{ marginLeft: 'auto' }}>UTF-8 · JSON</span>
+          </div>
+
           {text === null ? (
             <div
               style={{
@@ -577,6 +683,313 @@ function ConfigEditorCard() {
   );
 }
 
+// ─── 模型与护栏 (read-only snapshot of llm/agent/guardrails config) ─────────
+
+function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
+  const llm = config?.llm;
+  const agent = config?.agent;
+  const guardrails = config?.guardrails;
+  const requireApproval = Array.isArray(guardrails?.requireApproval)
+    ? (guardrails.requireApproval as unknown[])
+    : [];
+
+  return (
+    <section
+      id="settings-model"
+      style={{
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: designTokens.colors.border,
+        borderRadius: designTokens.radius.lg,
+        background: designTokens.colors.surface,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+          borderBottomWidth: 1,
+          borderBottomStyle: 'solid',
+          borderBottomColor: designTokens.colors.border,
+        }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontSize: designTokens.typography.fontSize.md,
+            fontWeight: designTokens.typography.fontWeight.semibold,
+          }}
+        >
+          模型与护栏
+        </h2>
+        <p
+          style={{
+            margin: `${designTokens.spacing[1]} 0 0`,
+            color: designTokens.colors.textMuted,
+            fontSize: designTokens.typography.fontSize.sm,
+          }}
+        >
+          当前 LLM 配置与护栏规则（只读快照）。修改请在「配置编辑」中调整。
+        </p>
+      </div>
+
+      {config === null ? (
+        <div style={{ padding: designTokens.spacing[5], color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+          加载配置中…（请确认后端已启动）
+        </div>
+      ) : (
+        <div>
+          <SettingSection label="模型">
+            <SettingKV k="提供商" v={typeof llm?.provider === 'string' ? llm.provider : '—'} mono />
+            <SettingKV k="模型" v={typeof llm?.model === 'string' ? llm.model : '—'} mono />
+            <SettingKV k="最大 Token" v={typeof llm?.maxTokens === 'number' ? String(llm.maxTokens) : '—'} mono />
+            <SettingKV k="API 地址" v={typeof llm?.baseUrl === 'string' ? llm.baseUrl : '—'} mono />
+          </SettingSection>
+          <SettingSection label="Agent 参数">
+            <SettingKV
+              k="最大轮次"
+              v={typeof agent?.maxRounds === 'number' ? (agent.maxRounds === 0 ? '无上限' : String(agent.maxRounds)) : '—'}
+              mono
+            />
+            <SettingKV
+              k="上下文阈值"
+              v={typeof agent?.contextThreshold === 'number' ? String(agent.contextThreshold) : '—'}
+              mono
+            />
+            <SettingKV
+              k="工作目录"
+              v={typeof agent?.workspaceRoot === 'string' ? agent.workspaceRoot : '—'}
+              mono
+            />
+          </SettingSection>
+          <SettingSection label="护栏">
+            {requireApproval.length === 0 && guardrails?.blockOutbound !== true ? (
+              <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                配置中未声明护栏规则
+              </span>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {requireApproval.map((item) => (
+                  <span
+                    key={String(item)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '2px 8px',
+                      borderRadius: designTokens.radius.pill,
+                      borderWidth: 1,
+                      borderStyle: 'solid',
+                      borderColor: designTokens.colors.warningBorder,
+                      color: designTokens.colors.warning,
+                      fontSize: designTokens.typography.fontSize.xs,
+                    }}
+                  >
+                    {String(item)} · 需审批
+                  </span>
+                ))}
+                {guardrails?.blockOutbound === true && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '2px 8px',
+                      borderRadius: designTokens.radius.pill,
+                      borderWidth: 1,
+                      borderStyle: 'solid',
+                      borderColor: designTokens.colors.dangerBorder,
+                      color: designTokens.colors.danger,
+                      fontSize: designTokens.typography.fontSize.xs,
+                    }}
+                  >
+                    禁止 · 网络外呼
+                  </span>
+                )}
+              </div>
+            )}
+          </SettingSection>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─── 通用 (webui runtime facts + credentials channel note) ───────────────────
+
+function GeneralCard({ config }: { config: ConfigValue | null }) {
+  const webui = config?.webui;
+  const llm = config?.llm;
+
+  return (
+    <section
+      id="settings-general"
+      style={{
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: designTokens.colors.border,
+        borderRadius: designTokens.radius.lg,
+        background: designTokens.colors.surface,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+          borderBottomWidth: 1,
+          borderBottomStyle: 'solid',
+          borderBottomColor: designTokens.colors.border,
+        }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            fontSize: designTokens.typography.fontSize.md,
+            fontWeight: designTokens.typography.fontWeight.semibold,
+          }}
+        >
+          通用
+        </h2>
+        <p
+          style={{
+            margin: `${designTokens.spacing[1]} 0 0`,
+            color: designTokens.colors.textMuted,
+            fontSize: designTokens.typography.fontSize.sm,
+          }}
+        >
+          WebUI 运行时信息与凭据通道说明。
+        </p>
+      </div>
+
+      {config === null ? (
+        <div style={{ padding: designTokens.spacing[5], color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+          加载配置中…（请确认后端已启动）
+        </div>
+      ) : (
+        <div>
+          <SettingSection label="WebUI">
+            <SettingKV k="端口" v={typeof webui?.port === 'number' ? String(webui.port) : '—'} mono />
+            <SettingKV
+              k="会话存储"
+              v="内存（InMemorySessionStore）"
+            />
+          </SettingSection>
+          <SettingSection label="凭据通道">
+            <SettingKV
+              k="Key 来源"
+              v={typeof llm?.apiKeySource === 'string' ? llm.apiKeySource : '—'}
+              mono
+            />
+            <p
+              style={{
+                margin: `${designTokens.spacing[1]} 0 0`,
+                fontSize: designTokens.typography.fontSize.sm,
+                color: designTokens.colors.textMuted,
+                lineHeight: designTokens.typography.lineHeight.normal,
+              }}
+            >
+              API Key 不进入配置文件（SPEC §3.6）——通过独立凭据通道
+              （keytar → 加密文件 → 环境变量）管理，WebUI 仅显示掩码。
+            </p>
+          </SettingSection>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─── Shared section primitives for the read-only cards ───────────────────────
+
+function SettingSection({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div
+      style={{
+        padding: `${designTokens.spacing[3]} ${designTokens.spacing[5]}`,
+        borderBottomWidth: 1,
+        borderBottomStyle: 'solid',
+        borderBottomColor: designTokens.colors.border,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: designTokens.typography.fontFamily.mono,
+          fontSize: designTokens.typography.fontSize.xs,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: designTokens.colors.textMuted,
+          marginBottom: designTokens.spacing[1],
+        }}
+      >
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SettingKV({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: designTokens.spacing[4],
+        paddingBlock: designTokens.spacing[1],
+        fontSize: 12.5,
+      }}
+    >
+      <span style={{ color: designTokens.colors.textMuted }}>{k}</span>
+      <span
+        style={{
+          fontFamily: mono ? designTokens.typography.fontFamily.mono : designTokens.typography.fontFamily.sans,
+          color: designTokens.colors.text,
+          textAlign: 'right',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          maxWidth: '70%',
+        }}
+        title={v}
+      >
+        {v}
+      </span>
+    </div>
+  );
+}
+
+// ─── Danger zone (prototype .danger-zone) ────────────────────────────────────
+
+function DangerZone() {
+  return (
+    <div
+      style={{
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: designTokens.colors.dangerBorder,
+        borderRadius: designTokens.radius.lg,
+        background: designTokens.colors.dangerSoft,
+        padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: designTokens.spacing[4],
+      }}
+    >
+      <div>
+        <div style={{ fontWeight: designTokens.typography.fontWeight.semibold, fontSize: designTokens.typography.fontSize.base, color: designTokens.colors.danger }}>
+          清空所有会话
+        </div>
+        <div style={{ fontSize: designTokens.typography.fontSize.sm, color: designTokens.colors.textMuted, marginTop: 2 }}>
+          永久删除全部会话历史与日志，不可恢复。该操作将在 Task 19 集成主循环后提供。
+        </div>
+      </div>
+      <button type="button" disabled style={{ ...dangerButtonStyle, cursor: 'not-allowed', opacity: 0.55 }}>
+        <Trash2 size={12} />
+        清空会话
+      </button>
+    </div>
+  );
+}
+
 // ─── Shared inline style primitives (token-derived, no hardcoded values) ─────
 
 const primaryButtonStyle: CSSProperties = {
@@ -590,7 +1003,7 @@ const primaryButtonStyle: CSSProperties = {
   borderColor: designTokens.colors.primary,
   background: designTokens.colors.primary,
   color: designTokens.colors.onPrimary,
-  fontSize: designTokens.typography.fontSize.base,
+  fontSize: designTokens.typography.fontSize.sm,
   fontWeight: designTokens.typography.fontWeight.medium,
   cursor: 'pointer',
 };
@@ -620,7 +1033,7 @@ const dangerButtonStyle: CSSProperties = {
   borderWidth: 1,
   borderStyle: 'solid',
   borderColor: designTokens.colors.dangerBorder,
-  background: designTokens.colors.dangerSoft,
+  background: 'transparent',
   color: designTokens.colors.danger,
   fontSize: designTokens.typography.fontSize.sm,
   fontWeight: designTokens.typography.fontWeight.medium,

@@ -21,10 +21,10 @@ describe('ApprovalCard', () => {
     render(<ApprovalCard {...props()} />);
 
     expect(screen.getByText('需要人工审批 · HITL')).toBeInTheDocument();
-    expect(screen.getByText('npm run migrate:prod -- --drop-legacy-jwt-table')).toBeInTheDocument();
+    expect(screen.getByLabelText('修改后的命令')).toHaveValue('npm run migrate:prod -- --drop-legacy-jwt-table');
     expect(screen.getByText('prod-mutation')).toBeInTheDocument();
     expect(screen.getByText('批准')).toBeInTheDocument();
-    expect(screen.getByText('编辑')).toBeInTheDocument();
+    expect(screen.getByText('编辑后提交')).toBeInTheDocument();
     expect(screen.getByText('拒绝')).toBeInTheDocument();
   });
 
@@ -51,7 +51,7 @@ describe('ApprovalCard', () => {
     const onModify = vi.fn();
     render(<ApprovalCard {...props({ onModify })} />);
 
-    await userEvent.click(screen.getByRole('button', { name: '编辑' }));
+    await userEvent.click(screen.getByRole('button', { name: '编辑后提交' }));
     const editor = screen.getByLabelText('修改后的命令');
     expect(editor).toHaveValue('npm run migrate:prod -- --drop-legacy-jwt-table');
 
@@ -64,7 +64,7 @@ describe('ApprovalCard', () => {
 
   it('cannot submit a blank modified command', async () => {
     render(<ApprovalCard {...props()} />);
-    await userEvent.click(screen.getByRole('button', { name: '编辑' }));
+    await userEvent.click(screen.getByRole('button', { name: '编辑后提交' }));
     const editor = screen.getByLabelText('修改后的命令');
     await userEvent.clear(editor);
     expect(screen.getByRole('button', { name: '提交修改' })).toBeDisabled();
@@ -87,7 +87,7 @@ describe('ApprovalCard', () => {
     render(<ApprovalCard {...props({ busy: true })} />);
     expect(screen.getByRole('button', { name: '批准' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '拒绝' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '编辑' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '编辑后提交' })).toBeDisabled();
   });
 
   it('shows a resolution error from the backend (e.g. 409)', () => {

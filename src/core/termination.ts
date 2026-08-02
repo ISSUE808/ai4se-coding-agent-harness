@@ -16,8 +16,8 @@ export function shouldTerminate(
   currentRound: number,
   maxRounds: number,
 ): boolean {
-  // 超过最大轮数 → 强制终止 / 升级触发
-  if (currentRound > maxRounds) {
+  // 超过最大轮数 → 强制终止 / 升级触发（maxRounds = 0 表示无上限，不触发）
+  if (maxRounds > 0 && currentRound > maxRounds) {
     return true;
   }
 

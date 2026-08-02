@@ -13,6 +13,7 @@ vi.mock('../lib/api', () => ({
   postMessage: vi.fn(),
   sessionControl: vi.fn(),
   resolveApproval: vi.fn(),
+  fetchConfig: vi.fn().mockResolvedValue({ model: 'deepseek-v4-pro', guardrails: { requireApproval: ['prod'], blockOutbound: true } }),
 }));
 
 vi.mock('../lib/ws-source', () => ({
@@ -124,16 +125,19 @@ describe('SessionDetail', () => {
     expect(screen.getByText('s_1')).toBeInTheDocument();
     // Badge appears in the page header and the context column:
     expect(screen.getAllByText('运行中').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('文件变更')).toBeInTheDocument();
-    expect(screen.getByText('消息流')).toBeInTheDocument();
-    expect(screen.getByText('上下文信息')).toBeInTheDocument();
+    // 文件变更 appears in the left mini-tab and the 运行信息 section.
+    expect(screen.getAllByText('文件变更').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('上下文')).toBeInTheDocument();
 
     // REST messages land via the hook's initial-merge effect — await them:
     expect(await screen.findByText('把认证模块改成刷新令牌')).toBeInTheDocument();
-    expect(screen.getByText('12/40')).toBeInTheDocument();
+    // Big round number renders as two spans (current + "/ max"):
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('/ 40')).toBeInTheDocument();
     expect(screen.getByText('128.4K')).toBeInTheDocument();
     expect(screen.getByText('2026-08-02 07:57')).toBeInTheDocument();
-    expect(screen.getByText('2026-08-02 08:06')).toBeInTheDocument();
+    // 已运行 is derived from createdAt→updatedAt (07:57→08:06:41 = 09:41), replacing the old 更新于 row:
+    expect(screen.getByText('09:41')).toBeInTheDocument();
   });
 
   it('aggregates the file list in the left column and opens a Monaco diff for the selected file', async () => {
@@ -204,10 +208,10 @@ describe('SessionDetail', () => {
   it('updates status and rounds live over WS', async () => {
     renderDetail();
     await screen.findByText('把认证模块改成刷新令牌');
-    expect(screen.getByText('12/40')).toBeInTheDocument();
+    expect(screen.getByText('12')).toBeInTheDocument();
 
     act(() => source.emit({ type: 'round:changed', data: { currentRound: 13, maxRounds: 40 } }));
-    expect(screen.getByText('13/40')).toBeInTheDocument();
+    expect(screen.getByText('13')).toBeInTheDocument();
 
     act(() => source.emit({ type: 'session:status', data: { sessionId: 's_1', status: 'failed' } }));
     expect((await screen.findAllByText('失败')).length).toBeGreaterThanOrEqual(1);
@@ -226,7 +230,7 @@ describe('SessionDetail', () => {
     );
 
     expect(await screen.findByText('需要人工审批 · HITL')).toBeInTheDocument();
-    expect(screen.getByText('npm run migrate:prod')).toBeInTheDocument();
+    expect(screen.getByLabelText('修改后的命令')).toHaveValue('npm run migrate:prod');
 
     await userEvent.click(screen.getByRole('button', { name: '批准' }));
     await waitFor(() => {
@@ -249,7 +253,7 @@ describe('SessionDetail', () => {
     );
     await screen.findByText('需要人工审批 · HITL');
 
-    await userEvent.click(screen.getByRole('button', { name: '编辑' }));
+    await userEvent.click(screen.getByRole('button', { name: '编辑后提交' }));
     const editor = screen.getByLabelText('修改后的命令');
     await userEvent.clear(editor);
     await userEvent.type(editor, 'npm run migrate:prod -- --dry-run');
@@ -267,13 +271,16 @@ describe('SessionDetail', () => {
     expect(source.connectCount).toBe(1);
 
     // Socket not open yet — the UI shows a retry affordance:
-    expect(screen.getByText('已断开')).toBeInTheDocument();
+    expect(screen.getByText(/已断开/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '重连' }));
     expect(source.connectCount).toBe(2);
 
     act(() => source.setConnected(true));
-    expect(await screen.findByText('已连接')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '重连' })).not.toBeInTheDocument();
+    // The disconnect banner (and its retry button) disappears once connected —
+    // the connected state itself lives in the top-bar env pill (App level).
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: '重连' })).not.toBeInTheDocument();
+    });
 
     // Live event after reconnect:
     act(() => source.emit({ type: 'session:status', data: { sessionId: 's_1', status: 'paused' } }));

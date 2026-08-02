@@ -157,6 +157,29 @@ describe('REST /api/sessions', () => {
     expect(res.body.messages[0].content).toBe('Fix the test suite');
   });
 
+  it('POST /api/sessions honors an explicit maxRounds cap', async () => {
+    const { web } = await makeFixture();
+    const capped = await request(web.app).post('/api/sessions').send({ task: 'cap me', maxRounds: 12 });
+    expect(capped.status).toBe(201);
+    expect(capped.body.maxRounds).toBe(12);
+  });
+
+  it('POST /api/sessions accepts maxRounds = 0 as unlimited', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).post('/api/sessions').send({ task: 'no cap', maxRounds: 0 });
+    expect(res.status).toBe(201);
+    expect(res.body.maxRounds).toBe(0);
+  });
+
+  it('POST /api/sessions rejects an invalid maxRounds with 400 JSON', async () => {
+    const { web } = await makeFixture();
+    const neg = await request(web.app).post('/api/sessions').send({ task: 'x', maxRounds: -1 });
+    expect(neg.status).toBe(400);
+    expect(neg.body.error).toBeTypeOf('string');
+    const str = await request(web.app).post('/api/sessions').send({ task: 'x', maxRounds: '40' });
+    expect(str.status).toBe(400);
+  });
+
   it('POST /api/sessions rejects a missing or empty task with 400 JSON', async () => {
     const { web } = await makeFixture();
     const missing = await request(web.app).post('/api/sessions').send({});

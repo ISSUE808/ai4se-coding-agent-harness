@@ -8,8 +8,11 @@ import type { Message, Session } from '../types.js';
  * on a global singleton.
  */
 export interface SessionStore {
-  /** Create a session in `running` state with the given task. */
-  create(task: string): Session;
+  /**
+   * Create a session in `running` state with the given task.
+   * @param maxRounds 0 = unlimited; undefined = the store's default cap.
+   */
+  create(task: string, maxRounds?: number): Session;
   /** All sessions, oldest first. */
   list(): Session[];
   /** Session by id, or null when unknown. */
@@ -37,13 +40,13 @@ export class InMemorySessionStore implements SessionStore {
 
   constructor(private readonly defaultMaxRounds: number = 3) {}
 
-  create(task: string): Session {
+  create(task: string, maxRounds?: number): Session {
     const now = nowISO();
     const session: Session = {
       id: generateId(),
       task,
       status: 'running',
-      maxRounds: this.defaultMaxRounds,
+      maxRounds: maxRounds ?? this.defaultMaxRounds,
       currentRound: 0,
       messages: [],
       tokenCount: 0,

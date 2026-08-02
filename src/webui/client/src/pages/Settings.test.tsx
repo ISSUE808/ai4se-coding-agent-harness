@@ -45,8 +45,10 @@ describe('Settings', () => {
       status: provider === 'deepseek' ? '****-9f2c' : 'not set',
     }));
     fetchConfigMock.mockResolvedValue({
-      llm: { provider: 'deepseek', model: 'deepseek-chat' },
+      llm: { provider: 'deepseek', model: 'deepseek-chat', maxTokens: 4096, apiKeySource: 'keytar' },
+      agent: { maxRounds: 3, contextThreshold: 0.8, workspaceRoot: '/work' },
       webui: { port: 3000 },
+      guardrails: { requireApproval: ['prod'], blockOutbound: true },
     });
   });
 
@@ -55,8 +57,22 @@ describe('Settings', () => {
 
     expect(await screen.findByText('****-9f2c')).toBeInTheDocument();
     expect(screen.getAllByText('未设置密钥')).toHaveLength(2);
-    expect(screen.getByText('已配置')).toBeInTheDocument();
+    expect(screen.getByText('已连接')).toBeInTheDocument();
     expect(screen.queryByText(/sk-[a-zA-Z0-9]{4,}/)).not.toBeInTheDocument();
+  });
+
+  it('renders the 模型与护栏 and 通用 cards from the masked config', async () => {
+    render(<Settings />);
+
+    // Card titles also appear in the left nav — expect at least the headings.
+    expect((await screen.findAllByText('模型与护栏')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('deepseek-chat')).toBeInTheDocument();
+    expect(screen.getByText('4096')).toBeInTheDocument();
+    expect(screen.getByText('prod · 需审批')).toBeInTheDocument();
+    expect(screen.getByText('禁止 · 网络外呼')).toBeInTheDocument();
+
+    expect(screen.getAllByText('通用').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('keytar')).toBeInTheDocument();
   });
 
   it('shows not-set when the key status request fails', async () => {

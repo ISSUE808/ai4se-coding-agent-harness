@@ -1,9 +1,11 @@
 /**
  * MessageList — the 消息流 column (PLAN Task 18b, prototype
- * docs/webui-prototype.html). Renders the session messages in chronological
- * order: user/assistant text rows, expandable tool-call cards, green/red
- * feedback cards, muted system notes, and the inline HITL approval card.
- * Colors/fonts/spacing come exclusively from design-tokens.ts.
+ * codeharness-webui.html). Renders the session messages in chronological
+ * order: user messages as accent-tinted bubbles, assistant text rows,
+ * expandable tool-call cards (with an arg summary on the header row),
+ * green/red feedback cards, muted system notes as center pills, and the
+ * inline HITL approval card. Colors/fonts/spacing come exclusively from
+ * design-tokens.ts.
  */
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, Hash, TriangleAlert } from 'lucide-react';
@@ -62,10 +64,10 @@ export default function MessageList({ messages, approval }: MessageListProps) {
         flex: 1,
         minHeight: 0,
         overflowY: 'auto',
-        padding: designTokens.spacing[4],
+        padding: `${designTokens.spacing[5]} ${designTokens.spacing[5]} ${designTokens.spacing[3]}`,
         display: 'flex',
         flexDirection: 'column',
-        gap: designTokens.spacing[2],
+        gap: designTokens.spacing[4],
       }}
     >
       {messages.map((message) => (
@@ -116,6 +118,7 @@ function MessageRow({ message }: { message: SessionMessage }) {
     case 'feedback':
       return <FeedbackCard message={message} />;
     default:
+      // System note — center pill (prototype .sys-note).
       return (
         <div
           style={{
@@ -123,10 +126,21 @@ function MessageRow({ message }: { message: SessionMessage }) {
             fontFamily: designTokens.typography.fontFamily.mono,
             fontSize: designTokens.typography.fontSize.xs,
             color: designTokens.colors.textMuted,
-            padding: `${designTokens.spacing[1]} 0`,
+            padding: '4px 0',
           }}
         >
-          {message.content}
+          <span
+            style={{
+              background: designTokens.colors.well,
+              borderWidth: 1,
+              borderStyle: 'solid',
+              borderColor: designTokens.colors.border,
+              padding: '3px 12px',
+              borderRadius: designTokens.radius.pill,
+            }}
+          >
+            {message.content}
+          </span>
         </div>
       );
   }
@@ -143,8 +157,9 @@ function TextMessage({
   avatar: string;
   avatarTone: 'user' | 'assistant';
 }) {
+  const isUser = avatarTone === 'user';
   return (
-    <article style={{ display: 'flex', gap: designTokens.spacing[3] }}>
+    <article style={{ display: 'flex', gap: designTokens.spacing[3], maxWidth: '100%' }}>
       <div
         style={{
           width: 26,
@@ -153,18 +168,15 @@ function TextMessage({
           display: 'grid',
           placeItems: 'center',
           flexShrink: 0,
-          marginTop: designTokens.spacing[0],
+          marginTop: 2,
           fontFamily: designTokens.typography.fontFamily.mono,
           fontSize: designTokens.typography.fontSize.xs,
           fontWeight: designTokens.typography.fontWeight.semibold,
-          background:
-            avatarTone === 'user'
-              ? designTokens.colors.primarySoft
-              : designTokens.colors.well,
-          color:
-            avatarTone === 'user'
-              ? designTokens.colors.primary
-              : designTokens.colors.roleAssistant,
+          background: isUser ? designTokens.colors.primarySoft : designTokens.colors.surfaceHover,
+          color: isUser ? designTokens.colors.roleUser : designTokens.colors.roleAssistant,
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: isUser ? designTokens.colors.primaryBorder : designTokens.colors.borderStrong,
         }}
       >
         {avatar}
@@ -175,16 +187,14 @@ function TextMessage({
             display: 'flex',
             alignItems: 'baseline',
             gap: designTokens.spacing[2],
+            marginBottom: 4,
           }}
         >
           <span
             style={{
               fontSize: designTokens.typography.fontSize.sm,
               fontWeight: designTokens.typography.fontWeight.semibold,
-              color:
-                avatarTone === 'user'
-                  ? designTokens.colors.roleUser
-                  : designTokens.colors.text,
+              color: isUser ? designTokens.colors.roleUser : designTokens.colors.text,
             }}
           >
             {label}
@@ -201,10 +211,17 @@ function TextMessage({
         </div>
         <p
           style={{
-            margin: `${designTokens.spacing[1]} 0 0`,
+            margin: '0 0 0',
             fontSize: designTokens.typography.fontSize.base,
             lineHeight: designTokens.typography.lineHeight.relaxed,
-            color: designTokens.colors.text,
+            // User messages render as accent-tinted bubbles (prototype .r-user).
+            color: isUser ? designTokens.colors.text : designTokens.colors.textSubtle,
+            background: isUser ? designTokens.colors.primarySoft : 'transparent',
+            borderWidth: 1,
+            borderStyle: 'solid',
+            borderColor: isUser ? designTokens.colors.primaryBorder : 'transparent',
+            padding: isUser ? '10px 12px' : '0',
+            borderRadius: isUser ? 10 : 0,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
           }}
@@ -221,6 +238,16 @@ function formatDurationMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** One-line arg summary for the tool header (prototype .tool-arg). */
+function summarizeArg(input: unknown): string {
+  try {
+    const json = typeof input === 'string' ? input : JSON.stringify(input);
+    return json.length > 64 ? `${json.slice(0, 64)}…` : json;
+  } catch {
+    return String(input);
+  }
+}
+
 function ToolCard({ message }: { message: SessionMessage }) {
   const [open, setOpen] = useState(false);
   const toolName = message.metadata?.toolName ?? 'tool';
@@ -228,6 +255,7 @@ function ToolCard({ message }: { message: SessionMessage }) {
   const failed = result !== undefined && !result.success;
   const ok = result !== undefined && result.success;
   const duration = result?.duration_ms ?? 0;
+  const hasInput = message.metadata?.toolInput !== undefined;
 
   return (
     <article
@@ -243,7 +271,7 @@ function ToolCard({ message }: { message: SessionMessage }) {
           ? designTokens.colors.dangerSoft
           : designTokens.colors.surface,
         overflow: 'hidden',
-        marginTop: designTokens.spacing[1],
+        marginTop: 6,
       }}
     >
       <button
@@ -254,7 +282,7 @@ function ToolCard({ message }: { message: SessionMessage }) {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: designTokens.spacing[2],
+          gap: 10,
           width: '100%',
           padding: `${designTokens.spacing[2]} ${designTokens.spacing[3]}`,
           border: 'none',
@@ -263,6 +291,7 @@ function ToolCard({ message }: { message: SessionMessage }) {
           color: designTokens.colors.text,
           fontFamily: designTokens.typography.fontFamily.sans,
           fontSize: designTokens.typography.fontSize.base,
+          userSelect: 'none',
         }}
       >
         <span
@@ -272,7 +301,7 @@ function ToolCard({ message }: { message: SessionMessage }) {
             width: 20,
             height: 20,
             borderRadius: designTokens.radius.sm,
-            background: failed ? designTokens.colors.dangerSoft : designTokens.colors.well,
+            background: failed ? designTokens.colors.dangerSoft : 'rgba(192, 155, 255, 0.14)',
             color: failed ? designTokens.colors.danger : designTokens.colors.roleTool,
             flexShrink: 0,
           }}
@@ -283,18 +312,34 @@ function ToolCard({ message }: { message: SessionMessage }) {
           style={{
             fontFamily: designTokens.typography.fontFamily.mono,
             fontSize: designTokens.typography.codeSize.md,
-            fontWeight: designTokens.typography.fontWeight.medium,
+            fontWeight: designTokens.typography.fontWeight.semibold,
           }}
         >
           {toolName}
         </span>
+        {hasInput && (
+          <span
+            style={{
+              fontFamily: designTokens.typography.fontFamily.mono,
+              fontSize: designTokens.typography.fontSize.xs,
+              color: designTokens.colors.textMuted,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            {summarizeArg(message.metadata?.toolInput)}
+          </span>
+        )}
         {result !== undefined && (
           <span
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: designTokens.spacing[1],
-              marginLeft: 'auto',
+              marginLeft: hasInput ? 0 : 'auto',
               fontFamily: designTokens.typography.fontFamily.mono,
               fontSize: designTokens.typography.fontSize.xs,
               color: ok
@@ -302,13 +347,24 @@ function ToolCard({ message }: { message: SessionMessage }) {
                 : failed
                   ? designTokens.colors.danger
                   : designTokens.colors.textMuted,
+              flexShrink: 0,
             }}
           >
             {ok ? <CircleCheck size={12} /> : failed ? <CircleAlert size={12} /> : null}
             {ok ? '✓ 完成' : failed ? '✗ 失败' : '未知'} · {formatDurationMs(duration)}
           </span>
         )}
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <span
+          style={{
+            color: designTokens.colors.textMuted,
+            fontSize: designTokens.typography.fontSize.xs,
+            transition: 'transform 0.15s',
+            transform: open ? 'rotate(90deg)' : 'none',
+            flexShrink: 0,
+          }}
+        >
+          <ChevronRight size={13} />
+        </span>
       </button>
 
       {open && (
@@ -340,7 +396,7 @@ function ToolDetailSection({ label, children }: { label: string; children: strin
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
           color: designTokens.colors.textMuted,
-          marginBottom: designTokens.spacing[1],
+          marginBottom: 6,
         }}
       >
         {label}
@@ -348,8 +404,8 @@ function ToolDetailSection({ label, children }: { label: string; children: strin
       <pre
         style={{
           margin: 0,
-          padding: designTokens.spacing[2],
-          borderRadius: designTokens.radius.sm,
+          padding: '10px 12px',
+          borderRadius: 6,
           background: designTokens.colors.well,
           borderWidth: 1,
           borderStyle: 'solid',
@@ -360,6 +416,7 @@ function ToolDetailSection({ label, children }: { label: string; children: strin
           lineHeight: designTokens.typography.lineHeight.normal,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
+          overflowX: 'auto',
         }}
       >
         {children}
@@ -400,7 +457,7 @@ function FeedbackCard({ message }: { message: SessionMessage }) {
         borderColor: toneBorder,
         borderRadius: designTokens.radius.md,
         background: toneSoft,
-        marginTop: designTokens.spacing[1],
+        marginTop: 6,
       }}
     >
       <div
@@ -408,7 +465,7 @@ function FeedbackCard({ message }: { message: SessionMessage }) {
           display: 'flex',
           alignItems: 'center',
           gap: designTokens.spacing[2],
-          padding: `${designTokens.spacing[2]} ${designTokens.spacing[3]}`,
+          padding: '10px 12px',
         }}
       >
         <span
@@ -442,12 +499,9 @@ function FeedbackCard({ message }: { message: SessionMessage }) {
         </span>
         <span
           style={{
-            fontSize: designTokens.typography.fontSize.sm,
-            fontWeight: designTokens.typography.fontWeight.medium,
-            color: designTokens.colors.text,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            fontSize: 12.5,
+            fontWeight: designTokens.typography.fontWeight.semibold,
+            color: toneColor,
           }}
         >
           {result.validator}
