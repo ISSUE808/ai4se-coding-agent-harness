@@ -694,10 +694,13 @@ export class AgentLoop {
   private addMessage(session: Session, message: Message): void {
     session.messages.push(message);
     this.memory.addMessage(message);
+    // Broadcast the FULL content — the WebUI message feed renders it live and
+    // REST snapshots dedupe by id; truncating here (substring(0, 200)) made
+    // long messages appear cut off until a refresh.
     this.events.emit('message:added', {
       id: message.id,
       role: message.role,
-      content: message.content.substring(0, 200),
+      content: message.content,
       metadata: message.metadata as Record<string, unknown> | undefined,
       timestamp: message.timestamp,
     });
