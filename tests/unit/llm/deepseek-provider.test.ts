@@ -214,6 +214,55 @@ describe('DeepSeekProvider', () => {
     expect(serialized).not.toContain('dummyExecute');
   });
 
+  it('normalizes property-table parameters into a JSON Schema object (real tool format)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    // Real tools declare parameters as a bare property table (no type/properties
+    // wrapper) — DeepSeek rejects schemas without `type: "object"` (400).
+    const realTool: Tool = {
+      name: 'read_file',
+      description: 'Read a file from the workspace',
+      parameters: {
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of file paths to read, relative to the workspace root.',
+        },
+      },
+      execute: dummyExecute,
+    };
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(dummyMessages, [realTool]);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.tools[0].function.parameters).toEqual({
+      type: 'object',
+      properties: {
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of file paths to read, relative to the workspace root.',
+        },
+      },
+      required: ['paths'],
+    });
+  });
+
+  it('passes through already-standard JSON Schema parameters unchanged', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(dummyMessages, dummyTools);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.tools[0].function.parameters).toEqual(dummyTools[0].parameters);
+  });
+
   it('does not pass tools field when tools array is empty', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'OK' } }],

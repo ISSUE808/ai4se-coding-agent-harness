@@ -8,6 +8,26 @@ export interface DeepSeekConfig {
   maxTokens: number;
 }
 
+/**
+ * Normalize a tool's `parameters` into a standard JSON Schema object for the
+ * OpenAI-compatible API. Our tools declare parameters as a bare property table
+ * (e.g. `{ paths: {...} }`) — DeepSeek rejects schemas without
+ * `type: "object"` with 400. Already-standard schemas (carrying `type` or
+ * `properties`) pass through unchanged.
+ */
+export function toOpenAIToolParameters(
+  parameters: Record<string, unknown>,
+): Record<string, unknown> {
+  if (typeof parameters.type === 'string' || 'properties' in parameters) {
+    return parameters;
+  }
+  return {
+    type: 'object',
+    properties: parameters,
+    required: Object.keys(parameters),
+  };
+}
+
 export class DeepSeekProvider implements LLMProvider {
   private client: OpenAI;
   private model: string;
@@ -33,7 +53,7 @@ export class DeepSeekProvider implements LLMProvider {
       function: {
         name: t.name,
         description: t.description,
-        parameters: t.parameters,
+        parameters: toOpenAIToolParameters(t.parameters),
       },
     }));
 
