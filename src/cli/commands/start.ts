@@ -273,6 +273,8 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
 
   /** Live runs by session id — the pause/stop endpoints abort them (I2). */
   const activeRuns = new Map<string, AbortController>();
+  /** Sessions whose running loop should restart with a fresh user message. */
+  const pendingInjection = new Map<string, boolean>();
 
   const runSession = async (session: Session): Promise<void> => {
     // C1: restore HITL to IDLE before each run so a NEW warn-level command can
@@ -303,6 +305,13 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     } finally {
       if (activeRuns.get(session.id) === controller) {
         activeRuns.delete(session.id);
+      }
+      // A user message arrived while this run was live — restart the loop so
+      // the new instruction lands in the next LLM context (the run re-seeds
+      // memory from the store, which already holds the message).
+      if (pendingInjection.get(session.id) === true) {
+        pendingInjection.delete(session.id);
+        continueSession(session);
       }
     }
   };
@@ -381,6 +390,18 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     },
     onSessionResumed: (session) => {
       continueSession(session);
+    },
+    onMessageAdded: (session) => {
+      // User instruction: resume a completed/paused session, or interrupt a
+      // running one so the message reaches the next LLM context. The loop
+      // re-seeds memory from the store on every run, so the new message is
+      // picked up by the restarted run.
+      if (session.status === 'running') {
+        pendingInjection.set(session.id, true);
+        activeRuns.get(session.id)?.abort();
+      } else {
+        continueSession(session);
+      }
     },
     onSessionControl: (session, action) => {
       // pause/stop: abort the live run — the endpoint already set the final

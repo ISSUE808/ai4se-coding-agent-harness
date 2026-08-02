@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Session } from '../../types.js';
+import type { Message, Session } from '../../types.js';
 import type { HarnessEvents } from '../../events.js';
 import type { SessionStore } from '../session-store.js';
 
@@ -29,6 +29,12 @@ export interface SessionsRouterDeps {
    * Task 19 (I2): invoked after resume so the harness really starts the loop.
    */
   onSessionResumed?: (session: Session) => void;
+  /**
+   * Task 19 (user feedback): invoked after a user message is appended to an
+   * existing session — the harness injects the instruction into the loop
+   * (resume completed/paused sessions; interrupt running ones).
+   */
+  onMessageAdded?: (session: Session, message: Message) => void;
 }
 
 const MESSAGE_ROLES = ['user', 'assistant', 'tool', 'system', 'feedback'] as const;
@@ -141,7 +147,12 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
       res.status(400).json({ error: 'content is required' });
       return;
     }
-    const message = sessionStore.appendMessage(req.params.id, {
+    const session = sessionStore.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: `Session not found: ${req.params.id}` });
+      return;
+    }
+    const message = sessionStore.appendMessage(session.id, {
       role,
       content,
       metadata: typeof metadata === 'object' && metadata !== null ? metadata : undefined,
@@ -157,6 +168,10 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
       metadata: message.metadata,
       timestamp: message.timestamp,
     });
+    // Task 19 (user feedback): hand the new instruction to the integrated
+    // harness — a completed/paused session resumes, a running one is
+    // interrupted so the message lands in the next LLM context.
+    deps.onMessageAdded?.(session, message);
     res.json(message);
   });
 

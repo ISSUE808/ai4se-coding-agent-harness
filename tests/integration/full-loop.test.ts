@@ -439,6 +439,46 @@ describe('full integration — start --web wiring (Task 19)', () => {
     expect(executed[0].content).toContain('fatal');
   });
 
+  it('a user message resumes a completed session — the agent continues (user feedback)', async () => {
+    const mock = new MockProvider([
+      // First run: text-only → completed immediately.
+      { content: '任务完成。' },
+      // After the user message: the agent continues with a tool call…
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      // …and finishes again.
+      { content: '任务完成。' },
+    ]);
+    const { harness, sessionStore, web } = await makeHarness(makeConfig(configRoot, { maxRounds: 10 }), mock);
+    const created = await request(web.app).post('/api/sessions').send({ task: '第一个任务' });
+    const id = created.body.id as string;
+
+    const first = await waitForStatus(sessionStore, id, 'completed');
+    expect(first.messages.some((m) => m.role === 'tool')).toBe(false);
+
+    // User appends a new instruction to the finished session.
+    const post = await request(web.app)
+      .post(`/api/sessions/${id}/message`)
+      .send({ role: 'user', content: '继续：读取 test.ts' });
+    if (post.status !== 200) {
+      console.log('POST /message error body:', JSON.stringify(post.body));
+    }
+    expect(post.status).toBe(200);
+
+    // The harness resumes the loop with the new message in context — the
+    // scripted next response executes a tool call.
+    const start = Date.now();
+    let toolSeen = false;
+    while (Date.now() - start < 8000) {
+      const s = sessionStore.get(id);
+      if (s?.messages.some((m) => m.role === 'tool' && m.metadata?.toolName === 'read_file')) {
+        toolSeen = true;
+        break;
+      }
+      await silence(50);
+    }
+    expect(toolSeen).toBe(true);
+  });
+
   it('反馈失败 3 次 → 升级 → HITL 暂停（approvalRequired 消息）', async () => {
     const mock = new MockProvider([
       { toolCalls: [{ name: 'write_file', arguments: { path: 'test.ts', content: 'const x: number = "str"' } }] },

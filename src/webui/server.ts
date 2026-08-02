@@ -6,7 +6,7 @@ import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
-import type { Config, Session } from '../types.js';
+import type { Config, Message, Session } from '../types.js';
 import type { HarnessEvents } from '../events.js';
 import type { HarnessEventMap } from '../events.js';
 import type { CredentialStore } from '../credentials/store.js';
@@ -60,6 +60,13 @@ export interface WebUIServerDeps {
    * on the stored session (a status change alone would leave a fake running).
    */
   onSessionResumed?: (session: Session) => void;
+  /**
+   * Task 19 (user feedback): invoked after a user message is appended to an
+   * existing session — the harness injects it into the loop (resumes a
+   * completed/paused session, or interrupts a running one so the new
+   * instruction lands in the next LLM context).
+   */
+  onMessageAdded?: (session: Session, message: Message) => void;
 }
 
 export interface WebUIServer {
@@ -104,6 +111,7 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
       onSessionCreated: deps.onSessionCreated,
       onSessionControl: deps.onSessionControl,
       onSessionResumed: deps.onSessionResumed,
+      onMessageAdded: deps.onMessageAdded,
     }),
   );
   app.use(
