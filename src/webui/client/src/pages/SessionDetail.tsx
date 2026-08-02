@@ -8,7 +8,7 @@
  * and dedupes by message id. All colors/fonts/spacing resolve to
  * design-tokens.ts.
  */
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -254,7 +254,12 @@ export default function SessionDetail() {
     maxRounds <= 0 ? 0 : Math.min(100, Math.max(0, (currentRound / maxRounds) * 100));
   const roundsLeft = maxRounds - currentRound;
   const model = typeof config?.model === 'string' ? config.model : null;
-  const guardrails = config?.guardrails;
+  // guardrails is unknown (Record<string, unknown>); narrow before member access.
+  const guardrailsRaw = config?.guardrails;
+  const guardrails =
+    typeof guardrailsRaw === 'object' && guardrailsRaw !== null
+      ? (guardrailsRaw as Record<string, unknown>)
+      : undefined;
 
   return (
     <main

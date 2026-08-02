@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, Loader2, Pause, Play, Plus, RefreshCw, SquareTerminal, X } from 'lucide-react';
+import { AlertTriangle, ChevronRight, Loader2, Pause, Play, Plus, RefreshCw, X } from 'lucide-react';
 import designTokens from '../design-tokens';
 import { createSession, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
 import { formatDuration, formatTokens } from '../lib/format';

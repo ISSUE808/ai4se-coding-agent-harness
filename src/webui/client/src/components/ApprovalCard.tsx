@@ -8,7 +8,7 @@
  * green/red note. All colors/fonts/spacing resolve to design-tokens.ts.
  */
 import { useState, type CSSProperties } from 'react';
-import { Check, PenLine, ShieldAlert, X } from 'lucide-react';
+import { Check, PenLine, X } from 'lucide-react';
 import designTokens from '../design-tokens';
 
 export type ApprovalStatus = 'pending' | 'approved' | 'modified' | 'denied';

@@ -686,9 +686,9 @@ function ConfigEditorCard() {
 // ─── 模型与护栏 (read-only snapshot of llm/agent/guardrails config) ─────────
 
 function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
-  const llm = config?.llm;
-  const agent = config?.agent;
-  const guardrails = config?.guardrails;
+  const llm = asRecord(config?.llm);
+  const agent = asRecord(config?.agent);
+  const guardrails = asRecord(config?.guardrails);
   const requireApproval = Array.isArray(guardrails?.requireApproval)
     ? (guardrails.requireApproval as unknown[])
     : [];
@@ -816,8 +816,8 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
 // ─── 通用 (webui runtime facts + credentials channel note) ───────────────────
 
 function GeneralCard({ config }: { config: ConfigValue | null }) {
-  const webui = config?.webui;
-  const llm = config?.llm;
+  const webui = asRecord(config?.webui);
+  const llm = asRecord(config?.llm);
 
   return (
     <section
@@ -897,6 +897,13 @@ function GeneralCard({ config }: { config: ConfigValue | null }) {
 }
 
 // ─── Shared section primitives for the read-only cards ───────────────────────
+
+/** Narrow an unknown config value to a record for safe member access. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 function SettingSection({ label, children }: { label: string; children: ReactNode }) {
   return (
