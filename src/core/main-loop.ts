@@ -257,12 +257,21 @@ export class AgentLoop {
         // Step 4: Guardrail checks
         const guardResult = this.runGuardrails(action, session);
         if (guardResult.blocked) {
-          // Blocked by guardrail
+          // Blocked by guardrail. The command/rule ride on the message so a
+          // WebUI refresh can rebuild the pending approval card from the REST
+          // snapshot (approval state is not persisted separately).
           const guardMsg: Message = {
             id: generateId(),
             role: 'system',
             content: `Guardrail blocked: ${guardResult.reason}`,
-            metadata: { approvalRequired: guardResult.needsApproval },
+            metadata: {
+              approvalRequired: guardResult.needsApproval,
+              guardrailRule: guardResult.reason ?? undefined,
+              guardrailCommand:
+                action.tool === 'run_shell' && typeof action.params.command === 'string'
+                  ? action.params.command
+                  : undefined,
+            },
             timestamp: nowISO(),
           };
           this.addMessage(session, guardMsg);
