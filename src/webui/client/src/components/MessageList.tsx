@@ -125,29 +125,11 @@ function MessageRow({ message }: { message: SessionMessage }) {
       return <ToolCard message={message} />;
     case 'feedback':
       return <FeedbackCard message={message} />;
-    default: {
-      // Short system notes render as a center pill (prototype .sys-note);
-      // long ones (e.g. "[HITL] Approved command executed" + output) would
-      // balloon the pill into a huge grey box — render them as plain left
-      // aligned mono text instead.
-      const isLong = message.content.includes('\n') || message.content.length > 80;
-      if (isLong) {
-        return (
-          <div
-            style={{
-              fontFamily: designTokens.typography.fontFamily.mono,
-              fontSize: designTokens.typography.fontSize.xs,
-              lineHeight: String(designTokens.typography.lineHeight.relaxed),
-              color: designTokens.colors.textMuted,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              padding: '2px 0',
-            }}
-          >
-            {message.content}
-          </div>
-        );
-      }
+    default:
+      // System note — center pill (prototype .sys-note). The pill caps its
+      // width and wraps long content (e.g. "[HITL] Approved command executed"
+      // + output) so it never balloons into a full-width box or spills past
+      // the rounded corners; multi-line rows keep a relaxed line height.
       return (
         <div
           style={{
@@ -160,19 +142,24 @@ function MessageRow({ message }: { message: SessionMessage }) {
         >
           <span
             style={{
+              display: 'inline-block',
+              maxWidth: '85%',
               background: designTokens.colors.well,
               borderWidth: 1,
               borderStyle: 'solid',
               borderColor: designTokens.colors.border,
               padding: '3px 12px',
               borderRadius: designTokens.radius.pill,
+              lineHeight: String(designTokens.typography.lineHeight.relaxed),
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              textAlign: 'left',
             }}
           >
             {message.content}
           </span>
         </div>
       );
-    }
   }
 }
 
