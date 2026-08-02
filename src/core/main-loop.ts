@@ -277,7 +277,7 @@ export class AgentLoop {
 
         // Step 5: Execute tool
         const toolResult = await this.executeTool(action, session.workspaceRoot);
-        this.addToolMessage(session, action.tool, action.params, toolResult);
+        this.addToolMessage(session, action.tool, action.params, toolResult, action.id);
 
         // Step 6: Feedback loop
         const feedbackPassed = await this.runFeedback(action, toolResult, session);
@@ -341,6 +341,7 @@ export class AgentLoop {
       const actions: Action[] = response.toolCalls.map((tc) => ({
         tool: tc.name,
         params: tc.arguments,
+        id: tc.id,
       }));
       return { actions, parseError: false };
     }
@@ -629,6 +630,7 @@ export class AgentLoop {
     toolName: string,
     params: Record<string, unknown>,
     result: ToolResult,
+    toolCallId?: string,
   ): void {
     const toolMsg: Message = {
       id: generateId(),
@@ -636,7 +638,12 @@ export class AgentLoop {
       content: result.success
         ? (result.output ?? 'Tool executed successfully')
         : (result.error ?? 'Tool execution failed'),
-      metadata: { toolName, toolInput: params, toolResult: result },
+      metadata: {
+        toolName,
+        toolInput: params,
+        toolResult: result,
+        ...(toolCallId !== undefined ? { toolCallId } : {}),
+      },
       timestamp: nowISO(),
     };
     this.addMessage(session, toolMsg);

@@ -251,6 +251,77 @@ describe('DeepSeekProvider', () => {
     });
   });
 
+  it('formats assistant tool_calls and tool results with tool_call_id (OpenAI protocol)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    // Round 2 context: assistant declared tool_calls, tool reported its result.
+    const messages: Message[] = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Reading the file.',
+        metadata: {
+          toolInput: {
+            toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { paths: ['a.ts'] } }],
+          },
+        },
+        timestamp: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 't1',
+        role: 'tool',
+        content: 'ok',
+        metadata: { toolCallId: 'call_1' },
+        timestamp: '2026-01-01T00:00:01.000Z',
+      },
+    ];
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(messages, []);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.messages).toEqual([
+      {
+        role: 'assistant',
+        content: 'Reading the file.',
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"paths":["a.ts"]}' },
+          },
+        ],
+      },
+      { role: 'tool', content: 'ok', tool_call_id: 'call_1' },
+    ]);
+  });
+
+  it('carries tool_call ids through to the parsed toolCalls', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_xyz',
+                type: 'function',
+                function: { name: 'read_file', arguments: '{"paths":["a.ts"]}' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    const result = await provider.complete(dummyMessages, []);
+
+    expect(result.toolCalls![0].id).toBe('call_xyz');
+  });
+
   it('passes through already-standard JSON Schema parameters unchanged', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'OK' } }],
@@ -365,10 +436,12 @@ describe('DeepSeekProvider', () => {
 
     expect(result.toolCalls).toHaveLength(2);
     expect(result.toolCalls![0]).toEqual({
+      id: 'call_1',
       name: 'read_file',
       arguments: { filePath: '/src/a.ts' },
     });
     expect(result.toolCalls![1]).toEqual({
+      id: 'call_2',
       name: 'write_file',
       arguments: { filePath: '/src/b.ts', content: '// code' },
     });

@@ -43,10 +43,35 @@ export class DeepSeekProvider implements LLMProvider {
   }
 
   async complete(messages: Message[], tools: Tool[]): Promise<LLMResponse> {
-    const openaiMessages = messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    // OpenAI tool-calling protocol: an assistant message that declared tool
+    // calls must resend them (`tool_calls`), and every tool result message
+    // must reference its call (`tool_call_id`) — DeepSeek rejects a missing
+    // `tool_call_id` with 400.
+    const openaiMessages = messages.map((m) => {
+      if (m.role === 'assistant') {
+        const calls = m.metadata?.toolInput?.toolCalls;
+        if (Array.isArray(calls) && calls.length > 0) {
+          return {
+            role: 'assistant',
+            content: m.content,
+            tool_calls: calls.map((c) => ({
+              id: c.id ?? 'call_unknown',
+              type: 'function' as const,
+              function: { name: c.name, arguments: JSON.stringify(c.arguments) },
+            })),
+          };
+        }
+        return { role: 'assistant', content: m.content };
+      }
+      if (m.role === 'tool') {
+        return {
+          role: 'tool',
+          content: m.content,
+          tool_call_id: m.metadata?.toolCallId ?? 'call_unknown',
+        };
+      }
+      return { role: m.role, content: m.content };
+    });
 
     const openaiTools = tools.map((t) => ({
       type: 'function' as const,
@@ -69,6 +94,7 @@ export class DeepSeekProvider implements LLMProvider {
     let toolCalls: LLMResponse['toolCalls'];
     if (choice?.tool_calls && choice.tool_calls.length > 0) {
       toolCalls = choice.tool_calls.map((tc) => ({
+        id: tc.id,
         name: tc.function.name,
         arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>,
       }));

@@ -6,6 +6,8 @@ export interface Message {
     toolName?: string;
     toolInput?: Record<string, unknown>;
     toolResult?: ToolResult;
+    /** OpenAI tool_call id — present on `tool` role result messages. */
+    toolCallId?: string;
     feedbackResult?: FeedbackResult;
     approvalRequired?: boolean;
     important?: boolean;
@@ -31,6 +33,8 @@ export interface Session {
 export interface Action {
   tool: string;
   params: Record<string, unknown>;
+  /** OpenAI tool_call id — links the tool result message back to the call. */
+  id?: string;
 }
 
 export interface ToolResult {
@@ -66,7 +70,7 @@ export interface LLMProvider {
 
 export interface LLMResponse {
   content: string | null;
-  toolCalls?: { name: string; arguments: Record<string, unknown> }[];
+  toolCalls?: { id?: string; name: string; arguments: Record<string, unknown> }[];
 }
 
 export interface Validator {
