@@ -26,3 +26,30 @@ jobs:
 
       - name: Run unit tests
         run: npm test
+
+  webui-client:
+    name: WebUI Client (tests + build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/webui/client/package-lock.json
+
+      - name: Install client dependencies
+        working-directory: src/webui/client
+        run: npm ci
+
+      - name: Run client tests
+        working-directory: src/webui/client
+        run: npm test
+
+      - name: Type-check and build client
+        working-directory: src/webui/client
+        run: npm run build
