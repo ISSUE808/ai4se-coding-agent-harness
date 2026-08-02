@@ -405,3 +405,23 @@
   - **用户问"字段有没有用"是真实 bug 探测器**：POST /api/sessions 静默丢弃 maxRounds（store 固定 defaultMaxRounds=3）——WebUI 里"最大轮次"一直无效。修复为透传 + `0 = 无上限`语义（RoundManager/shouldTerminate 支持 0）。**教训：UI 字段与后端消费链必须端到端核对，不能只看前端**（端到端 curl 验证才暴露）
   - **原型复刻的诚实性取舍**：原型是演示数据——"显示密钥明文"（安全约束拒绝）、Token 输入/输出明细（后端无数据）、模型/工作目录字段（创建 API 不支持）都不造假，用占位/说明替代并在汇报中明示
   - **旧 dev 进程不热重载**：`npx tsx`（非 watch）启动的后端不感知代码改动——改后端后必须重启进程，前端 HMR 推送后旧实例会白屏（HMR 状态损坏），强刷或换新端口实例
+
+---
+
+## 2026-08-02 17:22 Task 19：完整集成——CLI `--web` + Agent 循环 + 会话级工作目录绑定
+
+- **触发技能**：`test-driven-development`（subagent）、`requesting-code-review`（两阶段评审）、`subagent-driven-development`
+- **Subagent**：`a1972c7f`（实现 `860336b` + 评审修复 `d411349`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：`start --web` 同进程集成（复用 createWebUIServer 注入模式）；会话级 workspaceRoot 全链路（Session 字段 → API 校验 → 主循环 ToolContext/护栏/验证器基准 → WebUI modal 字段 + 详情显示）；full-loop.test.ts 三场景 MockProvider 确定性；PLAN「需求备注」5 子项逐项验证
+- **产出**：
+  - Commit: `860336b`（20 files +1061/−86）+ `d411349`（7 files +304/−9，评审修复）
+  - 涉及文件: start.ts、main-loop.ts、round-manager.ts、session-store.ts、api/{sessions,approvals}.ts、server.ts、types.ts、scope-fence.ts（注释）、client {api,Dashboard,SessionDetail}.tsx + full-loop.test.ts 等
+  - 测试: 主项目 419→432→436（修复后 436/436）+ client 120→123；tsc + 双 build 通过
+- **评审**：两轮——首轮 1 CRITICAL（C1 HITL 无回 IDLE）+ 2 IMPORTANT（I1 升级暂停无法恢复 / I2 控制端点与 loop 不一致）+ 1 Minor（M1 --help 退出码）→ subagent 修复 → 复验通过（436+123 全绿 + 代码抽查）
+- **人工干预**：无（评审结论与修复决策由主 agent 给出，subagent 执行）
+- **教训**：
+  - **"单次消费"测试会掩盖状态机缺陷**：full-loop 场景 2 只批准一次，HITLManager 批准后永不回 IDLE 的缺陷被测试掩盖——第一次批准后所有后续 warn 命令静默拦截。评审价值正在于此：**评审要找测试路径之外的确定性失败**
+  - **升级/恢复语义要闭环**：upgrade 暂停后批准恢复，RoundManager(currentRound) 立即再升级形成死循环——"暂停"必须配"如何恢复"（决策：人工批准 = 授权继续，maxRounds += currentRound 写回持久化）
+  - **REST 控制端点与执行器必须共享同一生命周期**：status-only 的 resume/pause 在真实 loop 面前是假状态——resume 必须真实启动 loop、pause/stop 必须真实取消（AbortSignal 轮级检查），否则 WebUI 按钮语义失真
+  - **TDD 在修复中的价值**：C1/I1/I2/M1 各配一个先 RED 的失败测试（第二次 warn 批准、升级批准恢复、慢 provider 控制时序、exitOverride 白盒）——修复有回归锚点
+  - **评审注入的决策项**：I3（并发 HITL 键控）/M2（--cwd）/M3（符号链接词法校验）均按范围评估后不修并文档注明——不是所有评审项都要修，范围决策要显式
