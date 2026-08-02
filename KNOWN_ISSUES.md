@@ -56,6 +56,16 @@
 | Settings「清空会话」danger-zone | 按钮 disabled（"Task 19 后提供"） | 新增 DELETE 端点（会话批量清空） |
 | 上下文栏 Token 明细 | 仅总计 | 后端提供输入/输出/缓存命中统计 |
 
+### 9.5 parseActions 对 markdown 总结误判 JSON（低）[实测]
+- **现象**：agent 输出含代码块的 markdown 总结（如 `**add.ts** — ...` + ts 代码块）被 `parseActions` 判定为"看起来像 JSON" → 尝试 `JSON.parse` 失败 → 回灌 `parse_error` 反馈 → agent 多消耗一轮重新输出纯文本才完成。
+- **建议**：`parseActions` 的 JSON 判定收紧（如仅当 content 以 `{`/`[` 开头且 trim 后首尾配对才尝试解析），或 parse_error 反馈带上更明确的格式要求。
+- **位置**：`src/core/main-loop.ts`（parseActions）。
+
+### 9.6 run_test 无 pattern 参数行为不明确（低）[实测]
+- **现象**：`run_test` 无参数调用返回 `{passed:false, results:[]}`（无 pattern 匹配），agent 困惑后自适应改用 `run_shell` 直跑 vitest 成功——工具默认行为（无 pattern 时跑全部？）与反馈信息不清晰。
+- **建议**：`run_test` 无 pattern 时明确跑全部测试并解析结果（或返回可操作的错误信息说明默认行为）；结果解析失败时输出原始 stdout 帮助 agent 理解。
+- **位置**：`src/tools/run-test.ts`。
+
 ### 10. 计划内未完成（Task 20/21/22）[计划内]
 - Task 20 机制演示（§A.6 三项 mock 演示）
 - Task 21 分发（`npm install -g` + `docker build && docker run`）
