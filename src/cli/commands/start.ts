@@ -135,7 +135,7 @@ function formatMessageLine(data: HarnessEventMap['message:added']): string {
  */
 export async function executeApprovedActionImpl(
   session: Session,
-  approved: { tool: string; params: Record<string, unknown> },
+  approved: { tool: string; params: Record<string, unknown>; id?: string },
   events: HarnessEvents,
 ): Promise<void> {
   const ctx = { workspaceRoot: session.workspaceRoot };
@@ -198,21 +198,40 @@ export async function executeApprovedActionImpl(
       duration_ms: 0,
     };
   }
+  // Claude Code model: after approval the tool simply returns its result —
+  // no intermediate "[HITL] approved/executed" system noise. Rewrite the
+  // paused action's blocked tool message with the real execution result, so
+  // the resumed loop's LLM sees a NORMAL tool outcome (assistant tool_calls →
+  // tool result). The client upserts by message id, so the card updates too.
+  if (approved.id) {
+    const blockedMsg = session.messages.find(
+      (m) => m.role === 'tool' && m.metadata?.toolCallId === approved.id,
+    );
+    if (blockedMsg) {
+      blockedMsg.content = result.success
+        ? (result.output ?? 'Tool executed successfully')
+        : (result.error ?? 'Tool execution failed');
+      blockedMsg.metadata = { ...blockedMsg.metadata, toolResult: result };
+      events.emit('message:added', {
+        id: blockedMsg.id,
+        role: blockedMsg.role,
+        content: blockedMsg.content,
+        metadata: blockedMsg.metadata,
+        timestamp: blockedMsg.timestamp,
+      });
+      return;
+    }
+  }
+  // Fallback (no paired blocked message): append a compact record.
   const outcome = result.success ? (result.output ?? '') : (result.error ?? '');
   const label =
     approved.tool === 'run_shell'
       ? String(approved.params.command ?? '')
       : `${approved.tool}: ${JSON.stringify(approved.params)}`;
-  // Unambiguous wording: the LLM must read "executed" as done. The first line
-  // carries the verdict (SUCCESS/FAILED) so it cannot be missed even when the
-  // output is long; the trailing instruction tells the LLM to move on.
-  const record =
-    `[HITL] ✅ Operation executed (${result.success ? 'SUCCESS' : 'FAILED'}): ${label}\n${outcome}` +
-    '\n（操作已执行完毕，继续你的任务，无需再次请求批准。）';
   const message: Message = {
     id: crypto.randomUUID(),
     role: 'system',
-    content: record.trim(),
+    content: `[HITL] Operation executed: ${label}\n${outcome}`.trim(),
     timestamp: new Date().toISOString(),
   };
   session.messages.push(message);
@@ -512,7 +531,7 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
    */
   const executeApprovedAction = (
     session: Session,
-    approved: { tool: string; params: Record<string, unknown> },
+    approved: { tool: string; params: Record<string, unknown>; id?: string },
   ): Promise<void> => executeApprovedActionImpl(session, approved, events);
 
   const web = createWebUIServer({

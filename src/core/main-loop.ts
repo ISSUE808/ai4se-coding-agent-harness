@@ -246,9 +246,8 @@ export class AgentLoop {
       role: 'system',
       content:
         '部分操作（工作区外读写与高危命令）会先收到 "Operation paused for human approval" 消息' +
-        '等待人工确认。人工批准后，系统会直接执行该操作，并发送 "[HITL] ✅ Operation executed (SUCCESS|FAILED)"' +
-        '消息告知结果。看到这条 ✅ 消息即表示操作已执行完毕——不要再次请求批准、不要重复执行相同命令、' +
-        '不要说操作被拦截或等待批准，直接继续你的任务。',
+        '等待人工确认。人工批准后，该工具会正常执行并返回结果（工具消息）。' +
+        '看到该工具的执行结果即表示操作已完成——不要重复执行相同命令、不要说操作被拦截或等待批准，直接继续你的任务。',
       timestamp: nowISO(),
     });
 
@@ -615,7 +614,11 @@ export class AgentLoop {
         });
         // Trigger HITL
         try {
-          this.guard.hitl.requestApproval(command, { tool: action.tool, params: action.params });
+          this.guard.hitl.requestApproval(command, {
+            tool: action.tool,
+            params: action.params,
+            id: action.id,
+          });
         } catch {
           // HITL already in another state — treat as blocked so the stale
           // pendingCommand is not silently overwritten
@@ -716,7 +719,7 @@ export class AgentLoop {
     try {
       this.guard.hitl.requestApproval(
         command || `${action.tool}: ${reason}`,
-        { tool: action.tool, params: action.params },
+        { tool: action.tool, params: action.params, id: action.id },
       );
     } catch {
       return { blocked: true, needsApproval: false, reason: `HITL busy: ${reason}` };

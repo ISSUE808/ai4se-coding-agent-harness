@@ -135,7 +135,7 @@ describe('runStartTask', () => {
 
   it('CLI interactive approval: approve executes the operation and resumes', async () => {
     const responses: LLMResponse[] = [
-      { toolCalls: [{ name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { toolCalls: [{ id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
       { content: 'done' },
     ];
     const session = await runStartTask({
@@ -147,20 +147,19 @@ describe('runStartTask', () => {
     });
     expect(session.status).toBe('completed');
     // The approved shell command was executed by the harness (it fails — not
-    // a git repo — but it RAN), and the loop resumed to completion.
-    expect(
-      session.messages.some(
-        (m) =>
-          m.content.includes('Operation executed (') &&
-          m.content.includes('git push --force origin feature/x'),
-      ),
-    ).toBe(true);
-    expect(session.messages.some((m) => m.content.includes('fatal'))).toBe(true);
+    // a git repo — but it RAN): the paused tool message was rewritten with
+    // the real execution result, visible to the LLM.
+    const executed = session.messages.filter(
+      (m) =>
+        m.role === 'tool' &&
+        ((m.metadata?.toolResult?.error as string | undefined) ?? '').includes('fatal'),
+    );
+    expect(executed.length).toBeGreaterThanOrEqual(1);
   });
 
   it('CLI interactive approval: deny records the decision and continues', async () => {
     const responses: LLMResponse[] = [
-      { toolCalls: [{ name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { toolCalls: [{ id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
       { content: 'done' },
     ];
     const session = await runStartTask({

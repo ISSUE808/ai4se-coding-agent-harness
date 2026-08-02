@@ -402,7 +402,7 @@ describe('full integration — start --web wiring (Task 19)', () => {
   it('护栏 HITL warn 触发 → 用户通过 API 批准 → agent 继续执行并完成', async () => {
     const mock = new MockProvider([
       // Round 1: warn-level command → HITL pause (approval required).
-      { toolCalls: [{ name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { toolCalls: [{ id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
       // After the user approves: the agent continues with a normal tool call…
       { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
       // …and finishes.
@@ -429,16 +429,16 @@ describe('full integration — start --web wiring (Task 19)', () => {
     const toolMsgs = done.messages.filter((m) => m.role === 'tool');
     expect(toolMsgs.some((m) => m.metadata?.toolName === 'read_file' && m.metadata?.toolResult?.success)).toBe(true);
 
-    // SPEC §3.4: approval authorizes EXECUTION — the harness ran the command
-    // directly (never delegated to the LLM re-issuing it).
+    // SPEC §3.4: approval authorizes EXECUTION — the paused tool message was
+    // REWRITTEN with the real execution result (Claude Code model: the LLM
+    // sees a normal tool outcome, not "[HITL] approved" noise). git push
+    // fails (not a git repo) but it RAN — the error is visible to the LLM.
     const executed = done.messages.filter(
       (m) =>
-        m.content.includes('Operation executed (') &&
-        m.content.includes('git push --force origin feature/x'),
+        m.role === 'tool' &&
+        ((m.metadata?.toolResult?.error as string | undefined) ?? '').includes('fatal'),
     );
-    expect(executed.length).toBe(1);
-    // The execution result (failure: not a git repo) is visible to the LLM.
-    expect(executed[0].content).toContain('fatal');
+    expect(executed.length).toBeGreaterThanOrEqual(1);
   });
 
   it('a user message resumes a completed session — the agent continues (user feedback)', async () => {

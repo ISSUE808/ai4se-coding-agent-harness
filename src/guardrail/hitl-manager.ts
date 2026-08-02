@@ -9,6 +9,9 @@ export enum HITLState {
 export interface PendingAction {
   tool: string;
   params: Record<string, unknown>;
+  /** OpenAI tool_call id of the paused action — lets the harness rewrite the
+   *  blocked tool message with the real execution result after approval. */
+  id?: string;
 }
 
 export class HITLManager {
