@@ -238,6 +238,18 @@ export class AgentLoop {
       });
     }
 
+    // Human-in-the-loop semantics — tell the LLM what to expect so it does
+    // not re-request approval for operations the harness already executed.
+    this.memory.addMessage({
+      id: generateId(),
+      role: 'system',
+      content:
+        '被安全护栏拦截的操作（含工作区外读写与高危命令）会暂停等待人工确认。' +
+        '人工批准后，系统会直接执行该操作，并以 "[HITL] Approved operation executed" 消息告知结果。' +
+        '看到该消息即表示操作已执行，不要再次请求批准、重复执行相同命令，或声称操作被拦截。',
+      timestamp: nowISO(),
+    });
+
     this.events.emit('session:status', { sessionId: session.id, status: 'running' });
 
     outer: while (true) {
@@ -586,6 +598,11 @@ export class AgentLoop {
         return { blocked: true, needsApproval: false, reason: guardResult.rule ?? 'unknown' };
       }
       if (guardResult.level === 'warn') {
+        // The LLM may re-issue an already-approved command (it does not always
+        // realize the harness executed it) — pass it without a second prompt.
+        if (this.guard.hitl.isApprovedCommand(command)) {
+          return { blocked: false, needsApproval: false };
+        }
         this.events.emit('guardrail:triggered', {
           rule: guardResult.rule ?? 'unknown',
           command,
@@ -682,6 +699,10 @@ export class AgentLoop {
     session: Session,
     command: string,
   ): { blocked: boolean; needsApproval: boolean; reason: string } {
+    // Already-approved command → execute directly (see warn branch above).
+    if (command !== '' && this.guard.hitl.isApprovedCommand(command)) {
+      return { blocked: false, needsApproval: false, reason: `approved: ${reason}` };
+    }
     this.events.emit('guardrail:triggered', {
       rule: reason,
       command: command || action.tool,

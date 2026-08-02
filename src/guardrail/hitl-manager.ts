@@ -17,6 +17,10 @@ export class HITLManager {
   /** Full action behind the pending/approved decision — lets the harness
    *  execute the authorized operation (shell command, file write, …). */
   private pendingAction: PendingAction | null = null;
+  /** Commands approved in this session — re-issued identical commands (the
+   *  LLM may not realize the harness already executed them) pass without a
+   *  second confirmation. Cleared only on a fresh HITLManager, not on reset. */
+  private approvedCommands = new Set<string>();
 
   getState(): HITLState {
     return this.state;
@@ -66,6 +70,14 @@ export class HITLManager {
       throw new Error(`Cannot approve in state ${this.state}`);
     }
     this.state = HITLState.EXECUTING;
+    if (this.pendingCommand !== null) {
+      this.approvedCommands.add(this.pendingCommand);
+    }
+  }
+
+  /** True when this exact command was already approved in this session. */
+  isApprovedCommand(command: string): boolean {
+    return this.approvedCommands.has(command);
   }
 
   approveWithModification(command: string): void {
