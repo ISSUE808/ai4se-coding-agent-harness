@@ -141,15 +141,9 @@ export async function executeApprovedActionImpl(
   const ctx = { workspaceRoot: session.workspaceRoot };
   let result: ToolResult;
   if (approved.tool === 'run_shell') {
+    // Full output is kept — user decision (complete information over
+    // brevity; the LLM sees everything the command produced).
     result = await runShellTool.execute(approved.params, ctx);
-    // Cap verbose shell output so the resumed LLM sees the outcome without
-    // drowning in (e.g.) a full directory listing.
-    if (result.output !== undefined && result.output.length > 2000) {
-      result = {
-        ...result,
-        output: `...(output truncated, ${result.output.length} chars)\n${result.output.slice(-1500)}`,
-      };
-    }
   } else if (approved.tool === 'write_file') {
     const target = String(approved.params.path ?? '');
     const start = Date.now();
