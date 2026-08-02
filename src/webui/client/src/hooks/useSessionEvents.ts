@@ -64,9 +64,11 @@ export function useSessionEvents(
     setState((prev) => {
       // Rebuild a pending approval from the REST snapshot: the harness records
       // approvalRequired + command/rule on a system message (approval state is
-      // not persisted separately), so a refresh restores the card.
+      // not persisted separately), so a refresh restores the card. Only for
+      // sessions still paused — a completed session's stale approval message
+      // must not resurrect an unusable card ("Cannot approve in state IDLE").
       let pendingApproval = prev.pendingApproval;
-      if (pendingApproval === null) {
+      if (pendingApproval === null && (initial.status ?? prev.status) === 'paused') {
         const lastApproval = [...initial.messages]
           .reverse()
           .find((m) => m.metadata?.approvalRequired === true);

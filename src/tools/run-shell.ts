@@ -1,6 +1,30 @@
 import { execSync } from 'child_process';
+import { existsSync } from 'node:fs';
+import * as path from 'node:path';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { buildWhitelistedEnv } from './env-utils.js';
+
+/**
+ * On Windows, run shell commands through Git Bash when available — LLMs emit
+ * POSIX/bash syntax (`/c/Users/...`, `ls`, `cat`) which cmd.exe cannot run
+ * (`'cat' is not recognized`, `/c/...` paths are invalid). Falls back to the
+ * default shell (cmd) when Git Bash is not installed.
+ */
+function resolveShell(): string | undefined {
+  if (process.platform !== 'win32') {
+    return undefined;
+  }
+  const candidates = [
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+    'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
 
 interface RunShellParams {
   command: string;
@@ -45,6 +69,7 @@ export const runShellTool: Tool = {
         env: buildWhitelistedEnv(),
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
+        shell: resolveShell(),
       });
 
       return {

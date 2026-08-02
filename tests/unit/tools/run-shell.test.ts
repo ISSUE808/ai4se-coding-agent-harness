@@ -39,29 +39,28 @@ describe('run_shell tool', () => {
   });
 
   it('runs commands with cwd locked to workspaceRoot', async () => {
-    // Create a file in workspaceRoot, then verify pwd shows the workspace
+    // Create a file in workspaceRoot, then verify pwd shows the workspace.
+    // Commands run through a POSIX shell (Git Bash on Windows) — `ls` works
+    // on both platforms.
     const marker = 'marker-' + Date.now() + '.txt';
     fs.writeFileSync(path.join(workspaceRoot, marker), 'workspace');
-    // On Windows, use `dir` to list files; on Unix, use `ls`
-    const isWin = process.platform === 'win32';
-    const cmd = isWin ? `dir /b` : `ls`;
-    const result = await runShellTool.execute({ command: cmd }, context);
+    const result = await runShellTool.execute({ command: `ls` }, context);
     expect(result.success).toBe(true);
     // The marker file should appear in the output since cwd is workspaceRoot
     expect(result.output).toContain(marker);
   });
 
   it('enforces environment variable whitelist', async () => {
-    // PATH, HOME, USER, TEMP, TMP should be available; others stripped
-    const isWin = process.platform === 'win32';
-    const cmd = isWin
-      ? 'echo PATH=%PATH% && echo TEMP=%TEMP%'
-      : 'echo PATH=$PATH && echo HOME=$HOME';
-    const result = await runShellTool.execute({ command: cmd }, context);
+    // PATH, HOME, USER, TEMP, TMP should be available; others stripped.
+    // POSIX syntax works on both platforms (Git Bash on Windows).
+    const result = await runShellTool.execute(
+      { command: 'echo PATH=$PATH && echo HOME=$HOME' },
+      context,
+    );
     expect(result.success).toBe(true);
-    // The whitelisted vars should have values (not empty)
-    expect(result.output).not.toContain('PATH=%');
+    // The whitelisted vars should have values (not empty / not literal)
     expect(result.output).not.toContain('PATH=$');
+    expect(result.output).not.toContain('HOME=$');
   });
 
   it('has a default timeout of 60 seconds', async () => {

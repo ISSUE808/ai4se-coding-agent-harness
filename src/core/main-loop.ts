@@ -64,6 +64,35 @@ function isSensitivePath(p: string): boolean {
 }
 
 /**
+ * Detect a shell command that READS a file outside the workspace (e.g.
+ * `cat C:\path`, `type hosts`, `Get-Content /etc/x`). Returns the offending
+ * target for the approval prompt, or null when the command looks contained.
+ */
+function shellReadsOutside(command: string, workspaceRoot: string): string | null {
+  const readPatterns = [
+    /\b(cat|type|Get-Content|head|tail|less|more|od)\s+["']?([^"'\s|;&]+)/,
+    /\b(cat|Get-Content|type)\s+<["']?([^"'\s|;&]+)/,
+  ];
+  for (const pattern of readPatterns) {
+    const m = command.match(pattern);
+    if (!m) {
+      continue;
+    }
+    const candidate = m[m.length - 1];
+    if (!candidate || candidate.startsWith('-')) {
+      continue;
+    }
+    const abs = path.isAbsolute(candidate)
+      ? path.normalize(candidate)
+      : path.resolve(workspaceRoot, candidate);
+    if (!abs.startsWith(path.resolve(workspaceRoot) + path.sep) && abs !== path.resolve(workspaceRoot)) {
+      return abs;
+    }
+  }
+  return null;
+}
+
+/**
  * Detect a shell command that writes/deletes outside the workspace (e.g.
  * `echo x > C:\path`, `rm C:\path`, `mv /etc/x /tmp`). Returns the offending
  * target for the approval prompt, or null when the command looks contained.
@@ -597,12 +626,22 @@ export class AgentLoop {
     }
 
     if (isShell && command.length > 0) {
-      // Destructive shell writes outside the workspace need a decision.
+      // Shell access outside the workspace — writes and reads of system paths
+      // both need a human decision (user-in-the-loop supervision).
       const outside = shellWritesOutside(command, session.workspaceRoot);
       if (outside) {
         return this.requestApprovalFor(
           action,
           `Shell write outside workspace: ${outside}`,
+          session,
+          command,
+        );
+      }
+      const outsideRead = shellReadsOutside(command, session.workspaceRoot);
+      if (outsideRead) {
+        return this.requestApprovalFor(
+          action,
+          `Shell read outside workspace: ${outsideRead}`,
           session,
           command,
         );
@@ -622,14 +661,15 @@ export class AgentLoop {
       );
     }
 
-    // Reads are open (Claude Code model) — keep ScopeFence only as a
-    // last-resort guard for accidental workspace-relative mistakes.
-    if (isReadOp && resolvedPath && actionPath) {
-      const rel = path.relative(session.workspaceRoot, resolvedPath);
-      if (rel.startsWith('..') && !isSensitivePath(actionPath)) {
-        // Intentional outside read — allowed without approval (user's machine).
-        return { blocked: false, needsApproval: false };
-      }
+    // Reads outside the workspace also require a decision (supervision model):
+    // the user sees what the agent touches outside its project.
+    if (isReadOp && resolvedPath && actionPath && !this.guard.scopeFence.validatePath(resolvedPath, session.workspaceRoot)) {
+      return this.requestApprovalFor(
+        action,
+        `Read outside workspace: ${actionPath}`,
+        session,
+        command,
+      );
     }
 
     return { blocked: false, needsApproval: false };
