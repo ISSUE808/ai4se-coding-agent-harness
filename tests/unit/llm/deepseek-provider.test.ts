@@ -322,6 +322,29 @@ describe('DeepSeekProvider', () => {
     expect(result.toolCalls![0].id).toBe('call_xyz');
   });
 
+  it('maps feedback-role messages to system (OpenAI protocol has no feedback role)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    const messages: Message[] = [
+      {
+        id: 'f1',
+        role: 'feedback',
+        content: '[feedback] tsc: type error at add.ts:1',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(messages, []);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.messages).toEqual([
+      { role: 'system', content: '[feedback] tsc: type error at add.ts:1' },
+    ]);
+  });
+
   it('passes through already-standard JSON Schema parameters unchanged', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'OK' } }],

@@ -70,7 +70,10 @@ export class DeepSeekProvider implements LLMProvider {
           tool_call_id: m.metadata?.toolCallId ?? 'call_unknown',
         };
       }
-      return { role: m.role, content: m.content };
+      // The OpenAI protocol has no `feedback` role — feedback content must
+      // reach the LLM (it drives the correction loop), so send it as system.
+      const role = m.role === 'feedback' ? 'system' : m.role;
+      return { role, content: m.content };
     });
 
     const openaiTools = tools.map((t) => ({
