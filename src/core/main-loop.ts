@@ -21,7 +21,7 @@ import type { ActionClassifier } from '../feedback/action-classifier.js';
 import type { ValidatorSelector } from '../feedback/validator-selector.js';
 import type { FailureClassifier } from '../feedback/failure-classifier.js';
 import type { StrategyMatcher } from '../feedback/strategy-matcher.js';
-import type { RoundManager } from '../feedback/round-manager.js';
+import { RoundManager } from '../feedback/round-manager.js';
 import { ValidatorChain } from '../feedback/validator-chain.js';
 import type { SessionMemory } from '../memory/session-memory.js';
 import type { HarnessEvents } from '../events.js';
@@ -47,6 +47,24 @@ interface FeedbackSet {
   failureClassifier: FailureClassifier;
   strategyMatcher: StrategyMatcher;
   roundManager: RoundManager;
+}
+
+/**
+ * Task 19 run options: per-session workspace root binding. The loop builds
+ * every execution context (tool cwd, scope-fence base, validator cwd) from
+ * the SESSION's workspaceRoot, falling back to the global config value.
+ */
+export interface AgentRunOptions {
+  /**
+   * Attach to an existing session (WebUI-created via POST /api/sessions).
+   * The loop mutates this exact object — the SessionStore sees every status
+   * change and message. The session's own workspaceRoot/maxRounds win.
+   */
+  session?: Session;
+  /** Session workspace root; defaults to config.agent.workspaceRoot. */
+  workspaceRoot?: string;
+  /** Round cap; 0 = unlimited; defaults to config.agent.maxRounds. */
+  maxRounds?: number;
 }
 
 export class AgentLoop {
@@ -79,36 +97,59 @@ export class AgentLoop {
     this.config = config;
   }
 
-  async run(task: string): Promise<Session> {
-    const session: Session = {
+  async run(task: string, options: AgentRunOptions = {}): Promise<Session> {
+    // Session-level binding: attached session > explicit option > global config.
+    const workspaceRoot =
+      options.session?.workspaceRoot ??
+      options.workspaceRoot ??
+      this.config.agent.workspaceRoot;
+    const maxRounds =
+      options.session?.maxRounds ?? options.maxRounds ?? this.config.agent.maxRounds;
+    // Fresh RoundManager per run: sessions on a shared loop must not leak
+    // round state; a resumed (paused) session keeps its current round.
+    const roundManager = new RoundManager(
+      maxRounds,
+      options.session ? options.session.currentRound : undefined,
+    );
+
+    const session: Session = options.session ?? {
       id: generateId(),
       task,
       status: 'running',
-      maxRounds: this.config.agent.maxRounds,
-      currentRound: this.feedback.roundManager.currentRound,
+      maxRounds,
+      workspaceRoot,
+      currentRound: roundManager.currentRound,
       messages: [],
       tokenCount: 0,
       createdAt: nowISO(),
       updatedAt: nowISO(),
     };
 
-    // Add initial user message
-    this.addMessage(session, {
-      id: generateId(),
-      role: 'user',
-      content: task,
-      timestamp: nowISO(),
-    });
+    if (options.session) {
+      // WebUI-created session: the store already appended the initial user
+      // message — seed the LLM memory from it instead of re-adding.
+      for (const message of session.messages) {
+        this.memory.addMessage(message);
+      }
+    } else {
+      // Add initial user message
+      this.addMessage(session, {
+        id: generateId(),
+        role: 'user',
+        content: task,
+        timestamp: nowISO(),
+      });
+    }
 
     this.events.emit('session:status', { sessionId: session.id, status: 'running' });
 
     outer: while (true) {
       // Keep session round tracking in sync
-      session.currentRound = this.feedback.roundManager.currentRound;
+      session.currentRound = roundManager.currentRound;
 
       // Check upgrade before starting this round
-      if (this.feedback.roundManager.shouldUpgrade()) {
-        this.triggerHITL(session, 'Max rounds exceeded without resolution');
+      if (roundManager.shouldUpgrade()) {
+        this.triggerHITL(session, 'Max rounds exceeded without resolution', roundManager);
         break;
       }
 
@@ -159,15 +200,15 @@ export class AgentLoop {
         };
         this.addFeedbackMessage(session, fb);
 
-        this.feedback.roundManager.nextRound();
+        roundManager.nextRound();
         this.events.emit('round:changed', {
-          currentRound: this.feedback.roundManager.currentRound,
+          currentRound: roundManager.currentRound,
           maxRounds: session.maxRounds,
         });
 
         // Check upgrade after increment
-        if (this.feedback.roundManager.shouldUpgrade()) {
-          this.triggerHITL(session, 'Max rounds exceeded after parse errors');
+        if (roundManager.shouldUpgrade()) {
+          this.triggerHITL(session, 'Max rounds exceeded after parse errors', roundManager);
           break;
         }
         continue;
@@ -177,20 +218,20 @@ export class AgentLoop {
 
       // No actions → check termination
       if (actions.length === 0) {
-        if (shouldTerminate(response, this.feedback.roundManager.currentRound, session.maxRounds)) {
+        if (shouldTerminate(response, roundManager.currentRound, session.maxRounds)) {
           session.status = 'completed';
           this.events.emit('session:status', { sessionId: session.id, status: 'completed' });
           break;
         }
         // No actions but not terminating → next round
-        this.feedback.roundManager.nextRound();
+        roundManager.nextRound();
         this.events.emit('round:changed', {
-          currentRound: this.feedback.roundManager.currentRound,
+          currentRound: roundManager.currentRound,
           maxRounds: session.maxRounds,
         });
 
-        if (this.feedback.roundManager.shouldUpgrade()) {
-          this.triggerHITL(session, 'Max rounds exceeded');
+        if (roundManager.shouldUpgrade()) {
+          this.triggerHITL(session, 'Max rounds exceeded', roundManager);
           break;
         }
         continue;
@@ -222,7 +263,7 @@ export class AgentLoop {
         }
 
         // Step 5: Execute tool
-        const toolResult = await this.executeTool(action);
+        const toolResult = await this.executeTool(action, session.workspaceRoot);
         this.addToolMessage(session, action.tool, action.params, toolResult);
 
         // Step 6: Feedback loop
@@ -235,15 +276,15 @@ export class AgentLoop {
       // If guardrail blocked or feedback failed — check upgrade & continue
       if (!allFeedbackPassed) {
         // Re-check upgrade in case feedback failure pushed us over limit
-        if (this.feedback.roundManager.shouldUpgrade()) {
-          this.triggerHITL(session, 'Max rounds exceeded after feedback failures');
+        if (roundManager.shouldUpgrade()) {
+          this.triggerHITL(session, 'Max rounds exceeded after feedback failures', roundManager);
           break;
         }
       }
 
       // Step 8: Termination check (only if feedback passed)
       if (allFeedbackPassed) {
-        if (shouldTerminate(response, this.feedback.roundManager.currentRound, session.maxRounds)) {
+        if (shouldTerminate(response, roundManager.currentRound, session.maxRounds)) {
           session.status = 'completed';
           this.events.emit('session:status', { sessionId: session.id, status: 'completed' });
           break;
@@ -251,15 +292,15 @@ export class AgentLoop {
       }
 
       // Advance to next round
-      this.feedback.roundManager.nextRound();
+      roundManager.nextRound();
       this.events.emit('round:changed', {
-        currentRound: this.feedback.roundManager.currentRound,
+        currentRound: roundManager.currentRound,
         maxRounds: session.maxRounds,
       });
 
       // Check upgrade after incrementing
-      if (this.feedback.roundManager.shouldUpgrade()) {
-        this.triggerHITL(session, 'Max rounds exceeded');
+      if (roundManager.shouldUpgrade()) {
+        this.triggerHITL(session, 'Max rounds exceeded', roundManager);
         break;
       }
     }
@@ -398,9 +439,9 @@ export class AgentLoop {
             : null;
 
       const resolvedPath = actionPath
-        ? path.resolve(this.config.agent.workspaceRoot, actionPath)
+        ? path.resolve(session.workspaceRoot, actionPath)
         : '';
-      if (resolvedPath && !this.guard.scopeFence.validatePath(resolvedPath, this.config.agent.workspaceRoot)) {
+      if (resolvedPath && !this.guard.scopeFence.validatePath(resolvedPath, session.workspaceRoot)) {
         return {
           blocked: true,
           needsApproval: false,
@@ -413,11 +454,12 @@ export class AgentLoop {
   }
 
   /**
-   * Execute a tool and return the result.
+   * Execute a tool and return the result. The ToolContext workspaceRoot is
+   * the SESSION's root (Task 19) — tools run their cwd there.
    */
-  private async executeTool(action: Action): Promise<ToolResult> {
+  private async executeTool(action: Action, workspaceRoot: string): Promise<ToolResult> {
     const tool: Tool | undefined = this.tools.get(action.tool);
-    const context: ToolContext = { workspaceRoot: this.config.agent.workspaceRoot };
+    const context: ToolContext = { workspaceRoot };
 
     if (!tool) {
       return {
@@ -481,12 +523,12 @@ export class AgentLoop {
       return true;
     }
 
-    // Layer 3: ValidatorChain
+    // Layer 3: ValidatorChain — validators run against the SESSION root (Task 19)
     let feedbackResults: FeedbackResult[];
     try {
       const chain = new ValidatorChain(validators, this.config.feedback.validatorMode);
       feedbackResults = await chain.run(action, result, {
-        workspaceRoot: this.config.agent.workspaceRoot,
+        workspaceRoot: session.workspaceRoot,
       });
     } catch (err: unknown) {
       // SPEC §3.1 错误处理: 所有异常捕获并转化为结构化 FeedbackResult，不中断主循环
@@ -537,8 +579,8 @@ export class AgentLoop {
   /**
    * Trigger HITL upgrade: add an approval-required message and pause the session.
    */
-  private triggerHITL(session: Session, reason: string): void {
-    session.currentRound = this.feedback.roundManager.currentRound;
+  private triggerHITL(session: Session, reason: string, roundManager: RoundManager): void {
+    session.currentRound = roundManager.currentRound;
     const hitlMsg: Message = {
       id: generateId(),
       role: 'system',

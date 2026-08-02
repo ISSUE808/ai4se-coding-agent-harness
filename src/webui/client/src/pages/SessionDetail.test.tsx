@@ -67,6 +67,7 @@ const SESSION: SessionDetailData = {
   status: 'running' as const,
   maxRounds: 40,
   currentRound: 12,
+  workspaceRoot: '/repo/auth-app',
   tokenCount: 128400,
   createdAt: '2026-08-02T07:57:00.000Z',
   updatedAt: '2026-08-02T08:06:41.000Z',
@@ -138,6 +139,13 @@ describe('SessionDetail', () => {
     expect(screen.getByText('2026-08-02 07:57')).toBeInTheDocument();
     // 已运行 is derived from createdAt→updatedAt (07:57→08:06:41 = 09:41), replacing the old 更新于 row:
     expect(screen.getByText('09:41')).toBeInTheDocument();
+  });
+
+  it('shows the session workspaceRoot (项目路径) in the context column (Task 19)', async () => {
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+    expect(screen.getByText('项目路径')).toBeInTheDocument();
+    expect(screen.getByText('/repo/auth-app')).toBeInTheDocument();
   });
 
   it('aggregates the file list in the left column and opens a Monaco diff for the selected file', async () => {

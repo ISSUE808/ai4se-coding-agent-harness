@@ -6,7 +6,7 @@ import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
-import type { Config } from '../types.js';
+import type { Config, Session } from '../types.js';
 import type { HarnessEvents } from '../events.js';
 import type { HarnessEventMap } from '../events.js';
 import type { CredentialStore } from '../credentials/store.js';
@@ -40,6 +40,16 @@ export interface WebUIServerDeps {
   hitl: HITLManager;
   /** Injectable config persistence (defaults to writing the project file). */
   persistConfig?: (config: Config) => Promise<void>;
+  /**
+   * Task 19: invoked after a session is created (POST /api/sessions) so the
+   * integrated harness can run the AgentLoop on the stored session in-process.
+   */
+  onSessionCreated?: (session: Session) => void;
+  /**
+   * Task 19: invoked after an HITL decision (approve/modify/deny) so the
+   * integrated harness can resume a paused session.
+   */
+  onApprovalResolved?: (session: Session) => void;
 }
 
 export interface WebUIServer {
@@ -78,7 +88,11 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
 
   app.use(
     '/api/sessions',
-    createSessionsRouter({ sessionStore: deps.sessionStore, events: deps.events }),
+    createSessionsRouter({
+      sessionStore: deps.sessionStore,
+      events: deps.events,
+      onSessionCreated: deps.onSessionCreated,
+    }),
   );
   app.use(
     '/api/approvals',
@@ -86,6 +100,7 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
       sessionStore: deps.sessionStore,
       hitl: deps.hitl,
       events: deps.events,
+      onApprovalResolved: deps.onApprovalResolved,
     }),
   );
   app.use(

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'r
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, Loader2, Pause, Play, Plus, RefreshCw, X } from 'lucide-react';
 import designTokens from '../design-tokens';
-import { createSession, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
+import { createSession, fetchConfig, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
 import { formatDuration, formatTokens } from '../lib/format';
 import StatusBadge from '../components/StatusBadge';
 
@@ -589,11 +589,30 @@ function NewSessionModal({
   // Unlimited by default (maxRounds = 0); checking 限制轮次 reveals the input.
   const [limitChecked, setLimitChecked] = useState(false);
   const [roundsText, setRoundsText] = useState('40');
+  // 工作目录 (Task 19): defaults to the current config workspaceRoot, editable.
+  const [workspaceRoot, setWorkspaceRoot] = useState('');
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const maxRounds = limitChecked ? Math.max(1, Number(roundsText) || 1) : 0;
+
+  useEffect(() => {
+    fetchConfig()
+      .then((config) => {
+        const agent = config.agent;
+        const root =
+          typeof agent === 'object' && agent !== null
+            ? (agent as Record<string, unknown>).workspaceRoot
+            : undefined;
+        if (typeof root === 'string' && root.length > 0) {
+          setWorkspaceRoot((prev) => prev || root);
+        }
+      })
+      .catch(() => {
+        // Config unavailable — leave the field empty (server default applies).
+      });
+  }, []);
 
   async function submit(): Promise<void> {
     if (task.trim() === '') {
@@ -602,7 +621,11 @@ function NewSessionModal({
     setBusy(true);
     setError(null);
     try {
-      const session = await createSession(task.trim(), maxRounds);
+      const session = await createSession(
+        task.trim(),
+        maxRounds,
+        workspaceRoot.trim() || undefined,
+      );
       onCreated(session);
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建会话失败');
@@ -694,6 +717,30 @@ function NewSessionModal({
             }}
           >
             清晰描述目标与验收标准，agent 将自主规划执行。
+          </span>
+
+          <label
+            htmlFor="new-session-workspace-root"
+            style={{ ...fieldLabelStyle, marginTop: designTokens.spacing[4], marginBottom: designTokens.spacing[1] }}
+          >
+            工作目录
+          </label>
+          <input
+            id="new-session-workspace-root"
+            value={workspaceRoot}
+            onChange={(e) => setWorkspaceRoot(e.target.value)}
+            placeholder="agent 在此目录中执行工具（默认：当前工作区）"
+            style={{ ...inputStyle, fontFamily: designTokens.typography.fontFamily.mono }}
+          />
+          <span
+            style={{
+              display: 'block',
+              marginTop: designTokens.spacing[1],
+              fontSize: designTokens.typography.fontSize.sm,
+              color: designTokens.colors.textMuted,
+            }}
+          >
+            文件读写、命令与护栏越界检查均以此目录为边界。
           </span>
 
           <label

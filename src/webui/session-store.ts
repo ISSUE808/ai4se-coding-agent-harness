@@ -11,8 +11,10 @@ export interface SessionStore {
   /**
    * Create a session in `running` state with the given task.
    * @param maxRounds 0 = unlimited; undefined = the store's default cap.
+   * @param workspaceRoot session workspace root; undefined = the store's
+   *   default (config agent.workspaceRoot in the integrated harness).
    */
-  create(task: string, maxRounds?: number): Session;
+  create(task: string, maxRounds?: number, workspaceRoot?: string): Session;
   /** All sessions, oldest first. */
   list(): Session[];
   /** Session by id, or null when unknown. */
@@ -38,9 +40,12 @@ function nowISO(): string {
 export class InMemorySessionStore implements SessionStore {
   private readonly sessions = new Map<string, Session>();
 
-  constructor(private readonly defaultMaxRounds: number = 3) {}
+  constructor(
+    private readonly defaultMaxRounds: number = 3,
+    private readonly defaultWorkspaceRoot: string = process.cwd(),
+  ) {}
 
-  create(task: string, maxRounds?: number): Session {
+  create(task: string, maxRounds?: number, workspaceRoot?: string): Session {
     const now = nowISO();
     const session: Session = {
       id: generateId(),
@@ -48,6 +53,7 @@ export class InMemorySessionStore implements SessionStore {
       status: 'running',
       maxRounds: maxRounds ?? this.defaultMaxRounds,
       currentRound: 0,
+      workspaceRoot: workspaceRoot ?? this.defaultWorkspaceRoot,
       messages: [],
       tokenCount: 0,
       createdAt: now,

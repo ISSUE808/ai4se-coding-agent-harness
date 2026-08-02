@@ -748,6 +748,7 @@ export default function SessionDetail() {
 
             {/* runtime info */}
             <ContextSection label="运行信息">
+              <ContextKV k="项目路径" v={session?.workspaceRoot ?? '—'} mono />
               <ContextKV
                 k="已运行"
                 v={session ? formatDurationBetween(session.createdAt, session.updatedAt) : '—'}

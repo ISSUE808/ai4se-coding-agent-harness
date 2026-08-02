@@ -20,6 +20,8 @@ export interface Session {
   status: 'running' | 'paused' | 'completed' | 'failed';
   maxRounds: number;
   currentRound: number;
+  /** Session workspace root — tool cwd / scope-fence base / validator cwd (Task 19). */
+  workspaceRoot: string;
   messages: Message[];
   tokenCount: number;
   createdAt: string;

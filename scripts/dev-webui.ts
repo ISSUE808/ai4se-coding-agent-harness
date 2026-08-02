@@ -3,7 +3,12 @@
  *
  * Runs the Task 17 Express + WS server standalone with in-memory deps, so the
  * React client can be exercised before the agent loop is wired in (Task 19).
- * Not a production entry point — Task 19 replaces this with `start --web`.
+ *
+ * Since Task 19, the production entry point is `codeharness start --web`
+ * (agent loop + WebUI in one process). This script is RETAINED as the
+ * credential-free frontend dev entry: it needs no API key and no LLM wiring,
+ * so pure frontend work (layout/components) can run against a live server
+ * without touching credentials. For full integration use `start --web`.
  *
  *   npx tsx scripts/dev-webui.ts
  *   (defaults to DEFAULT_CONFIG.webui.port = 3000; override: npx tsx scripts/dev-webui.ts 4000)

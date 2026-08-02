@@ -31,6 +31,7 @@ import {
   runStartTask,
   createLLMProvider,
 } from '../../../src/cli/commands/start.js';
+import { createProgram } from '../../../src/cli/index.js';
 import { mockBackend, parseCaptured } from './helpers.js';
 
 /**
@@ -246,5 +247,48 @@ describe('createStartCommand wiring', () => {
     expect(errLines.join('')).toMatch(/Failed to parse config/i);
     expect(process.exitCode).toBe(1);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('`start --web` starts the server in-process and prints the URL (no task needed)', async () => {
+    const printed: string[] = [];
+    const cmd = createStartCommand({
+      config: {
+        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+        cliArgs: { webui: { port: 0 } }, // ephemeral port — no collision with other servers
+      },
+      storeFactory: async () => new CredentialStore([mockBackend('mem', { secret: 'sk-mock' }).backend]),
+      buildAgentLoop: buildMockAgentLoop([{ content: 'done' }]),
+      print: (line) => printed.push(line),
+      waitForShutdown: async () => {
+        // Test-only: resolve immediately so the command exits.
+      },
+    });
+    const result = await parseCaptured(cmd, ['start', '--web']);
+    expect(printed.some((l) => l.includes('[web] WebUI'))).toBe(true);
+    expect(result.err).toBe('');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('`start` without a task and without --web exits 1 with a task-required error', async () => {
+    // Parse through createProgram (as the real CLI does) so `start` is
+    // dispatched as the subcommand name instead of a positional task.
+    const errLines: string[] = [];
+    const program = createProgram(
+      {
+        start: {
+          config: {
+            userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+            projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+          },
+          buildAgentLoop: buildMockAgentLoop([]),
+          errPrint: (line) => errLines.push(line),
+        },
+      },
+      { exitOverride: true },
+    );
+    await parseCaptured(program, ['start']);
+    expect(errLines.join('')).toMatch(/task/i);
+    expect(process.exitCode).toBe(1);
   });
 });

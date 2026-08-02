@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import request from 'supertest';
 import { WebSocket } from 'ws';
 import { createWebUIServer } from '../../src/webui/server.js';
@@ -178,6 +181,53 @@ describe('REST /api/sessions', () => {
     expect(neg.body.error).toBeTypeOf('string');
     const str = await request(web.app).post('/api/sessions').send({ task: 'x', maxRounds: '40' });
     expect(str.status).toBe(400);
+  });
+
+  it('POST /api/sessions accepts a valid workspaceRoot and stores it (Task 19)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-ws-api-'));
+    try {
+      const { web } = await makeFixture();
+      const res = await request(web.app).post('/api/sessions').send({ task: 't', workspaceRoot: dir });
+      expect(res.status).toBe(201);
+      expect(res.body.workspaceRoot).toBe(dir);
+      const detail = await request(web.app).get(`/api/sessions/${res.body.id}`);
+      expect(detail.body.workspaceRoot).toBe(dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/sessions defaults workspaceRoot to the store default when omitted', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).post('/api/sessions').send({ task: 't' });
+    expect(res.status).toBe(201);
+    expect(typeof res.body.workspaceRoot).toBe('string');
+    expect(path.isAbsolute(res.body.workspaceRoot)).toBe(true);
+  });
+
+  it('POST /api/sessions rejects invalid workspaceRoot values with 400 JSON (Task 19)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-ws-api-'));
+    try {
+      const file = path.join(dir, 'f.txt');
+      fs.writeFileSync(file, 'x');
+      const { web } = await makeFixture();
+      const cases: unknown[] = [
+        { workspaceRoot: 'relative/path' },
+        { workspaceRoot: '' },
+        { workspaceRoot: '   ' },
+        { workspaceRoot: path.join(dir, 'missing-dir') },
+        { workspaceRoot: file },
+        { workspaceRoot: 42 },
+        { workspaceRoot: null },
+      ];
+      for (const body of cases) {
+        const res = await request(web.app).post('/api/sessions').send({ task: 't', ...(body as object) });
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBeTypeOf('string');
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('POST /api/sessions rejects a missing or empty task with 400 JSON', async () => {

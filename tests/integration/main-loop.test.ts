@@ -25,6 +25,7 @@ import { SessionMemory } from '../../src/memory/session-memory.js';
 import { createEventBus } from '../../src/events.js';
 import { DEFAULT_CONFIG } from '../../src/config/schema.js';
 import type { Config } from '../../src/types.js';
+import { InMemorySessionStore } from '../../src/webui/session-store.js';
 
 function createMockExec() {
   return () => {
@@ -178,5 +179,87 @@ describe('Agent Main Loop (integration)', () => {
     // Should have 3 rounds of tool execution before upgrade
     const toolMessages = session.messages.filter((m) => m.role === 'tool');
     expect(toolMessages.length).toBe(3);
+  });
+
+  it('run 支持会话级 workspaceRoot：工具在该目录执行，默认回退 config 值（Task 19）', async () => {
+    const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-sess-'));
+    try {
+      fs.writeFileSync(path.join(sessionRoot, 'only-here.txt'), 'session file');
+      // The file exists ONLY in sessionRoot — reading it proves the tool ran
+      // against the session root, not the config root (where it is absent).
+      const harness = createTestHarness(
+        [
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['only-here.txt'] } }] },
+          { content: 'done' },
+        ],
+        workspaceRoot,
+      );
+      const session = await harness.run('读取会话目录文件', { workspaceRoot: sessionRoot });
+      expect(session.status).toBe('completed');
+      expect(session.workspaceRoot).toBe(sessionRoot);
+      const toolMessages = session.messages.filter((m) => m.role === 'tool');
+      expect(toolMessages).toHaveLength(1);
+      expect(toolMessages[0].metadata?.toolResult?.success).toBe(true);
+    } finally {
+      fs.rmSync(sessionRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('run 默认回退 config.agent.workspaceRoot（未传会话根时）', async () => {
+    const harness = createTestHarness(
+      [
+        { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+        { content: 'done' },
+      ],
+      workspaceRoot,
+    );
+    const session = await harness.run('默认根');
+    expect(session.workspaceRoot).toBe(workspaceRoot);
+    const toolMessages = session.messages.filter((m) => m.role === 'tool');
+    expect(toolMessages[0].metadata?.toolResult?.success).toBe(true);
+  });
+
+  it('run 可附加既有 session（WebUI 创建的）：原地更新状态与消息（Task 19）', async () => {
+    const store = new InMemorySessionStore(3, workspaceRoot);
+    const stored = store.create('读取 test.ts', undefined, workspaceRoot);
+    store.appendMessage(stored.id, { role: 'user', content: '读取 test.ts' });
+
+    const harness = createTestHarness(
+      [
+        { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+        { content: 'Task complete.' },
+      ],
+      workspaceRoot,
+    );
+    const result = await harness.run(stored.task, { session: stored });
+
+    // Same object mutated in place — the SessionStore sees every update.
+    expect(result).toBe(stored);
+    expect(stored.status).toBe('completed');
+    expect(stored.workspaceRoot).toBe(workspaceRoot);
+    // Initial user message (store-appended) + assistant + tool + assistant.
+    expect(stored.messages.length).toBeGreaterThan(1);
+    expect(stored.messages.some((m) => m.role === 'tool' && m.metadata?.toolName === 'read_file')).toBe(true);
+  });
+
+  it('scope-fence 越界基准跟随会话 workspaceRoot（Task 19）', async () => {
+    const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-sess-'));
+    try {
+      const sneakPath = path.join(workspaceRoot, 'sneak.txt'); // inside CONFIG root, outside SESSION root
+      const harness = createTestHarness(
+        [
+          { toolCalls: [{ name: 'write_file', arguments: { path: sneakPath, content: 'x' } }] },
+          { content: 'done' },
+        ],
+        workspaceRoot,
+      );
+      const session = await harness.run('写会话目录外', { workspaceRoot: sessionRoot });
+      expect(session.status).toBe('completed');
+      // Blocked by the scope fence measured against the SESSION root.
+      expect(session.messages.some((m) => m.content.includes('Path outside workspace'))).toBe(true);
+      expect(fs.existsSync(sneakPath)).toBe(false);
+    } finally {
+      fs.rmSync(sessionRoot, { recursive: true, force: true });
+    }
   });
 });

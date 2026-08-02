@@ -8,12 +8,14 @@ import Dashboard from './Dashboard';
 vi.mock('../lib/api', () => ({
   fetchSessions: vi.fn(),
   createSession: vi.fn(),
+  fetchConfig: vi.fn(),
 }));
 
-import { createSession, fetchSessions } from '../lib/api';
+import { createSession, fetchConfig, fetchSessions } from '../lib/api';
 
 const fetchSessionsMock = vi.mocked(fetchSessions);
 const createSessionMock = vi.mocked(createSession);
+const fetchConfigMock = vi.mocked(fetchConfig);
 
 const RUNNING = {
   id: 's_8f3a21',
@@ -21,6 +23,7 @@ const RUNNING = {
   status: 'running' as const,
   maxRounds: 40,
   currentRound: 12,
+  workspaceRoot: '/repo/orders',
   tokenCount: 128400,
   createdAt: '2026-08-02T08:00:00.000Z',
   updatedAt: '2026-08-02T08:06:41.000Z',
@@ -32,6 +35,7 @@ const COMPLETED = {
   status: 'completed' as const,
   maxRounds: 31,
   currentRound: 31,
+  workspaceRoot: '/repo/cart',
   tokenCount: 212900,
   createdAt: '2026-08-02T08:00:00.000Z',
   updatedAt: '2026-08-02T08:18:27.000Z',
@@ -52,6 +56,8 @@ describe('Dashboard', () => {
   beforeEach(() => {
     fetchSessionsMock.mockReset();
     createSessionMock.mockReset();
+    fetchConfigMock.mockReset();
+    fetchConfigMock.mockResolvedValue({}); // no agent.workspaceRoot by default
   });
 
   it('renders the session list with id, task, badge, rounds, duration and tokens', async () => {
@@ -118,7 +124,7 @@ describe('Dashboard', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: '创建并启动' }));
 
     await waitFor(() => {
-      expect(createSessionMock).toHaveBeenCalledWith('实现支付回调幂等', 40);
+      expect(createSessionMock).toHaveBeenCalledWith('实现支付回调幂等', 40, undefined);
     });
     expect(await screen.findByText('会话详情占位')).toBeInTheDocument();
   });
@@ -135,7 +141,31 @@ describe('Dashboard', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: '创建并启动' }));
 
     await waitFor(() => {
-      expect(createSessionMock).toHaveBeenCalledWith('无上限任务', 0);
+      expect(createSessionMock).toHaveBeenCalledWith('无上限任务', 0, undefined);
+    });
+  });
+
+  it('prefills 工作目录 from the config workspaceRoot and submits the edited value (Task 19)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    fetchConfigMock.mockResolvedValue({ agent: { workspaceRoot: '/repo/current' } });
+    createSessionMock.mockResolvedValue({ ...RUNNING, id: 's_new_3' });
+    renderDashboard();
+    await screen.findByText(/还没有会话/);
+
+    await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
+    const dialog = await screen.findByRole('dialog');
+    const rootInput = within(dialog).getByLabelText('工作目录');
+    await waitFor(() => {
+      expect(rootInput).toHaveValue('/repo/current');
+    });
+
+    await userEvent.clear(rootInput);
+    await userEvent.type(rootInput, '/repo/other');
+    await userEvent.type(within(dialog).getByLabelText('任务描述'), '在新目录里干活');
+    await userEvent.click(within(dialog).getByRole('button', { name: '创建并启动' }));
+
+    await waitFor(() => {
+      expect(createSessionMock).toHaveBeenCalledWith('在新目录里干活', 0, '/repo/other');
     });
   });
 
