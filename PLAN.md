@@ -1172,6 +1172,8 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** assistant 消息的 markdown（标题/代码块/表格/列表/行内 code/链接）渲染正常且样式与 tokens 一致；`dangerouslySetInnerHTML` 零使用（XSS 审计）；搜索框从 TopBar 移除；client 测试更新（MD 渲染断言 + 移除搜索框断言）。
 
+- [x] **已完成**（commit `b53df7a` + XSS URL 测试 `c2a63cc`，client 136 + 主项目 463）——react-markdown skipHtml 安全渲染（HTML 禁用 + URL 协议剥除 + 图片 alt 化，XSS 三类入口全测）；user 保持纯文本；搜索框移除
+
 ### 任务 25：自定义供应商 + 模型/护栏可编辑
 
 **背景（用户建议）**：API Keys 仅三家供应商（需支持任意自定义供应商）；设置"模型与护栏"只读（需可直接修改并同步配置）。

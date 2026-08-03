@@ -470,3 +470,21 @@
   - **UI 功能回归的隐性代价**：文件树取代平铺变更列表后，截断/深度外的变更文件不可达——**替换 UI 时必须保留旧行为的可达性**（fallback 列表方案）
   - **测试 fixture 必须贴近真实路径形态**：`filesChanged`（相对）vs 树节点（绝对）直接比对永不命中——subagent 自己抓到并修（absoluteWithin + 归一化）
   - **全局节点预算**（maxNodes 5000）配合深度/每层上限才真正封死响应爆炸半径——三层防线
+
+---
+
+## 2026-08-03 16:20 Task 24：MD 渲染 + 移除搜索框（阶段 15）
+
+- **触发技能**：`test-driven-development`（subagent）、`requesting-code-review`（两阶段评审）
+- **Subagent**：`ab385bfe`（实现 `b53df7a`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：react-markdown@10 + remark-gfm 渲染 assistant 消息；`skipHtml` 防 XSS + `dangerouslySetInnerHTML` 零使用 + URL 协议剥除 + 图片不远程加载；user 保持纯文本；移除 TopBar 搜索框
+- **产出**：
+  - Commit: `b53df7a`（client +4 测试；主项目不变）
+  - 涉及文件: components/MarkdownContent.tsx（新建）、MessageList.tsx、App.tsx + 测试 + package.json（react-markdown/remark-gfm）
+  - 测试: client 131→136 + 主项目 463；tsc 双 build + oxlint 干净
+- **评审**：0 CRITICAL 0 IMPORTANT（评审核实 skipHtml 源码行为 + urlTransform 白名单 + dangerouslySetInnerHTML 零使用）；4 Minor——补 `javascript:` URL 测试锁定（XSS 三类入口全覆盖，主 agent 补 `c2a63cc`）
+- **人工干预**：补 XSS URL 测试（评审 Minor #1）
+- **教训**：
+  - **XSS 防线要三类入口全测**：raw HTML（skipHtml）/ 图片（alt 化）/ URL 协议（urlTransform）——漏一类将来改配置就静默回归
+  - **行尾事故**：编辑器保存把 LF 文件转 CRLF → git diff 1393 行假变化——定位方法：`git config core.autocrlf` + `file` 对比 HEAD/工作区；**教训：行尾异常先查 git 存储 vs 工作区的换行，再动文件**
+  - **vitest 测试级超时是隐性 flake 源**：HITL 全链路（暂停→批准→执行→恢复→完成）在并行负载下 >5s——`describe(name, fn, timeout)` 提到 15s 根治
