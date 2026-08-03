@@ -9,6 +9,8 @@ vi.mock('./lib/api', () => ({
   fetchSessions: vi.fn().mockResolvedValue([]),
   fetchSession: vi.fn().mockRejectedValue(new Error('no backend in test')),
   fetchConfig: vi.fn().mockResolvedValue({}),
+  // Task 26 follow-up: SessionDetail loads the provider model list on mount.
+  fetchAvailableModels: vi.fn().mockRejectedValue(new Error('no backend in test')),
 }));
 
 vi.mock('@monaco-editor/react', () => ({

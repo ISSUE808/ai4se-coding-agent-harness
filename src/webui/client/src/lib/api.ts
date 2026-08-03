@@ -213,6 +213,23 @@ export async function fetchConfig(): Promise<ConfigValue> {
   return request<ConfigValue>('/api/config');
 }
 
+// ─── Provider model list (Task 26 follow-up) ────────────────────────────────
+
+/** Model ids served by GET /api/llm/models (fetched from the provider). */
+export interface ProviderModels {
+  models: string[];
+}
+
+/**
+ * Fetch the configured provider's model list. The key never leaves the
+ * backend — the server calls the provider's `/models` endpoint with it.
+ * 401 (no key) / 502 (provider unreachable) surface as ApiError messages the
+ * UI can show and fall back from.
+ */
+export async function fetchAvailableModels(): Promise<ProviderModels> {
+  return request<ProviderModels>('/api/llm/models');
+}
+
 // ─── fs browsing (Task 23: directory picker + session file tree) ────────────
 
 /** A node in the directory tree served by GET /api/fs/tree. */

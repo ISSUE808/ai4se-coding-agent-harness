@@ -11,6 +11,7 @@ import {
 import designTokens from '../design-tokens';
 import {
   deleteKey,
+  fetchAvailableModels,
   fetchConfig,
   fetchKeys,
   getKeyStatus,
@@ -856,6 +857,32 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
   // state until the seeding effect below has populated every field.
   const [seeded, setSeeded] = useState(false);
 
+  // Task 26 follow-up: the provider's model list (GET /api/llm/models).
+  // Loaded on mount and refreshable; clicking an entry seeds the 模型名称
+  // field (saved with the rest of the form). A failed load (no key / provider
+  // down) shows a hint with a retry — never a crash.
+  const [models, setModels] = useState<string[] | null>(null);
+  const [modelsStatus, setModelsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  const loadModels = useCallback(async () => {
+    setModelsStatus('loading');
+    setModelsError(null);
+    try {
+      const { models: list } = await fetchAvailableModels();
+      setModels(list);
+      setModelsStatus('ready');
+    } catch (err) {
+      setModels(null);
+      setModelsError(err instanceof Error ? err.message : '模型列表加载失败');
+      setModelsStatus('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadModels();
+  }, [loadModels]);
+
   // Seed the form from GET /api/config (the parent fetches it on mount).
   useEffect(() => {
     if (config === null) {
@@ -995,6 +1022,73 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
             <SettingField k="最大 Token" value={maxTokens} onChange={setMaxTokens} placeholder="如 4096" mono />
             <SettingKV k="提供商" v={typeof llm?.provider === 'string' ? llm.provider : '—'} mono />
             <SettingKV k="API 地址" v={typeof llm?.baseUrl === 'string' ? llm.baseUrl : '—'} mono />
+            <div style={{ marginTop: designTokens.spacing[3], display: 'flex', flexDirection: 'column', gap: designTokens.spacing[2] }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                  供应商模型列表
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void loadModels()}
+                  disabled={modelsStatus === 'loading'}
+                  style={{
+                    borderWidth: 1,
+                    borderStyle: 'solid',
+                    borderColor: designTokens.colors.border,
+                    borderRadius: designTokens.radius.sm,
+                    background: 'transparent',
+                    color: designTokens.colors.textMuted,
+                    fontSize: designTokens.typography.fontSize.xs,
+                    cursor: 'pointer',
+                    padding: '2px 8px',
+                  }}
+                >
+                  {modelsStatus === 'loading' ? '加载中…' : '刷新'}
+                </button>
+              </div>
+              {modelsStatus === 'loading' && (
+                <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                  加载中…
+                </span>
+              )}
+              {modelsStatus === 'error' && (
+                <span style={{ color: designTokens.colors.warning, fontSize: designTokens.typography.fontSize.sm }}>
+                  模型列表加载失败：{modelsError}（请先在「API Keys」中保存密钥后刷新）
+                </span>
+              )}
+              {modelsStatus === 'ready' && models.length === 0 && (
+                <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                  供应商未返回模型
+                </span>
+              )}
+              {modelsStatus === 'ready' && models.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: designTokens.spacing[1] }}>
+                  {models.map((m) => {
+                    const active = m === model;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setModel(m)}
+                        style={{
+                          borderWidth: 1,
+                          borderStyle: 'solid',
+                          borderColor: active ? designTokens.colors.primaryBorder : designTokens.colors.border,
+                          borderRadius: designTokens.radius.pill,
+                          background: active ? designTokens.colors.primarySoft : 'transparent',
+                          color: active ? designTokens.colors.primary : designTokens.colors.text,
+                          fontSize: designTokens.typography.fontSize.xs,
+                          cursor: 'pointer',
+                          padding: '2px 10px',
+                        }}
+                      >
+                        {m}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </SettingSection>
           <SettingSection label="Agent 参数">
             <SettingField k="最大轮次" value={maxRounds} onChange={setMaxRounds} placeholder="0 = 无上限" mono />

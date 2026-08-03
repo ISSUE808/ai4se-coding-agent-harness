@@ -20,6 +20,8 @@ vi.mock('../lib/api', () => ({
   fetchFsFile: vi.fn(),
   fetchFsTree: vi.fn(),
   fetchSessions: vi.fn(),
+  fetchAvailableModels: vi.fn(),
+  saveConfig: vi.fn(),
   updateSessionModel: vi.fn(),
 }));
 
@@ -34,12 +36,14 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 import {
+  fetchAvailableModels,
   fetchFsFile,
   fetchFsTree,
   fetchSession,
   fetchSessions,
   postMessage,
   resolveApproval,
+  saveConfig,
   sessionControl,
   updateSessionModel,
 } from '../lib/api';
@@ -52,6 +56,8 @@ const resolveApprovalMock = vi.mocked(resolveApproval);
 const fetchFsFileMock = vi.mocked(fetchFsFile);
 const fetchFsTreeMock = vi.mocked(fetchFsTree);
 const fetchSessionsMock = vi.mocked(fetchSessions);
+const fetchAvailableModelsMock = vi.mocked(fetchAvailableModels);
+const saveConfigMock = vi.mocked(saveConfig);
 const updateSessionModelMock = vi.mocked(updateSessionModel);
 const createSourceMock = vi.mocked(createWebSocketEventSource);
 
@@ -179,6 +185,13 @@ describe('SessionDetail', () => {
     fetchSessionsMock.mockResolvedValue([SESSION]);
     updateSessionModelMock.mockReset();
     updateSessionModelMock.mockResolvedValue(SESSION);
+    // Provider model list: DEFAULT to failure so every existing test runs in
+    // the fallback mode (default + recent + custom input). Tests that exercise
+    // the list mode mock it resolved explicitly.
+    fetchAvailableModelsMock.mockReset();
+    fetchAvailableModelsMock.mockRejectedValue(new Error('未配置 API key'));
+    saveConfigMock.mockReset();
+    saveConfigMock.mockResolvedValue({ llm: { model: 'deepseek-v4-pro' } });
     createSourceMock.mockReset();
     createSourceMock.mockImplementation(() => {
       source = new FakeSource();
@@ -635,5 +648,65 @@ describe('SessionDetail', () => {
     // The custom model must remain selectable — it was folded into the
     // "recently used" list instead of disappearing with the override.
     expect(screen.getByRole('option', { name: 'my-custom-llm' })).toBeInTheDocument();
+  });
+
+  it('lists the provider models in the selector when the list loads (Task 26 follow-up)', async () => {
+    fetchAvailableModelsMock.mockResolvedValue({
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+    });
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    // List mode: provider models are options, the free-text custom entry is gone.
+    expect(screen.getByRole('option', { name: 'deepseek-chat' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'deepseek-reasoner' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '自定义模型…' })).not.toBeInTheDocument();
+  });
+
+  it('selecting a listed model PATCHes the session AND updates the global default config', async () => {
+    fetchAvailableModelsMock.mockResolvedValue({
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+    });
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: 'deepseek-chat' });
+    saveConfigMock.mockResolvedValue({ llm: { model: 'deepseek-chat' } });
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-chat');
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', 'deepseek-chat');
+    });
+    // The global default follows so the NEXT session uses the same model.
+    await waitFor(() => {
+      expect(saveConfigMock).toHaveBeenCalledWith({ llm: { model: 'deepseek-chat' } });
+    });
+  });
+
+  it('shows a fallback hint when the model list fails and keeps the custom entry', async () => {
+    fetchAvailableModelsMock.mockRejectedValue(new Error('未配置 deepseek 的 API key'));
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    expect(await screen.findByText(/模型列表加载失败/)).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '自定义模型…' })).toBeInTheDocument();
+  });
+
+  it('still switches the session model when the global config save fails, with a hint', async () => {
+    fetchAvailableModelsMock.mockResolvedValue({
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+    });
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: 'deepseek-chat' });
+    saveConfigMock.mockRejectedValue(new Error('config write denied'));
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-chat');
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', 'deepseek-chat');
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-chat');
+    });
+    expect(await screen.findByText(/全局配置更新失败/)).toBeInTheDocument();
   });
 });

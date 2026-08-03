@@ -34,6 +34,7 @@ import type { ApprovalStatus } from '../components/ApprovalCard';
 import FileDiff from '../components/FileDiff';
 import { useSessionEvents } from '../hooks/useSessionEvents';
 import {
+  fetchAvailableModels,
   fetchConfig,
   fetchFsFile,
   fetchFsTree,
@@ -41,6 +42,7 @@ import {
   fetchSessions,
   postMessage,
   resolveApproval,
+  saveConfig,
   sessionControl,
   updateSessionModel,
   type ApprovalDecision,
@@ -136,10 +138,50 @@ export default function SessionDetail() {
 
   // ─── Model selector (Task 26) ─────────────────────────────────────────────
 
+  // Task 26 follow-up: the provider's model list (from GET /api/llm/models).
+  // `null` = not loaded / failed → the selector falls back to the free-text
+  // custom entry with a hint; a loaded list restricts options to its models.
+  const [availableModels, setAvailableModels] = useState<string[] | null>(null);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  useEffect(() => {
+    fetchAvailableModels()
+      .then(({ models }) => {
+        setAvailableModels(models);
+        setModelsError(null);
+      })
+      .catch((err) => {
+        setAvailableModels(null);
+        setModelsError(err instanceof Error ? err.message : '模型列表加载失败');
+      });
+  }, []);
+
   const [customMode, setCustomMode] = useState(false);
   const [customModel, setCustomModel] = useState('');
   const [modelBusy, setModelBusy] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+
+  /**
+   * Task 26 follow-up: applying a model also updates the GLOBAL default
+   * (`llm.model`) so the next session uses it too. The session PATCH is the
+   * primary action (it takes effect immediately, restarting a live run); a
+   * failed config save does NOT undo the switch — the user is told.
+   */
+  async function applyModelSync(model: string): Promise<void> {
+    const updated = await updateSessionModel(sessionId, model);
+    events.updateModel(updated.model ?? null);
+    setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
+    rememberRecentModel(updated.model);
+    try {
+      // The merged config the server returns becomes the new baseline for
+      // the "默认模型" option and the config-default comparison below.
+      const merged = await saveConfig({ llm: { model } });
+      setConfig(merged);
+    } catch (err) {
+      setModelError(
+        `已切换会话模型，但全局配置更新失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   async function handleModelSelect(value: string): Promise<void> {
     if (value === CUSTOM_MODEL_VALUE) {
@@ -154,10 +196,14 @@ export default function SessionDetail() {
     setModelBusy(true);
     setModelError(null);
     try {
-      const updated = await updateSessionModel(sessionId, next);
-      events.updateModel(updated.model ?? null);
-      setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
-      rememberRecentModel(updated.model);
+      if (next === '') {
+        // Clearing the override — the config default stays as it is.
+        const updated = await updateSessionModel(sessionId, '');
+        events.updateModel(updated.model ?? null);
+        setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
+      } else {
+        await applyModelSync(next);
+      }
     } catch (err) {
       setModelError(err instanceof Error ? err.message : '切换模型失败');
     } finally {
@@ -173,10 +219,7 @@ export default function SessionDetail() {
     setModelBusy(true);
     setModelError(null);
     try {
-      const updated = await updateSessionModel(sessionId, trimmed);
-      events.updateModel(updated.model ?? null);
-      setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
-      rememberRecentModel(updated.model);
+      await applyModelSync(trimmed);
       setCustomMode(false);
       setCustomModel('');
     } catch (err) {
@@ -508,10 +551,20 @@ export default function SessionDetail() {
   const configModel = typeof llm?.model === 'string' ? llm.model : null;
   const effectiveModel = events.model ?? session?.model ?? configModel;
   const sessionModel = typeof session?.model === 'string' ? session.model : null;
+  // Task 26 follow-up: when the provider model list loaded, ONLY its models
+  // are selectable (plus the config default and any session override not in
+  // the list) — the free-text custom entry is hidden. When the list is
+  // unavailable/empty, fall back to recently-used models + the custom entry.
+  const listMode = availableModels !== null && availableModels.length > 0;
+  const optionPool = listMode
+    ? availableModels
+    : recentModels.concat(
+        effectiveModel !== null && effectiveModel !== configModel ? [effectiveModel] : [],
+      );
   const otherModels = Array.from(
     new Set(
-      recentModels
-        .concat(effectiveModel !== null && effectiveModel !== configModel ? [effectiveModel] : [])
+      optionPool
+        .concat(sessionModel !== null ? [sessionModel] : [])
         .filter((m): m is string => typeof m === 'string' && m !== '' && m !== configModel),
     ),
   );
@@ -953,9 +1006,9 @@ export default function SessionDetail() {
                         {m}
                       </option>
                     ))}
-                    <option value={CUSTOM_MODEL_VALUE}>自定义模型…</option>
+                    {!listMode && <option value={CUSTOM_MODEL_VALUE}>自定义模型…</option>}
                   </select>
-                  {customMode && (
+                  {!listMode && customMode && (
                     <div style={{ display: 'flex', gap: 6 }}>
                       <input
                         aria-label="自定义模型输入"
@@ -979,6 +1032,11 @@ export default function SessionDetail() {
                         {modelBusy ? <Loader2 size={12} /> : '应用'}
                       </button>
                     </div>
+                  )}
+                  {modelsError !== null && (
+                    <span style={{ color: designTokens.colors.warning, fontSize: designTokens.typography.fontSize.sm }}>
+                      模型列表加载失败：{modelsError}（可手动输入）
+                    </span>
                   )}
                   {modelError !== null && (
                     <span style={{ color: designTokens.colors.danger, fontSize: designTokens.typography.fontSize.sm }}>

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createSession,
   deleteKey,
+  fetchAvailableModels,
   fetchConfig,
   fetchFsBrowse,
   fetchFsFile,
@@ -160,6 +161,14 @@ describe('api client', () => {
     expect(new URL(url).pathname).toBe('/api/config');
     expect(init.method).toBe('PUT');
     expect(JSON.parse(init.body)).toEqual({ agent: { maxRounds: 10 } });
+  });
+
+  it('fetchAvailableModels GETs /api/llm/models', async () => {
+    const body = { models: ['deepseek-chat', 'deepseek-reasoner'] };
+    fetchMock.mockResolvedValue(jsonResponse(body));
+    const result = await fetchAvailableModels();
+    expect(result).toEqual(body);
+    expect(lastPath()).toBe('/api/llm/models');
   });
 
   it('rejects with the server error message on a failed response', async () => {

@@ -5,6 +5,7 @@ import Settings from './Settings';
 
 vi.mock('../lib/api', () => ({
   fetchConfig: vi.fn(),
+  fetchAvailableModels: vi.fn(),
   saveConfig: vi.fn(),
   getKeyStatus: vi.fn(),
   saveKey: vi.fn(),
@@ -22,9 +23,18 @@ vi.mock('@monaco-editor/react', () => ({
   ),
 }));
 
-import { deleteKey, fetchConfig, fetchKeys, getKeyStatus, saveConfig, saveKey } from '../lib/api';
+import {
+  deleteKey,
+  fetchAvailableModels,
+  fetchConfig,
+  fetchKeys,
+  getKeyStatus,
+  saveConfig,
+  saveKey,
+} from '../lib/api';
 
 const fetchConfigMock = vi.mocked(fetchConfig);
+const fetchAvailableModelsMock = vi.mocked(fetchAvailableModels);
 const saveConfigMock = vi.mocked(saveConfig);
 const getKeyStatusMock = vi.mocked(getKeyStatus);
 const saveKeyMock = vi.mocked(saveKey);
@@ -38,11 +48,15 @@ function row(provider: string): HTMLElement {
 describe('Settings', () => {
   beforeEach(() => {
     fetchConfigMock.mockReset();
+    fetchAvailableModelsMock.mockReset();
     saveConfigMock.mockReset();
     getKeyStatusMock.mockReset();
     saveKeyMock.mockReset();
     deleteKeyMock.mockReset();
     fetchKeysMock.mockReset();
+    // Model list: default to empty so existing tests are unaffected; tests
+    // that exercise the list mock it explicitly.
+    fetchAvailableModelsMock.mockResolvedValue({ models: [] });
     getKeyStatusMock.mockImplementation(async (provider) => ({
       provider,
       status: provider === 'deepseek' ? '****-9f2c' : 'not set',
@@ -320,5 +334,24 @@ describe('Settings', () => {
     await screen.findByText('****-9f2c');
 
     expect(screen.queryByText(/环境变量后端/)).not.toBeInTheDocument();
+  });
+
+  it('renders the provider model list and seeds the model field on click (Task 26 follow-up)', async () => {
+    fetchAvailableModelsMock.mockResolvedValue({ models: ['deepseek-chat', 'deepseek-reasoner'] });
+    render(<Settings />);
+    await screen.findByText('供应商模型列表');
+
+    // The current model (deepseek-chat from the config seed) is highlighted;
+    // clicking another entry seeds the form field with it.
+    expect(screen.getByRole('button', { name: 'deepseek-reasoner' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'deepseek-reasoner' }));
+    expect(screen.getByLabelText('模型名称')).toHaveValue('deepseek-reasoner');
+  });
+
+  it('shows an error hint with the raw message when the model list fails to load', async () => {
+    fetchAvailableModelsMock.mockRejectedValue(new Error('未配置 deepseek 的 API key'));
+    render(<Settings />);
+
+    expect(await screen.findByText(/模型列表加载失败：未配置 deepseek 的 API key/)).toBeInTheDocument();
   });
 });
