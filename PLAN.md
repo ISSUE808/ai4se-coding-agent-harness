@@ -1161,6 +1161,7 @@ describe('Agent Main Loop (integration)', () => {
 **完成条件：** fs 端点返回目录树（含嵌套目录、文件类型/大小）；越界路径 400；前端文件树可展开/折叠；目录选择器弹窗可选目录并回填输入框；全部 Mock 测试（API 用临时目录 fixture）。
 
 - [x] **已完成**（commit `9bba87c` + 评审修复 `3f0ee53`，主项目 463 + client 131）——fs 端点（嵌套/大小/排序、realpath 边界、symlink 拒绝、深度 4/每层 200/全局 5000 节点截断）；目录选择器弹窗（懒加载/回填/Escape 关闭）；会话详情文件树（展开折叠 + A/M 标记 + 变更文件 fallback 列表 + diff 预览）
+- [x] **整机浏览增强**（commit `e5f88e8`，主项目 525 + client 177）——用户真实测试需求"选择整台电脑的任何目录"：新增 `GET /api/fs/browse` 无授权浏览端点（无 path → 机器根：Windows 盘符 / POSIX `/`；逐级枚举仅**元数据**：名称/类型/大小；symlink 标 `link` 不跟随；每层 200 截断）；`/tree` 保持授权根不变；前端选择器切换为 browse（机器根起始 + 逐级懒加载 + 选中回填）；KNOWN_ISSUES 记录元数据-only 安全取舍
 
 ### 任务 24：MD 渲染 + 移除搜索框
 

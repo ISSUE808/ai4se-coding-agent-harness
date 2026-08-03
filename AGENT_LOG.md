@@ -553,3 +553,20 @@
 - 5 个任务全部完成：Task 23（fs 端点/目录选择器/文件树）、Task 24（MD 渲染/删搜索框）、Task 25（自定义供应商/模型护栏可编辑）、Task 26（对话中切模型）、Task 27（CLI REPL）
 - 测试：主项目 449→520 + client 123→166；每个任务两阶段评审（0 CRITICAL 遗留）
 - 用户 8 条建议全部落地（搜索框删除、MD 预览、文件树、自定义供应商、模型护栏编辑、对话切模型、目录选择器、CLI REPL）
+
+---
+
+## 2026-08-03 20:42 Task 23 评审跟进：目录选择器整机浏览（/api/fs/browse）
+
+- **触发技能**：`systematic-debugging`（机器根测试红 → 根因调查）、`test-driven-development`（前端 api/组件 红→绿）
+- **Subagent**：095f64f2（原会话中断，后端 /browse 路由 + 5 个集成测试已写未提交）；前端切换 + 测试修复由主 agent 接手（交接文件 `.claude/handoff-browse-feature.md` 驱动）
+- **Prompt 要点**：用户真实测试需求"目录选择器只有当前工作目录下的目录，我想的是可以选择整台电脑的任何目录"→ 已批准方案：分离端点（browse=宽浏览仅元数据，tree=窄授权不变）；前端选择器初始显示机器根
+- **产出**：
+  - Commit: `e5f88e8`（8 文件 +419/-61；含新增 DirectoryPicker.test.tsx 9 测试）
+  - 涉及文件: src/webui/api/fs.ts（/browse + machineRoots）、tests/integration/fs-api.test.ts（5 测试）、client lib/api.ts（fetchMachineRoots/fetchFsBrowse）、DirectoryPicker.tsx（tree→browse 重构）、DirectoryPicker.test.tsx（新建）、Dashboard.test.tsx（适配）、KNOWN_ISSUES.md（§11 安全取舍）
+  - 测试: 主项目 520→525 + client 166→177（+11）；tsc 双项目干净
+- **人工干预**：修机器根测试正则字符类 `[\/]` → `[\/]`（原字符类仅匹配正斜杠，Windows 盘符根 `C:\` 是反斜杠——测试 bug，实现正确）；commit message 正则转义被 bash 吃掉两处，用 message 文件 + od 逐字节验证修正
+- **教训**：
+  - **正则字符类是转义重灾区**：`[\/]` 在 JS 中只含 `/`（`\` 只是多余转义），Windows 路径断言必须写 `[\/]`——"一眼看着对"的断言在 win32 永远红，复现脚本（node 复刻 machineRoots + 双正则对比）一次锁定根因
+  - **Windows 命令行转义两层吃反斜杠**：bash 双引号 + 单引号都会处理 `\`——commit message 含正则时用 `-F message文件`，验证用 `git log | od -c`
+  - **交接文件模型有效**：中断会话按"现状一句话/已批准方案/进度/接续清单/环境坑"交接，新会话 5 分钟即可全绿接手，无需回看原 transcript
