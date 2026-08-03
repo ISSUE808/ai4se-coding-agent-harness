@@ -488,3 +488,22 @@
   - **XSS 防线要三类入口全测**：raw HTML（skipHtml）/ 图片（alt 化）/ URL 协议（urlTransform）——漏一类将来改配置就静默回归
   - **行尾事故**：编辑器保存把 LF 文件转 CRLF → git diff 1393 行假变化——定位方法：`git config core.autocrlf` + `file` 对比 HEAD/工作区；**教训：行尾异常先查 git 存储 vs 工作区的换行，再动文件**
   - **vitest 测试级超时是隐性 flake 源**：HITL 全链路（暂停→批准→执行→恢复→完成）在并行负载下 >5s——`describe(name, fn, timeout)` 提到 15s 根治
+
+---
+
+## 2026-08-03 17:10 Task 25：自定义供应商 + 模型/护栏可编辑（阶段 15）
+
+- **触发技能**：`test-driven-development`（subagent）、`requesting-code-review`（两阶段评审）
+- **Subagent**：`a304c632`（实现 `cc8b703` + 评审修复 `ab497ac`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：GET /api/keys 凭据库枚举（CredentialBackend.list + CredentialStore.list 委托）；动态 provider 列表 + 添加供应商（URL 编码 + 服务端名校验）；模型/护栏表单化（PUT config 白名单 patch）；护栏配置接入运行时（blockOutbound/requireApproval 真实生效）
+- **产出**：
+  - Commit: `cc8b703`（+12/+7）+ `ab497ac`（评审修复 +4/+4）
+  - 涉及文件: types.ts（CredentialBackend.list + Config.guardrails）、credentials/store + 三后端 list、webui/api/keys.ts（GET /）、main-loop.ts（guardrails 叠加层）、client api.ts + Settings.tsx（动态 KeyManagementCard + 可编辑表单）等
+  - 测试: 主项目 463→481 + client 136→147；tsc 双 build + oxlint 干净
+- **评审**：0 CRITICAL；1 IMPORTANT（护栏字段无类型无运行效果——写死旋钮）→ 修复：Config.guardrails 纳入接口点 + runGuardrails 叠加层（blockOutbound 网络外呼确认、requireApproval 子串匹配确认，PatternGuard BLOCK 优先不破坏）；4 Minor（URL 编码/删除行残留/maxRounds 空值/env 只读提示）全修
+- **人工干预**：无（评审结论与修复决策由主 agent 给出）
+- **教训**：
+  - **评审抓"写死旋钮"的价值**：表单保存成功文案宣称"已生效"，但字段无运行时读取——**UI 可编辑的配置项必须验证"保存后真的影响行为"**（对照：model/maxRounds 生效 vs 护栏不生效——完成条件只满足一半）
+  - **叠加层顺序**：新护栏检查放在 PatternGuard BLOCK 之后（不破坏硬拦截）、warn 之前（配置开关语义优先于 PatternGuard warn 缓存——同一命令二次出现仍要求二次确认）
+  - **凭据枚举的设计取舍**：`list(service)` 加到 CredentialBackend 接口（唯一接口点）而非 harness 注入列表——重启持久化的真实依据是"凭据在持久通道、枚举同一批 account"
+  - **M3 附带发现**：表单 seeding effect 前空值渲染一帧导致交互竞态——`seeded` 门控根治（不只是校验补丁）

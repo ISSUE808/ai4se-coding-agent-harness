@@ -1184,6 +1184,8 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** 任意 provider 名可添加并保存 key（keytar 通道，掩码显示）；重启后自定义 provider 仍在（从凭据库枚举）；模型/护栏编辑保存后 config show 反映变更；密钥字段仍被拒绝（回归测试）；client 测试更新。
 
+- [x] **已完成**（commit `cc8b703` + 评审修复 `ab497ac`，主项目 481 + client 147）——GET /api/keys 凭据库枚举（CredentialBackend.list）；动态 provider 列表 + 添加供应商（URL 编码 + 名校验）；模型/护栏可编辑表单（PUT config 白名单）；**护栏配置接入运行时**（Config.guardrails：blockOutbound 网络外呼确认 / requireApproval 规则匹配确认——真实生效，非写死旋钮）
+
 ### 任务 26：对话中切换模型
 
 **背景（用户建议）**：切换模型应便捷（对话中即可），不必每次改配置。
