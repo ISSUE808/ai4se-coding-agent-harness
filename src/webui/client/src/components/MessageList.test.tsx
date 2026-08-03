@@ -198,6 +198,29 @@ describe('MessageList', () => {
     expect(screen.getByText('依然渲染')).toBeInTheDocument();
   });
 
+  it('strips javascript: URLs from links (XSS-safe URL protocols)', () => {
+    render(
+      <MessageList
+        messages={[
+          msg({
+            id: 'a2',
+            role: 'assistant',
+            content: '[点我](javascript:window.__xssPwned=1) 和 [正常](https://example.com)',
+          }),
+        ]}
+      />,
+    );
+
+    const links = screen.getAllByRole('link');
+    // The javascript: link is stripped entirely — its text stays but is NOT a
+    // link; the safe https link renders normally.
+    const evil = links.find((l) => l.textContent === '点我');
+    expect(evil).toBeUndefined();
+    expect(screen.getByText('点我')).toBeInTheDocument();
+    const safe = links.find((l) => l.textContent === '正常');
+    expect(safe?.getAttribute('href')).toBe('https://example.com');
+  });
+
   it('keeps user messages as plain text (no markdown rendering)', () => {
     render(<MessageList messages={[msg({ id: 'u1', role: 'user', content: '请用 **加粗** 和 `code` 输出' })]} />);
 
