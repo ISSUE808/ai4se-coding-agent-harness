@@ -1149,6 +1149,62 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
+### 任务 23：fs 浏览端点 + 目录选择器 + 会话详情文件树
+
+**背景（用户建议）**：新建会话工作目录需手动输入路径（不便）；会话详情左栏只显示文件变更（希望显示工作目录文件树）。
+
+**涉及文件：**
+- 创建：`src/webui/api/fs.ts`——`GET /api/fs/tree?path=<dir>` 枚举目录树（含文件大小/类型；越界拦截——仅限授权的工作目录；深度限制防爆炸）
+- 修改：`src/webui/server.ts`（挂载 fs 路由）
+- 前端：`SessionDetail.tsx` 左栏改为**工作目录文件树**（可展开目录 + 文件变更高亮标记）；新建会话 modal 工作目录字段加**图形化选择器**（弹窗浏览目录树，点击选择）
+
+**完成条件：** fs 端点返回目录树（含嵌套目录、文件类型/大小）；越界路径 400；前端文件树可展开/折叠；目录选择器弹窗可选目录并回填输入框；全部 Mock 测试（API 用临时目录 fixture）。
+
+### 任务 24：MD 渲染 + 移除搜索框
+
+**背景（用户建议）**：AI 输出的 markdown 应以渲染预览显示；右上角搜索框无功能应删除。
+
+**涉及文件：**
+- 修改：`src/webui/client/src/components/MessageList.tsx`——assistant 消息用 **react-markdown** 安全渲染（样式对齐 design-tokens：代码块/表格/列表/行内代码；禁用危险 HTML——防 XSS）
+- 修改：`src/webui/client/src/App.tsx`——移除搜索框
+
+**完成条件：** assistant 消息的 markdown（标题/代码块/表格/列表/行内 code/链接）渲染正常且样式与 tokens 一致；`dangerouslySetInnerHTML` 零使用（XSS 审计）；搜索框从 TopBar 移除；client 测试更新（MD 渲染断言 + 移除搜索框断言）。
+
+### 任务 25：自定义供应商 + 模型/护栏可编辑
+
+**背景（用户建议）**：API Keys 仅三家供应商（需支持任意自定义供应商）；设置"模型与护栏"只读（需可直接修改并同步配置）。
+
+**涉及文件：**
+- 修改：`src/webui/api/keys.ts`——新增 `GET /api/keys`（枚举凭据库中已配置的 provider）
+- 修改：`src/webui/client/src/pages/Settings.tsx`——API Keys 支持"添加供应商"（输入名称 → 新增 key 行）；「模型与护栏」卡片改**可编辑表单**（model/maxTokens/maxRounds/contextThreshold/guardrails 开关）→ 保存走 PUT /api/config（沿用深度密钥拒绝）
+
+**完成条件：** 任意 provider 名可添加并保存 key（keytar 通道，掩码显示）；重启后自定义 provider 仍在（从凭据库枚举）；模型/护栏编辑保存后 config show 反映变更；密钥字段仍被拒绝（回归测试）；client 测试更新。
+
+### 任务 26：对话中切换模型
+
+**背景（用户建议）**：切换模型应便捷（对话中即可），不必每次改配置。
+
+**涉及文件：**
+- 修改：`src/types.ts`（Session 增加 `model?: string`）、`src/webui/session-store.ts`（create 支持 model）
+- 修改：`src/webui/api/sessions.ts`（POST 接受可选 model）
+- 修改：`src/cli/commands/start.ts`（runSession 构建 provider 时**会话级 model 覆盖** config.llm.model）
+- 修改：`src/webui/client/src/pages/SessionDetail.tsx`（上下文栏/头部加**模型选择器**：默认 + 自定义输入；切换 → PATCH session.model + 运行中重启当前 run——复用消息注入的 abort+restart 机制）
+- 修改：`src/webui/api/sessions.ts`（新增 PATCH /:id 或复用 POST message 机制更新 model）
+
+**完成条件：** 会话详情可切换模型（下拉默认模型 + 自定义输入）；切换后 agent 下一轮用新模型（provider 构造验证——可注入 spy）；运行中切换：abort 当前 run → 新模型重启 → 继续；CLI 会话不受影响（无 session.model 时用 config）；Mock 测试覆盖。
+
+### 任务 27：CLI 交互式 REPL（Claude Code 式）
+
+**背景（用户建议）**：CLI 启动/对话需手动输入完整命令（不便）——参考 Claude Code 交互界面。
+
+**涉及文件：**
+- 修改：`src/cli/index.ts`、`src/cli/commands/start.ts`——无参数启动进入 **REPL**（readline 交互循环：提示符 → 输入任务 → 运行 agent → 流式输出 → 等待下一条指令 → **消息注入**（复用 onMessageAdded 机制）→ 继续；`/exit`、`/help` 等斜杠命令）
+- 复用：CLI 交互确认（stdin y/n）、已批准命令记忆、会话级 workspaceRoot
+
+**完成条件：** `codeharness`（无参数）进入 REPL；输入任务即运行；运行中可输入新指令（注入下一轮）；HITL 确认在 REPL 内交互；`/exit` 退出、`/help` 列出命令；REPL 逻辑可注入测试（MockProvider 确定性）。
+
+---
+
 ## 实现阶段
 
 ```
@@ -1166,9 +1222,10 @@ describe('Agent Main Loop (integration)', () => {
 阶段 12: 演示             任务 20        （§A.6 机制演示）
 阶段 13: 分发             任务 21        （Dockerfile + npm 配置）
 阶段 14: 文档             任务 22        （README）
+阶段 15: WebUI/CLI 增强    任务 23-27     （用户真实测试后提出的产品改进；依赖阶段 10-11 完成）
 ```
 
-**拆分后任务总数**：25（Task 11→11a/11b、Task 13→13a/13b、Task 18→18a/18b）
+**拆分后任务总数**：30（Task 11→11a/11b、Task 13→13a/13b、Task 18→18a/18b、Task 23-27 为阶段 15 产品增强）
 
 **可并行的任务对**：任务 2+4（LLM + 工具）、任务 6+8（配置 + 护栏）、任务 10+14（反馈 + 凭据）、任务 17+20（WebUI 服务器 + 演示）
 
