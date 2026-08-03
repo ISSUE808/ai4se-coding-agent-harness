@@ -113,6 +113,7 @@
 | **4.1 模型选择器不渲染**（前端读顶层 `config.model`，真实 Config 的 model 在 `config.llm.model` → `configModel` 恒 null → 渲染条件恒假；测试 mock 恰好用了错误结构所以全绿）[实测] | 改为 `llm.model` 读取（窄化风格同 guardrails）+ 测试 mock 修正为真实结构 | `976b611` |
 | **自定义模型与配置不联动**（会话页手动填模型只改会话 override，设置里的全局默认 llm.model 不变，下次会话仍用旧模型）[实测] | ① 新增 `GET /api/llm/models`（后端持 key 调供应商 `/models`，密钥不出服务端）② 选择器列表模式：仅列出已获取模型（拉取失败回退手动输入+提示）③ 选择模型时 PATCH 会话 override **并** PUT config llm.model 双更新（config 失败不阻断会话切换）④ 设置页"供应商模型列表"区块（自动加载+刷新+点选填入表单） | `a8eca19` `7553229` |
 | **模型列表只显示当前供应商**（设置里只有 deepseek 的模型，无法看/切其他供应商）[实测] | ① 供应商注册表 `llm.providers`（baseUrl + defaultModel，key 仍存凭据层）② key 行加"应用"按钮：激活 = 切 llm.provider/baseUrl，有 defaultModel 直接带、否则取新供应商模型列表第一个 ③ 添加供应商表单（名称 + baseUrl 必填 + 默认模型可选）④ GET /api/keys 返回 baseUrl/isActive，列表 = 凭据 ∪ 注册表 ⑤ liveConfig 重构：PUT config 后模型列表/keys 端点跟随（getConfig 函数式） | `9b097d8` `69997df` |
+| **切换供应商后已注册供应商被清掉**（nju → deepseek → 再应用 nju 报"未配置 API 地址"——config router 持启动快照 `current`，POST keys 注册只更新 liveConfig，后续 PUT config 以旧快照 merge 把注册表条目覆盖删除，含持久化文件）[实测] | config router 去状态化：GET/PUT 统一读 `getConfig()（liveConfig 单一真源）`，删除 `current` 快照；+回归测试（注册→应用 A→应用 B→注册表存活） | `b6efc7b` |
 
 ---
 
