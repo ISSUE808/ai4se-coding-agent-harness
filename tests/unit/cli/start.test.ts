@@ -198,6 +198,27 @@ describe('runStartTask', () => {
     expect(session.messages.some((m) => m.content.includes('Approved operation executed'))).toBe(false);
   });
 
+  it('does not re-ask an approved command when the resumed run hits maxRounds (I1 CR)', async () => {
+    // maxRounds = 1: the resumed run upgrades (triggerHITL pause, no
+    // requestApproval) — HITL state is EXECUTING, so the approval loop must
+    // NOT ask again (approve() would throw in EXECUTING state).
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+    ];
+    const ask = vi.fn(async () => true);
+    const session = await runStartTask({
+      task: 'push',
+      config: { ...makeConfig(), agent: { ...makeConfig().agent, maxRounds: 1 } },
+      buildAgentLoop: buildMockAgentLoop(responses),
+      hitl: new HITLManager(),
+      promptApproval: ask,
+    });
+    expect(ask).toHaveBeenCalledTimes(1);
+    // The upgrade pause is reported cleanly instead of crashing mid-loop.
+    expect(session.status).toBe('paused');
+  });
+
   it('sets exit code 1 when the session ends without completing (I3 CR)', async () => {
     const printed: string[] = [];
     const cmd = createStartCommand({

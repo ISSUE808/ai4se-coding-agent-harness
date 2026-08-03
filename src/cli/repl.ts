@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto';
 import * as readline from 'node:readline';
 import type { Config, Message, Session } from '../types.js';
-import { HITLManager } from '../guardrail/hitl-manager.js';
+import { HITLManager, HITLState } from '../guardrail/hitl-manager.js';
 import type { HarnessEvents, HarnessEventMap } from '../events.js';
 import { createEventBus } from '../events.js';
 // Task 27: the REPL reuses the CLI run semantics (streaming, HITL approval,
@@ -14,6 +14,7 @@ import {
   executeApprovedActionImpl,
   formatMessageLine,
 } from './commands/start.js';
+import { adviceFor } from './errors.js';
 
 /**
  * Task 27 REPL (SPEC §4.3, §5.1): `codeharness` with no arguments enters an
@@ -119,6 +120,12 @@ function handleSlashCommand(
       ctx.io.print(`[session] model → ${arg}（下一次运行生效）`);
       return session;
     case '/clear':
+      // M5 CR (documented decision): hitl.reset() clears the pending decision
+      // but KEEPS the session-level approved-command cache (HITLManager:
+      // "cleared only on a fresh HITLManager, not on reset") — a /clear'd
+      // conversation still lets a re-issued identical command pass without a
+      // second confirmation. Accepted: the cache is per-HITLManager lifetime,
+      // /clear is a conversation reset, not a security reset.
       ctx.hitl.reset();
       ctx.io.print('[session] cleared — 开始新会话');
       return null;
@@ -204,7 +211,11 @@ async function runInstruction(opts: {
     // Human-in-the-loop: same flow as the CLI start command — approve
     // executes the authorized operation directly, deny records the decision,
     // then the SAME stored session resumes. Ctrl+C wins over the prompt.
-    while (session.status === 'paused' && hitl.getPendingCommand() !== null) {
+    // I1 CR: gate on the HITL STATE, not pendingCommand — after a decision the
+    // pending command is retained (EXECUTING/BLOCKED), so a later pause that
+    // is NOT a fresh approval (e.g. maxRounds upgrade) must not re-ask about
+    // the already-decided command (approve() would throw in EXECUTING state).
+    while (session.status === 'paused' && hitl.getState() === HITLState.AWAITING_APPROVAL) {
       if (opts.signal.aborted) {
         break;
       }
@@ -268,9 +279,16 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
   const events = deps.events ?? createEventBus();
   // HITL decisions prefer the injected prompt; the terminal io's askYesNo
   // reads the SAME input stream (single reader — piped lines are never lost);
-  // the CLI start default is the last fallback.
+  // cliPromptApproval is the last fallback for ios WITHOUT askYesNo. It reads
+  // via a SECOND readline on stdin, whose y/n answer would also land in the
+  // REPL input queue — unreachable in production (the terminal io always
+  // provides askYesNo) and tests inject promptApproval; kept only for ReplIO
+  // contract completeness (M1 CR).
   const ask = deps.promptApproval ?? io.askYesNo ?? cliPromptApproval;
   let session: Session | null = null;
+  // Last instruction's final session status — EOF exit code follows it (I3
+  // CR: scripting contract, mirror `start` non-completed → exit 1).
+  let lastStatus: string | undefined;
   let exited = false;
   let currentAbort: AbortController | null = null;
 
@@ -295,7 +313,11 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
   while (!exited) {
     const line = await io.readLine('codeharness> ');
     if (line === null) {
-      exit(0);
+      // EOF (or prompt-level Ctrl+C): scripting contract (I3 CR) — the exit
+      // code follows the LAST instruction's session outcome, mirroring
+      // `start` (non-completed → 1) so pipes can detect failure. /exit stays
+      // 0 (interactive exit).
+      exit(lastStatus === 'completed' ? 0 : 1);
       break;
     }
     const input = line.trim();
@@ -323,12 +345,13 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
         signal: controller.signal,
         print: io.print,
       });
+      lastStatus = session.status;
     } catch (err) {
       // Per-instruction error (e.g. missing API key, wiring failure): show
-      // actionable advice (§4.3) and return to the prompt — the REPL keeps
-      // running; the failed instruction is not injected into the session.
-      const message = err instanceof Error ? err.message : String(err);
-      io.print(`[session] error: ${message}`);
+      // actionable advice (§4.3, M2 CR — credential errors map to the key
+      // management hint) and return to the prompt — the REPL keeps running;
+      // the failed instruction is not injected into the session.
+      io.print(`[session] error: ${adviceFor(err)}`);
     } finally {
       currentAbort = null;
     }
@@ -343,18 +366,24 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
  * even type while the agent runs: those lines are queued and become the next
  * instructions (injected after the current run).
  *
- * Ctrl+C: at the prompt (a waiter is pending) → resolve null → the REPL exits
- * (documented Task 27 behavior). During a run (no waiter — the terminal is in
- * raw mode for the whole REPL, so the key arrives here, not as a process
- * SIGINT) → `interruptRun` aborts the run and the prompt returns.
+ * Ctrl+C: `interruptRun` is always invoked first (I2 CR — a Ctrl+C during a
+ * HITL ask must interrupt the run, not silently continue it with a denial);
+ * at the prompt currentAbort is null so the interrupt is a no-op and the
+ * pending read resolves null → the REPL exits (documented Task 27 behavior).
  */
+export interface ReplStreams {
+  input: NodeJS.ReadableStream & { isTTY?: boolean; setRawMode?: (mode: boolean) => void };
+  output: NodeJS.WritableStream & { isTTY?: boolean };
+}
+
 export function createTerminalReplIO(
   print: (line: string) => void = console.log,
   interruptRun?: () => void,
+  streams: ReplStreams = { input: process.stdin, output: process.stdout },
 ): ReplIO {
   const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
+    input: streams.input,
+    output: streams.output,
     crlfDelay: Infinity,
   });
   const queue: string[] = [];
@@ -376,12 +405,14 @@ export function createTerminalReplIO(
     for (const waiter of waiters.splice(0)) waiter(null);
   });
   rl.on('SIGINT', () => {
+    // I2 CR: always interrupt the in-flight run FIRST — a Ctrl+C during a HITL
+    // ask must abort the run (it stops at the next round boundary and the
+    // prompt returns), NOT silently continue it with a denial. At the prompt
+    // currentAbort is null → interruptRun is a no-op, and the pending read
+    // resolves null → the REPL exits (documented Task 27 behavior).
+    interruptRun?.();
     if (waiters.length > 0) {
-      // At the prompt: exit the REPL.
       for (const waiter of waiters.splice(0)) waiter(null);
-    } else {
-      // During a run: interrupt it (Ctrl+C at the prompt again exits).
-      interruptRun?.();
     }
   });
 

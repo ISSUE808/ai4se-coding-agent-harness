@@ -27,7 +27,7 @@ import { ShellCheckValidator } from '../../feedback/validators/shell-check-valid
 import { TestResultValidator } from '../../feedback/validators/test-result-validator.js';
 import { PatternGuard } from '../../guardrail/pattern-guard.js';
 import { ScopeFence } from '../../guardrail/scope-fence.js';
-import { HITLManager } from '../../guardrail/hitl-manager.js';
+import { HITLManager, HITLState } from '../../guardrail/hitl-manager.js';
 import { SessionMemory } from '../../memory/session-memory.js';
 import { createEventBus } from '../../events.js';
 import type { HarnessEvents, HarnessEventMap } from '../../events.js';
@@ -287,8 +287,12 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
     // Human-in-the-loop (CLI): a warn/out-of-workspace pause asks on stdin
     // (y/n) and resumes the SAME stored session — approve executes the
     // authorized operation first, deny records the decision and continues.
+    // I1 CR: gate on the HITL STATE, not pendingCommand — after a decision the
+    // pending command is retained (EXECUTING/BLOCKED), so a later pause that
+    // is NOT a fresh approval (e.g. maxRounds upgrade) must not re-ask about
+    // the already-decided command (approve() would throw in EXECUTING state).
     const ask = opts.promptApproval ?? cliPromptApproval;
-    while (session.status === 'paused' && hitl.getPendingCommand() !== null) {
+    while (session.status === 'paused' && hitl.getState() === HITLState.AWAITING_APPROVAL) {
       const pending = hitl.getPendingCommand() ?? 'unknown operation';
       const approved = await ask(
         `[HITL] 需要人工确认 — 批准执行该操作？\n  ${pending}\n  (y=批准执行 / n=拒绝)`,

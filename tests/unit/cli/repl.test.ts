@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { AgentLoop } from '../../../src/core/main-loop.js';
 import { MockProvider } from '../../../src/llm/mock-provider.js';
 import { ToolRegistry } from '../../../src/tools/tool.js';
@@ -20,12 +21,13 @@ import { ScopeFence } from '../../../src/guardrail/scope-fence.js';
 import { HITLManager } from '../../../src/guardrail/hitl-manager.js';
 import { SessionMemory } from '../../../src/memory/session-memory.js';
 import { DEFAULT_CONFIG } from '../../../src/config/schema.js';
+import { CredentialNotFoundError } from '../../../src/credentials/store.js';
 import type { Config, LLMProvider, LLMResponse, Validator } from '../../../src/types.js';
 import type {
   BuildAgentLoop,
   BuildAgentLoopOptions,
 } from '../../../src/cli/commands/start.js';
-import { runRepl } from '../../../src/cli/repl.js';
+import { createTerminalReplIO, runRepl } from '../../../src/cli/repl.js';
 import type { ReplIO } from '../../../src/cli/repl.js';
 import { createProgram } from '../../../src/cli/index.js';
 import { parseCaptured } from './helpers.js';
@@ -385,6 +387,177 @@ describe('runRepl', () => {
     const out = printed.join('\n');
     expect(out).toContain('未知命令: /foo');
     expect(out).toContain('/help');
+  });
+
+  it('after an approval, a resumed run hitting maxRounds pauses WITHOUT re-asking the decided command (I1 CR)', async () => {
+    // maxRounds = 1: the resumed run upgrades (triggerHITL pause, no
+    // requestApproval) — HITL state is EXECUTING (the command was already
+    // decided), so the REPL must NOT ask about it again (approve() would
+    // throw in EXECUTING state and stick the session paused).
+    const capped = { ...config, agent: { ...config.agent, maxRounds: 1 } };
+    const { io, printed } = makeIo(['push', null]);
+    const { provider } = capturingProvider([
+      {
+        toolCalls: [
+          { id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } },
+        ],
+      },
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+    ]);
+    const asked: string[] = [];
+    await runRepl({
+      config: capped,
+      buildAgentLoop: buildTestLoop(provider),
+      io,
+      promptApproval: async (question) => {
+        asked.push(question);
+        return true;
+      },
+    });
+    const out = printed.join('\n');
+    expect(asked).toHaveLength(1); // asked exactly once — no re-ask
+    expect(out).not.toContain('[session] error');
+    expect(out).toContain('status=paused'); // the upgrade pause, cleanly reported
+  });
+
+  it('Ctrl+C during the HITL prompt interrupts the run instead of continuing (I2 CR)', async () => {
+    // The terminal io (createTerminalReplIO) resolves a pending ask as 'no'
+    // AND interrupts the in-flight run on Ctrl+C — the REPL must abort at the
+    // round boundary instead of resuming with the denial.
+    let interruptHandler: (() => void) | null = null;
+    const printed: string[] = [];
+    const queue: Array<string | null> = ['push', null];
+    const io: ReplIO = {
+      readLine: async () => queue.shift() ?? null,
+      print: (line) => printed.push(line),
+      askYesNo: async () => {
+        interruptHandler?.(); // Ctrl+C lands while the approval is pending
+        return false;
+      },
+    };
+    const { provider, contexts } = capturingProvider([
+      {
+        toolCalls: [
+          { id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } },
+        ],
+      },
+      { content: 'done' },
+    ]);
+    await runRepl({
+      config,
+      buildAgentLoop: buildTestLoop(provider),
+      io,
+      onRunInterrupt: (handler) => {
+        interruptHandler = handler;
+      },
+    });
+    const out = printed.join('\n');
+    expect(out).toContain('[session] interrupted');
+    expect(out).toContain('status=paused');
+    expect(out).not.toContain('[session] error');
+    // The resumed run was aborted at the round boundary — the LLM was never
+    // called again (the 'done' response was not consumed).
+    expect(contexts).toHaveLength(1);
+  });
+
+  it('EOF exits 1 when the last session did not complete (I3 CR scripting contract)', async () => {
+    const { io } = makeIo(['explode', null]);
+    const exitCodes: number[] = [];
+    await runRepl({
+      config,
+      buildAgentLoop: buildTestLoop(new MockProvider([])), // no responses → failed
+      io,
+      onExit: (code) => exitCodes.push(code),
+    });
+    expect(exitCodes).toEqual([1]);
+  });
+
+  it('/exit stays 0 even when the session did not complete (interactive exit, I3 CR)', async () => {
+    const { io } = makeIo(['explode', '/exit']);
+    const exitCodes: number[] = [];
+    await runRepl({
+      config,
+      buildAgentLoop: buildTestLoop(new MockProvider([])),
+      io,
+      onExit: (code) => exitCodes.push(code),
+    });
+    expect(exitCodes).toEqual([0]);
+  });
+
+  it('per-instruction errors map through adviceFor (SPEC §4.3 actionable advice, M2 CR)', async () => {
+    const { io, printed } = makeIo(['task one', null]);
+    const buildAgentLoop: BuildAgentLoop = async () => {
+      throw new CredentialNotFoundError('codeharness/deepseek', 'deepseek');
+    };
+    await runRepl({ config, buildAgentLoop, io });
+    const out = printed.join('\n');
+    // The mapped advice, not the raw CredentialNotFoundError message.
+    expect(out).toContain('No API key is set. Run `codeharness key update` to add one.');
+    expect(out).not.toContain('No credential found for');
+  });
+
+  it('continuing a capped-out session raises the cap so the next instruction runs (M4 CR)', async () => {
+    const capped = { ...config, agent: { ...config.agent, maxRounds: 1 } };
+    const { io, printed } = makeIo(['first task', 'continue', null]);
+    const { provider } = capturingProvider([
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { content: 'Continued done.' },
+    ]);
+    await runRepl({ config: capped, buildAgentLoop: buildTestLoop(provider), io });
+    const out = printed.join('\n');
+    // Run 1: read_file → round 2 → maxRounds exceeded → paused (upgrade).
+    expect(out).toContain('status=paused');
+    // Run 2: the raised cap lets the injected instruction run to completion.
+    expect(out).toContain('Continued done.');
+    expect(out).toContain('status=completed');
+  });
+
+  it('HITL deny records the decision and continues without executing (M4 CR)', async () => {
+    const { io, printed } = makeIo(['push', 'n', null]);
+    const { provider } = capturingProvider([
+      {
+        toolCalls: [
+          { id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } },
+        ],
+      },
+      { content: 'done' },
+    ]);
+    await runRepl({ config, buildAgentLoop: buildTestLoop(provider), io });
+    const out = printed.join('\n');
+    expect(out).toContain('Command denied');
+    expect(out).toContain('status=completed');
+  });
+
+  it('/model with a blank argument prints the current model (no override, M4 CR)', async () => {
+    const { io, printed } = makeIo(['task one', '/model   ', null]);
+    const { provider } = capturingProvider([
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { content: 'One done.' },
+    ]);
+    await runRepl({ config, buildAgentLoop: buildTestLoop(provider), io });
+    expect(printed.join('\n')).toContain(`当前模型: ${config.llm.model}`);
+  });
+});
+
+describe('createTerminalReplIO', () => {
+  it('Ctrl+C while a read is pending ALSO interrupts the run (I2 CR)', async () => {
+    class FakeTty extends PassThrough {
+      isTTY = true;
+      setRawMode(): this {
+        return this;
+      }
+    }
+    const input = new FakeTty();
+    const output = new FakeTty();
+    const interrupt = vi.fn();
+    const io = createTerminalReplIO(() => {}, interrupt, { input, output });
+    // A read is pending (the prompt, or a HITL ask mid-run) when Ctrl+C lands
+    // — the terminal raw-mode 0x03 byte reaches the readline 'SIGINT' event.
+    const line = io.readLine('codeharness> ');
+    input.write(Buffer.from([0x03]));
+    expect(await line).toBeNull(); // the pending read resolves as an exit...
+    expect(interrupt).toHaveBeenCalledTimes(1); // ...AND the run is interrupted
+    io.close?.();
   });
 });
 
