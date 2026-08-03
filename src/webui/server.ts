@@ -116,6 +116,16 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
   const app = express();
   app.use(express.json());
 
+  // Task 26 follow-up: `liveConfig` is the config every router reads. The
+  // config router's persistence re-points it, so routes mounted with this
+  // reference (keys registry, provider model list) follow PUT /api/config —
+  // the startup snapshot alone would leave them stuck on the old provider.
+  let liveConfig: Config = deps.config;
+  const persistConfig = async (config: Config): Promise<void> => {
+    liveConfig = config;
+    await deps.persistConfig?.(config);
+  };
+
   app.use(
     '/api/sessions',
     createSessionsRouter({
@@ -142,11 +152,13 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
     createKeysRouter({
       credentialStore: deps.credentialStore,
       service: deps.config.llm.apiKeyService,
+      getConfig: () => liveConfig,
+      persistConfig,
     }),
   );
   app.use(
     '/api/config',
-    createConfigRouter({ config: deps.config, persistConfig: deps.persistConfig }),
+    createConfigRouter({ config: deps.config, persistConfig }),
   );
   // Task 23: fs browsing (directory picker / file tree). Allowed roots = the
   // config workspace root plus every known session workspaceRoot, queried
@@ -161,10 +173,12 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
     }),
   );
   // Task 26 follow-up: provider model list (fetched with the stored key).
+  // `getConfig` reads the LIVE config so switching providers redirects the
+  // fetch target (a plain `config:` snapshot would freeze the startup value).
   app.use(
     '/api/llm/models',
     createModelsRouter({
-      config: deps.config,
+      getConfig: () => liveConfig,
       credentialStore: deps.credentialStore,
       fetchFn: deps.fetchFn,
     }),

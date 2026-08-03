@@ -8,6 +8,11 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
     maxTokens: 4096,
     apiKeySource: 'keytar',
     apiKeyService: 'codeharness/deepseek',
+    // Task 26 follow-up: the built-in registry entry mirrors the active
+    // values, so the Settings "应用" action has metadata to switch back to.
+    providers: {
+      deepseek: { baseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-chat' },
+    },
   },
   agent: {
     // 0 = unlimited, mirroring Claude Code `--max-turns` default (no cap

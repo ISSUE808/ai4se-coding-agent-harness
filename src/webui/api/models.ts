@@ -17,7 +17,12 @@ import { CredentialStore, CredentialNotFoundError } from '../../credentials/stor
  */
 
 export interface ModelsRouterDeps {
-  config: Config;
+  /**
+   * Reads the LIVE config (the server re-points it when PUT /api/config
+   * persists) — never a startup snapshot, so provider switches redirect
+   * the fetch target.
+   */
+  getConfig: () => Config;
   credentialStore: CredentialStore;
   /** Injectable fetch (defaults to globalThis.fetch); tests inject a mock. */
   fetchFn?: typeof fetch;
@@ -40,12 +45,12 @@ export function extractModelIds(body: unknown): string[] {
 }
 
 export function createModelsRouter(deps: ModelsRouterDeps): Router {
-  const { config, credentialStore } = deps;
+  const { credentialStore } = deps;
   const fetchFn = deps.fetchFn ?? globalThis.fetch;
   const router = Router();
 
   router.get('/', async (_req, res) => {
-    const { provider, baseUrl, apiKeyService } = config.llm;
+    const { provider, baseUrl, apiKeyService } = deps.getConfig().llm;
     try {
       const handle = await credentialStore.get(apiKeyService, provider);
       // §3.7: the key exists only inside this closure; the fetch is built and

@@ -85,6 +85,7 @@ afterEach(async () => {
 async function makeFixture(
   config?: Config,
   credentialBackend?: CredentialBackend,
+  fetchFn?: typeof fetch,
 ): Promise<Fixture> {
   const events = createEventBus();
   const sessionStore = new InMemorySessionStore();
@@ -97,6 +98,7 @@ async function makeFixture(
     credentialStore,
     config: config ?? structuredClone(DEFAULT_CONFIG),
     hitl,
+    fetchFn,
     persistConfig: async (c: Config) => {
       persisted = structuredClone(c);
     },
@@ -618,11 +620,34 @@ describe('REST /api/keys', () => {
 });
 
 describe('REST /api/keys enumeration (Task 25: custom providers)', () => {
+  /** Config WITHOUT the built-in deepseek registry entry (Task 26 follow-up). */
+  function noRegistryConfig(): Config {
+    const config = structuredClone(DEFAULT_CONFIG);
+    delete config.llm.providers;
+    return config;
+  }
+
   it('GET /api/keys returns an empty provider list when nothing is configured', async () => {
-    const { web } = await makeFixture();
+    const { web } = await makeFixture(noRegistryConfig());
     const res = await request(web.app).get('/api/keys');
     expect(res.status).toBe(200);
     expect(res.body.providers).toEqual([]);
+  });
+
+  it('GET /api/keys lists the built-in registry entry even without a key (Task 26 follow-up)', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    // deepseek comes from the registry (no key stored yet): metadata + active.
+    expect(res.body.providers).toEqual([
+      {
+        provider: 'deepseek',
+        status: 'not set',
+        baseUrl: 'https://api.deepseek.com',
+        defaultModel: 'deepseek-chat',
+        isActive: true,
+      },
+    ]);
   });
 
   it('GET /api/keys enumerates every configured provider with a masked status, never plaintext', async () => {
@@ -631,9 +656,17 @@ describe('REST /api/keys enumeration (Task 25: custom providers)', () => {
     await request(web.app).post('/api/keys/groq').send({ apiKey: 'sk-groq-5678' });
     const res = await request(web.app).get('/api/keys');
     expect(res.status).toBe(200);
+    // deepseek carries its registry metadata (Task 26 follow-up) and is the
+    // active provider by default; groq only has a key.
     expect(res.body.providers).toEqual([
-      { provider: 'deepseek', status: '****-bcd1' },
-      { provider: 'groq', status: '****-5678' },
+      {
+        provider: 'deepseek',
+        status: '****-bcd1',
+        baseUrl: 'https://api.deepseek.com',
+        defaultModel: 'deepseek-chat',
+        isActive: true,
+      },
+      { provider: 'groq', status: '****-5678', isActive: false },
     ]);
     expect(JSON.stringify(res.body)).not.toContain('sk-secret-abcd1');
     expect(JSON.stringify(res.body)).not.toContain('sk-groq-5678');
@@ -642,18 +675,18 @@ describe('REST /api/keys enumeration (Task 25: custom providers)', () => {
   it('a custom provider survives a backend restart — enumerated from the credential store', async () => {
     // The SAME in-memory backend spans two server instances (a "restart").
     const backend = memoryBackend();
-    const { web: first } = await makeFixture(undefined, backend);
+    const { web: first } = await makeFixture(noRegistryConfig(), backend);
     await request(first.app).post('/api/keys/mistral').send({ apiKey: 'sk-mistral-9999' });
     await first.close();
 
-    const { web: second } = await makeFixture(undefined, backend);
+    const { web: second } = await makeFixture(noRegistryConfig(), backend);
     const res = await request(second.app).get('/api/keys');
     expect(res.status).toBe(200);
-    expect(res.body.providers).toEqual([{ provider: 'mistral', status: '****-9999' }]);
+    expect(res.body.providers).toEqual([{ provider: 'mistral', status: '****-9999', isActive: false }]);
   });
 
   it('deleting a key removes the provider from GET /api/keys', async () => {
-    const { web } = await makeFixture();
+    const { web } = await makeFixture(noRegistryConfig());
     await request(web.app).post('/api/keys/groq').send({ apiKey: 'sk-groq-5678' });
     await request(web.app).delete('/api/keys/groq');
     const res = await request(web.app).get('/api/keys');
@@ -683,7 +716,7 @@ describe('REST /api/keys enumeration (Task 25: custom providers)', () => {
         return [];
       },
     };
-    const { web } = await makeFixture(undefined, envBackend);
+    const { web } = await makeFixture(noRegistryConfig(), envBackend);
     const res = await request(web.app).get('/api/keys');
     expect(res.status).toBe(200);
     expect(res.body.backend).toBe('env');
@@ -880,5 +913,81 @@ describe('error handling middleware', () => {
       .send('{not json');
     expect(res.status).toBe(400);
     expect(res.headers['content-type']).toContain('application/json');
+  });
+});
+
+describe('provider registry (multi-provider keys, Task 26 follow-up)', () => {
+  it('POST /api/keys/:provider with baseUrl registers metadata and saves the key', async () => {
+    const { web, port, getPersisted } = await makeFixture();
+    const res = await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ apiKey: 'sk-openai', baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' });
+    expect(res.status).toBe(200);
+    expect(getPersisted()?.llm.providers?.openai).toEqual({
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModel: 'gpt-4o',
+    });
+  });
+
+  it('POST /api/keys/:provider without a key only registers metadata', async () => {
+    const { web, port, getPersisted } = await makeFixture();
+    const res = await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/groq')
+      .send({ baseUrl: 'https://api.groq.com/openai/v1' });
+    expect(res.status).toBe(200);
+    expect(getPersisted()?.llm.providers?.groq).toEqual({ baseUrl: 'https://api.groq.com/openai/v1' });
+    // No credential was stored for a key-less registration.
+    const keys = await request(`http://127.0.0.1:${port}`).get('/api/keys');
+    const groqRow = keys.body.providers.find((p: { provider: string }) => p.provider === 'groq');
+    expect(groqRow.status).toBe('not set');
+  });
+
+  it('POST /api/keys/:provider with neither apiKey nor baseUrl is rejected', async () => {
+    const { web, port } = await makeFixture();
+    const res = await request(`http://127.0.0.1:${port}`).post('/api/keys/groq').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/keys reports baseUrl/defaultModel/isActive from the registry', async () => {
+    const { web, port } = await makeFixture();
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ apiKey: 'sk-openai', baseUrl: 'https://api.openai.com/v1' });
+    const res = await request(`http://127.0.0.1:${port}`).get('/api/keys');
+    const deepseek = res.body.providers.find((p: { provider: string }) => p.provider === 'deepseek');
+    // deepseek is the DEFAULT config provider, so it is the active one.
+    expect(deepseek.isActive).toBe(true);
+    expect(deepseek.baseUrl).toBe('https://api.deepseek.com');
+    const openai = res.body.providers.find((p: { provider: string }) => p.provider === 'openai');
+    expect(openai.isActive).toBe(false);
+    expect(openai.baseUrl).toBe('https://api.openai.com/v1');
+  });
+
+  it('switching the provider via PUT /api/config redirects /api/llm/models to the new baseUrl', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: 'gpt-4o' }] }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const { web, port, getPersisted } = await makeFixture(
+      structuredClone(DEFAULT_CONFIG),
+      undefined,
+      fetchFn,
+    );
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ apiKey: 'sk-openai', baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' });
+    const put = await request(`http://127.0.0.1:${port}`)
+      .put('/api/config')
+      .send({ llm: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' } });
+    expect(put.status).toBe(200);
+    const models = await request(`http://127.0.0.1:${port}`).get('/api/llm/models');
+    expect(models.status).toBe(200);
+    // The models endpoint must follow the LIVE config, not the startup one.
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-openai' }),
+      }),
+    );
+    expect(getPersisted()?.llm.provider).toBe('openai');
   });
 });

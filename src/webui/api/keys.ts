@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import type { Config } from '../../types.js';
 import type { CredentialStore } from '../../credentials/store.js';
 import { maskSecret } from '../../credentials/mask.js';
 
@@ -19,6 +20,14 @@ export interface KeysRouterDeps {
   credentialStore: CredentialStore;
   /** Credential service, e.g. merged config `llm.apiKeyService`. */
   service: string;
+  /**
+   * Task 26 follow-up: the LIVE config (a mutable reference the server
+   * re-points when PUT /api/config persists) — read for the provider
+   * registry (`llm.providers`) and the active provider (`llm.provider`).
+   */
+  getConfig: () => Config;
+  /** Persist a config change (registry writes from POST /api/keys). */
+  persistConfig: (config: Config) => Promise<void>;
 }
 
 /** Express 4 does not catch async rejections — route them to the error handler. */
@@ -41,12 +50,27 @@ export function createKeysRouter(deps: KeysRouterDeps): Router {
     '/',
     asyncRoute(async (_req, res) => {
       const backend = await credentialStore.getActiveBackend();
-      const providers = (await credentialStore.list(service)).sort();
+      const config = deps.getConfig();
+      const registry = config.llm.providers ?? {};
+      // Task 26 follow-up: the union of keyed providers (credential store)
+      // and registered providers (config.llm.providers) — a provider added
+      // with metadata but no key yet still shows up (status "not set").
+      const stored = (await credentialStore.list(service)).sort();
+      const registered = Object.keys(registry).filter((p) => !stored.includes(p));
+      const providers = [...stored, ...registered].sort();
       const entries = await Promise.all(
-        providers.map(async (provider) => ({
-          provider,
-          status: await credentialStore.status(service, provider),
-        })),
+        providers.map(async (provider) => {
+          const meta = registry[provider];
+          return {
+            provider,
+            status: await credentialStore.status(service, provider),
+            // Task 26 follow-up: registry metadata so the UI can show the
+            // endpoint and enable the "应用" (activate) action.
+            ...(meta?.baseUrl ? { baseUrl: meta.baseUrl } : {}),
+            ...(meta?.defaultModel ? { defaultModel: meta.defaultModel } : {}),
+            isActive: provider === config.llm.provider,
+          };
+        }),
       );
       // `backend` lets the UI hint when the active backend is the read-only
       // env backend (reviewer M4).
@@ -72,13 +96,41 @@ export function createKeysRouter(deps: KeysRouterDeps): Router {
         });
         return;
       }
+      // Task 26 follow-up: a POST may carry an apiKey (→ credential store),
+      // registry metadata (baseUrl/defaultModel → config.llm.providers), or
+      // both. At least one must be present. The key never appears in any
+      // response body; the registry holds NO secrets.
       const apiKey = req.body?.apiKey;
-      if (typeof apiKey !== 'string' || apiKey.trim() === '') {
-        res.status(400).json({ error: 'apiKey is required' });
+      const baseUrl = req.body?.baseUrl;
+      const defaultModel = req.body?.defaultModel;
+      const hasKey = typeof apiKey === 'string' && apiKey.trim() !== '';
+      const hasBaseUrl = typeof baseUrl === 'string' && baseUrl.trim() !== '';
+      const hasDefault = typeof defaultModel === 'string' && defaultModel.trim() !== '';
+      if (!hasKey && !hasBaseUrl) {
+        res.status(400).json({ error: 'apiKey or baseUrl is required' });
         return;
       }
-      await credentialStore.save(service, provider, apiKey);
-      res.json({ provider, saved: true, masked: maskSecret(apiKey) });
+      if (hasKey) {
+        await credentialStore.save(service, provider, apiKey as string);
+      }
+      if (hasBaseUrl || hasDefault) {
+        const config = deps.getConfig();
+        const next: Config = {
+          ...config,
+          llm: {
+            ...config.llm,
+            providers: {
+              ...(config.llm.providers ?? {}),
+              [provider]: {
+                baseUrl: hasBaseUrl ? (baseUrl as string).trim() : ((config.llm.providers ?? {})[provider]?.baseUrl ?? config.llm.baseUrl),
+                ...(hasDefault ? { defaultModel: (defaultModel as string).trim() } : {}),
+              },
+            },
+          },
+        };
+        await deps.persistConfig(next);
+      }
+      res.json({ provider, saved: hasKey, masked: hasKey ? maskSecret(apiKey as string) : 'not set' });
     }),
   );
 

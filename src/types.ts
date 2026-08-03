@@ -106,6 +106,14 @@ export interface Config {
     maxTokens: number;
     apiKeySource: 'keytar' | 'encrypted_file' | 'env';
     apiKeyService: string;
+    /**
+     * Task 26 follow-up: provider registry — per-provider connection
+     * metadata. `llm.provider`/`llm.baseUrl`/`llm.model` are the ACTIVE
+     * provider's values; this map keeps every registered provider's
+     * endpoint so the Settings "应用" action can switch cleanly. Keys
+     * (secrets) live in the CredentialStore, never here.
+     */
+    providers?: Record<string, { baseUrl: string; defaultModel?: string }>;
   };
   agent: {
     maxRounds: number;
