@@ -1086,7 +1086,7 @@ describe('Agent Main Loop (integration)', () => {
 
 **需求备注（Phase 10 收尾时用户决策）**：会话级工作目录绑定（"打开/新建项目"）统一在 Task 19 实现——✅ 全部落地（commit `860336b`）：
 - ✅ `Session` 增加 `workspaceRoot` 字段（当前为全局 `config.agent.workspaceRoot`，会话无项目绑定）
-- ✅ `POST /api/sessions` 接受并校验 workspaceRoot（绝对路径/存在/目录/可写四重校验 + 400；7 种非法输入测试）；`SessionStore.create` 支持
+- ✅ `POST /api/sessions` 接受并校验 workspaceRoot（绝对路径/存在/目录三重校验 + 400；7 种非法输入测试；1.6 真实测试跟进：移除「可写」检查——Windows `fs.access` 不查 ACL，`C:\Windows` 恒过 W_OK，纸面限制只制造与选择器（任意目录可选）的不一致；不可写根合法，树加载失败可见报错 + 工具层 isWithinWorkspace 兜底）；`SessionStore.create` 支持
 - ✅ `AgentLoop.run` 按会话 workspaceRoot 构建 ToolContext/验证器 cwd/scope-fence 基准（run(options) 会话 > 显式参数 > config 回退链）
 - ✅ WebUI 新建会话 modal 加「工作目录」字段（默认当前 workspaceRoot）；会话详情显示项目路径
 - ⬜ CLI `start` 加 `--cwd` 选项（可选增强，未实现——start.ts 注释注明）

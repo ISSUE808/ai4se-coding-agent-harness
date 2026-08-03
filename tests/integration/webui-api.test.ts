@@ -3,6 +3,15 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import request from 'supertest';
+
+// accessSync is patched so a single test can simulate an unwritable root
+// (Windows fs.access() checks file attributes, not ACLs — an unwritable
+// directory cannot be constructed portably). Every other fs function
+// forwards to the real implementation untouched.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, accessSync: vi.fn(actual.accessSync) };
+});
 import { WebSocket } from 'ws';
 import { createWebUIServer } from '../../src/webui/server.js';
 import type { WebUIServer } from '../../src/webui/server.js';
@@ -231,6 +240,26 @@ describe('REST /api/sessions', () => {
         expect(res.status).toBe(400);
         expect(res.body.error).toBeTypeOf('string');
       }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/sessions accepts an existing directory regardless of writability (1.6: no writability gate)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-ws-api-'));
+    try {
+      const { web } = await makeFixture();
+      // The writability check is unreliable on Windows (fs.access() checks
+      // file attributes, not ACLs — even C:\Windows passes W_OK) and the
+      // picker already allows ANY directory, so creation must not depend on
+      // it. Simulate an unwritable root by forcing accessSync to fail once.
+      const accessSyncMock = vi.mocked(fs.accessSync);
+      accessSyncMock.mockImplementationOnce(() => {
+        throw new Error('EPERM: permission denied, access C:\\Windows');
+      });
+      const res = await request(web.app).post('/api/sessions').send({ task: 't', workspaceRoot: dir });
+      expect(res.status).toBe(201);
+      expect(res.body.workspaceRoot).toBe(dir);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

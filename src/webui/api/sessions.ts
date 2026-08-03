@@ -47,9 +47,17 @@ export interface SessionsRouterDeps {
 const MESSAGE_ROLES = ['user', 'assistant', 'tool', 'system', 'feedback'] as const;
 
 /**
- * Task 19 workspaceRoot validation: must be a string, an absolute path, an
- * existing directory, and writable. `undefined` means "use the store default".
+ * Task 19 workspaceRoot validation: must be a string, an absolute path, and
+ * an existing directory. `undefined` means "use the store default".
  * Returns `{ ok: true, value }` or `{ ok: false, error }`.
+ *
+ * 1.6 real-test follow-up: the old writability gate (`fs.accessSync(W_OK)`)
+ * was REMOVED. On Windows fs.access() checks file attributes, not ACLs —
+ * even `C:\Windows` passes W_OK, so the gate never actually rejected
+ * anything and only made manual input inconsistent with the picker (which
+ * allows ANY directory — the supervision model is 选中即授权). Choosing an
+ * unwritable root is legitimate (the file tree then fails with a visible
+ * error, and every tool enforces its own isWithinWorkspace boundary).
  */
 function validateWorkspaceRoot(
   value: unknown,
@@ -71,11 +79,6 @@ function validateWorkspaceRoot(
   }
   if (!stat.isDirectory()) {
     return { ok: false, error: `workspaceRoot must be a directory: ${value}` };
-  }
-  try {
-    fs.accessSync(value, fs.constants.W_OK);
-  } catch {
-    return { ok: false, error: `workspaceRoot is not writable: ${value}` };
   }
   return { ok: true, value };
 }
