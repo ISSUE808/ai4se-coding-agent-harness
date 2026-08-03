@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import Editor from '@monaco-editor/react';
 import {
   AlertTriangle,
@@ -72,6 +72,12 @@ export default function Settings() {
     } catch {
       // Backend unreachable — keep the current config.
     }
+  }, []);
+
+  // Real-test: a JSON-editor save propagates the merged config back so the
+  // 模型与护栏 / 通用 cards follow — all three panels share one config source.
+  const handleConfigEditorSaved = useCallback((next: ConfigValue) => {
+    setConfig(next);
   }, []);
 
   return (
@@ -154,7 +160,7 @@ export default function Settings() {
               onConfigChanged={handleConfigChanged}
               onRegistryChanged={() => void handleRegistryChanged()}
             />
-            <ConfigEditorCard />
+            <ConfigEditorCard config={config} onSaved={handleConfigEditorSaved} />
             <ModelGuardrailCard config={config} />
             <GeneralCard config={config} />
             <DangerZone />
@@ -796,31 +802,68 @@ function KeyRow({
 
 // ─── Config editor (Monaco JSON) ─────────────────────────────────────────────
 
-function ConfigEditorCard() {
+function ConfigEditorCard({
+  config,
+  onSaved,
+}: {
+  /**
+   * The page's shared config — the editor follows external changes (registry
+   * edits, provider switches) when its buffer is clean (real-test: an edited
+   * endpoint only appeared in the JSON editor after a page reload).
+   */
+  config: ConfigValue | null;
+  /** Called with the merged config after a save so the other cards follow. */
+  onSaved?: (merged: ConfigValue) => void;
+}) {
   const [text, setText] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'ok' | 'error' | 'saved'; message: string } | null>(
     null,
   );
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * The last text the editor loaded or saved — a dirty buffer (text !==
+   * baseline) is the user's own in-progress edit and must win over any
+   * external config snapshot (no silent clobbering).
+   */
+  const baselineRef = useRef<string | null>(null);
+
+  /** Strip secret-shaped fields (webui.token) — the editor must never
+   * round-trip a secret-shaped field back into the config. */
+  const stripSecrets = useCallback((value: unknown): string => {
+    const cleaned = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+    const webui = cleaned.webui as Record<string, unknown> | undefined;
+    if (webui) {
+      delete webui.token;
+    }
+    return JSON.stringify(cleaned, null, 2);
+  }, []);
+
+  // Real-test: an external config change (keys-card registry edit) refreshes
+  // the editor buffer without a page reload — unless the user is mid-edit.
+  useEffect(() => {
+    if (config === null || text === null || text !== baselineRef.current) {
+      return;
+    }
+    const next = stripSecrets(config);
+    baselineRef.current = next;
+    setText(next);
+  }, [config, text, stripSecrets]);
 
   const load = useCallback(async () => {
     try {
-      const config = await fetchConfig();
+      const fetched = await fetchConfig();
       // Strip secret fields from the editor buffer: the masked response
       // carries webui.token ("not set") which PUT would reject — the editor
       // must never round-trip a secret-shaped field back into the config.
-      const cleaned = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
-      const webui = cleaned.webui as Record<string, unknown> | undefined;
-      if (webui) {
-        delete webui.token;
-      }
-      setText(JSON.stringify(cleaned, null, 2));
+      const next = stripSecrets(fetched);
+      baselineRef.current = next;
+      setText(next);
       setStatus(null);
     } catch {
       setText('{\n  // 无法加载配置：请确认 WebUI 后端已启动（默认端口 3000）\n}');
     }
-  }, []);
+  }, [stripSecrets]);
 
   useEffect(() => {
     void load();
@@ -850,6 +893,10 @@ function ConfigEditorCard() {
       const merged = await saveConfig(value);
       setStatus({ kind: 'saved', message: '配置已保存（响应为脱敏后的合并配置）' });
       setPreview(JSON.stringify(merged, null, 2));
+      // The saved buffer becomes the new baseline; the merged config
+      // propagates to the other cards (model form / general).
+      baselineRef.current = text;
+      onSaved?.(merged);
     } catch (err) {
       setStatus({ kind: 'error', message: `保存失败：${err instanceof Error ? err.message : String(err)}` });
     } finally {

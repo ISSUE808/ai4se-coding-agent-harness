@@ -215,7 +215,99 @@ describe('Settings', () => {
       expect(saveConfigMock).toHaveBeenCalledWith({ agent: { maxRounds: 10 } });
     });
     expect(await screen.findByText(/配置已保存/)).toBeInTheDocument();
-    expect(screen.getByText(/"apiKey": "\*\*\*\*-9f2c"/)).toBeInTheDocument();
+    // The masked merged config shows in the preview AND the editor buffer now
+    // follows the saved merged config (three-panel single source).
+    expect(screen.getAllByText(/"apiKey": "\*\*\*\*-9f2c"/).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('配置编辑 follows an ACTIVE-provider endpoint edit without a reload (real-test: needed one)', async () => {
+    const user = userEvent.setup();
+    let baseUrl = 'https://api.deepseek.com';
+    fetchKeysMock.mockImplementation(async () => ({
+      providers: [
+        { provider: 'deepseek', status: '****-9f2c', baseUrl, defaultModel: 'deepseek-chat', isActive: true },
+      ],
+    }));
+    fetchConfigMock.mockImplementation(async () => ({
+      llm: { provider: 'deepseek', baseUrl, model: 'deepseek-chat', maxTokens: 4096, apiKeySource: 'keytar' },
+      agent: { maxRounds: 3, contextThreshold: 0.8, workspaceRoot: '/work' },
+      webui: { port: 3000 },
+      guardrails: { requireApproval: ['prod'], blockOutbound: true },
+    }));
+    render(<Settings />);
+    const editor = (await screen.findByLabelText('配置编辑器')) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(editor.value).toContain('https://api.deepseek.com');
+    });
+
+    await user.click(within(row('deepseek')).getByRole('button', { name: '更新' }));
+    await user.clear(within(row('deepseek')).getByLabelText('新 API 地址'));
+    await user.type(within(row('deepseek')).getByLabelText('新 API 地址'), 'https://nju-mirror.example/v1');
+    baseUrl = 'https://nju-mirror.example/v1';
+    await user.click(within(row('deepseek')).getByRole('button', { name: '保存' }));
+
+    // The JSON editor follows the endpoint edit without a page reload.
+    await waitFor(() => {
+      expect(editor.value).toContain('https://nju-mirror.example/v1');
+      expect(editor.value).not.toContain('https://api.deepseek.com');
+    });
+  });
+
+  it('配置编辑 keeps unsaved edits when an external config change arrives', async () => {
+    const user = userEvent.setup();
+    let baseUrl = 'https://api.deepseek.com';
+    fetchKeysMock.mockImplementation(async () => ({
+      providers: [
+        { provider: 'deepseek', status: '****-9f2c', baseUrl, defaultModel: 'deepseek-chat', isActive: true },
+      ],
+    }));
+    fetchConfigMock.mockImplementation(async () => ({
+      llm: { provider: 'deepseek', baseUrl, model: 'deepseek-chat', maxTokens: 4096, apiKeySource: 'keytar' },
+      agent: { maxRounds: 3, contextThreshold: 0.8, workspaceRoot: '/work' },
+      webui: { port: 3000 },
+      guardrails: { requireApproval: ['prod'], blockOutbound: true },
+    }));
+    render(<Settings />);
+    const editor = (await screen.findByLabelText('配置编辑器')) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(editor.value).toContain('https://api.deepseek.com');
+    });
+
+    // The user is mid-edit in the JSON editor (dirty buffer).
+    fireEvent.change(editor, { target: { value: `${editor.value}\n  "userEdit": true\n}` } });
+
+    // An external config change arrives (active-provider endpoint edit).
+    await user.click(within(row('deepseek')).getByRole('button', { name: '更新' }));
+    await user.clear(within(row('deepseek')).getByLabelText('新 API 地址'));
+    await user.type(within(row('deepseek')).getByLabelText('新 API 地址'), 'https://nju-mirror.example/v1');
+    baseUrl = 'https://nju-mirror.example/v1';
+    await user.click(within(row('deepseek')).getByRole('button', { name: '保存' }));
+
+    // The dirty buffer is NOT clobbered by the external update.
+    await waitFor(() => {
+      expect(saveKeyMock).toHaveBeenCalled();
+    });
+    expect(editor.value).toContain('userEdit');
+  });
+
+  it('配置编辑 save propagates to the 模型与护栏 card', async () => {
+    const user = userEvent.setup();
+    saveConfigMock.mockResolvedValue({
+      llm: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-v4', maxTokens: 4096 },
+      agent: { maxRounds: 3, contextThreshold: 0.8, workspaceRoot: '/work' },
+      webui: { port: 3000 },
+      guardrails: { requireApproval: ['prod'], blockOutbound: true },
+    });
+    render(<Settings />);
+    const editor = await screen.findByLabelText('配置编辑器');
+
+    fireEvent.change(editor, { target: { value: '{"llm":{"model":"deepseek-v4","maxTokens":4096}}' } });
+    await user.click(screen.getByRole('button', { name: '保存配置' }));
+
+    // The merged config propagates to the 模型与护栏 form.
+    await waitFor(() => {
+      expect(screen.getByLabelText('模型名称')).toHaveValue('deepseek-v4');
+    });
   });
 
   it('adds a custom provider and saves its key through the existing POST flow', async () => {
