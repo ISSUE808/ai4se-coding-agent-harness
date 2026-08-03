@@ -658,3 +658,20 @@
   - **"Mock fixture 必须来自真实代码路径"第三次重演**：KNOWN_ISSUES 三、1 已归档同类教训（工具 parameters 属性表），这次是 config 结构——测试 mock 与真实响应结构不一致时，测试全绿与页面损坏同时发生。修 bug 时必须顺带把 mock 改成真实结构，否则测试永远"绿得心安理得"
   - **Record<string, unknown> 类型宽化掩盖路径错误**：ConfigValue 无类型约束，`config.model` 在 tsc 下合法 → 只有真实数据能暴露；对这种"宽类型 + 深层字段"的配置读取，应参照 Settings.tsx 的 `asRecord(config.llm)` 窄化模式统一
   - **渲染条件隐藏 UI 是比报错更静的失败**：`configModel !== null` 恒假时选择器整个消失，无任何报错线索——条件渲染前先确认数据源真的取到了值
+
+---
+
+## 2026-08-03 23:52 用户需求：模型选择器从供应商模型列表选 + 切换联动全局配置
+
+- **触发技能**：`test-driven-development`（红→绿，4 处）、AskUserQuestion（设计决策）
+- **Subagent**：无（主 agent 直接实现——用户功能需求）
+- **Prompt 要点**：用户反馈"自定义模型填入后设置里仍是旧模型，感觉不太好"——要求：① 设置页获取每个供应商的模型列表 ② 模型选择器只能在已获取列表中选择 ③ 选择模型后配置也相应更新。设计决策（用户确认）：列表拉取失败回退手动输入+提示；选模型时 PATCH 会话 override **和** PUT config llm.model 双更新（当前会话立即用 + 新会话默认）
+- **产出**：
+  - Commit `a8eca19`：后端 `GET /api/llm/models`——CredentialStore 取 key（SecureHandle.use 闭包内发请求，§3.7 密钥不落响应/日志）、OpenAI 兼容 `{baseUrl}/models`、尾斜杠容错、401（无 key）/502（网络/非 2xx）、注入 fetchFn 零网络测试（6 测试）
+  - Commit `7553229`：前端——SessionDetail 选择器列表模式（`listMode`：仅列表+config 默认+会话 override；失败回退最近使用+自定义输入+提示条）；`applyModelSync` 双更新（PATCH 成功 → PUT config → setConfig 刷新"默认模型"基线；config 失败不阻断会话切换，提示"已切换会话模型，但全局配置更新失败"）；Settings 新增"供应商模型列表"区块（挂载自动加载 + 刷新按钮 + 点击 chip 填入表单字段）；api.ts fetchAvailableModels
+  - 测试: 红→绿：models-api 6/6、SessionDetail 30/30（+4 列表模式）、Settings 20/20（+2）、api 25/25；全量 主套件 544/544（46 文件）+ client 186/186（14 文件）+ 双 tsc 干净
+- **人工干预**：App.test.tsx 的 api mock 缺 fetchAvailableModels 导致 2 测试挂（SessionDetail 新增 import）——补 mock 修复
+- **教训**：
+  - **每次给组件加新 import 都要全局搜 vi.mock 工厂**：SessionDetail 加了 fetchAvailableModels，App.test.tsx 的 api mock 工厂没有它 → 挂 2 个壳级测试（vitest 报 "No export defined on the mock"）。Mock 工厂与组件 import 面必须同步
+  - **"自定义输入"是纸面能力也是双刃剑**：列表模式隐藏自定义入口让"只能在已获取列表选"成立，但失败回退保住可用性——功能收窄必须配套降级路径，否则断网/无 key 时模型切换整个瘫痪
+  - **双更新（PATCH+PATCH config）的失败语义**：会话切换是主操作（运行中立即生效），config 持久化是副操作——副失败不能回滚主成功，提示而非阻断
