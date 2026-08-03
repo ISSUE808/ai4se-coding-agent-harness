@@ -3,14 +3,14 @@
  * codeharness-webui.html prototype), then the routed views.
  * Routes: `/` Dashboard, `/sessions/:id` SessionDetail, `/settings` Settings.
  *
- * Top bar carries the prototype's three chrome elements: the segmented
- * 会话/会话详情/设置 tabs with indicator dots, the live WebSocket status pill
- * (global `/ws` channel), and the search box + dev avatar. All colors/fonts/
- * spacing resolve to design-tokens.ts.
+ * Top bar carries the prototype's chrome: the segmented 会话/会话详情/设置 tabs
+ * with indicator dots and the live WebSocket status pill (global `/ws` channel).
+ * (The prototype's search box was removed in Task 24 — it had no function.)
+ * All colors/fonts/spacing resolve to design-tokens.ts.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { Search, Settings as SettingsIcon, SquareTerminal } from 'lucide-react';
+import { Settings as SettingsIcon, SquareTerminal } from 'lucide-react';
 import designTokens from './design-tokens';
 import { fetchSessions } from './lib/api';
 import Dashboard from './pages/Dashboard';
@@ -188,36 +188,6 @@ function TopBar({ wsConnected }: { wsConnected: boolean }) {
           />
           ws · {wsConnected ? '已连接' : '已断开'}
         </span>
-        {/* search (decorative until Task 19 wires real search) */}
-        <label style={searchStyle}>
-          <Search size={14} />
-          <input
-            placeholder="搜索会话、任务、文件…"
-            aria-label="搜索"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: designTokens.colors.text,
-              width: '100%',
-              fontSize: designTokens.typography.fontSize.base,
-            }}
-          />
-          <kbd
-            style={{
-              fontFamily: designTokens.typography.fontFamily.mono,
-              fontSize: designTokens.typography.fontSize.xs,
-              borderWidth: 1,
-              borderStyle: 'solid',
-              borderColor: designTokens.colors.borderStrong,
-              borderRadius: 4,
-              padding: '1px 5px',
-              color: designTokens.colors.textMuted,
-            }}
-          >
-            ⌘K
-          </kbd>
-        </label>
       </div>
     </header>
   );
@@ -328,18 +298,4 @@ const envPillStyle = {
   padding: '5px 10px',
   borderRadius: designTokens.radius.pill,
   whiteSpace: 'nowrap',
-} as const;
-
-const searchStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: designTokens.spacing[2],
-  background: designTokens.colors.well,
-  borderWidth: 1,
-  borderStyle: 'solid',
-  borderColor: designTokens.colors.border,
-  borderRadius: designTokens.radius.md,
-  padding: '6px 10px',
-  color: designTokens.colors.textMuted,
-  width: 220,
 } as const;

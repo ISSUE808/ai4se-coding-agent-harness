@@ -21,7 +21,7 @@ describe('App shell / TopBar', () => {
     vi.mocked(fetchSessions).mockResolvedValue([]);
   });
 
-  it('renders the prototype chrome: brand, segmented view tabs, ws pill, search and avatar', () => {
+  it('renders the prototype chrome: brand, segmented view tabs and ws pill (search box removed)', () => {
     render(
       <MemoryRouter initialEntries={['/']}>
         <App />
@@ -38,7 +38,9 @@ describe('App shell / TopBar', () => {
 
     // Global WS pill (jsdom has no WebSocket → disconnected state):
     expect(screen.getByText('ws · 已断开')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('搜索会话、任务、文件…')).toBeInTheDocument();
+    // The non-functional search box is gone from the top bar.
+    expect(screen.queryByPlaceholderText('搜索会话、任务、文件…')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('搜索')).not.toBeInTheDocument();
   });
 
   it('renders the top bar on a /sessions/:id route with the 会话详情 tab active', () => {
