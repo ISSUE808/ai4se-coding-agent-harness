@@ -116,6 +116,8 @@
 | **切换供应商后已注册供应商被清掉**（nju → deepseek → 再应用 nju 报"未配置 API 地址"——config router 持启动快照 `current`，POST keys 注册只更新 liveConfig，后续 PUT config 以旧快照 merge 把注册表条目覆盖删除，含持久化文件）[实测] | config router 去状态化：GET/PUT 统一读 `getConfig()（liveConfig 单一真源）`，删除 `current` 快照；+回归测试（注册→应用 A→应用 B→注册表存活） | `b6efc7b` |
 | **应用 nju 后调用仍发 deepseek**（应用按钮只切 WebUI 层 liveConfig，agent loop 每次 `buildAgentLoop` 用 createWebHarness 启动快照 config → 新会话/恢复/重启仍用旧供应商；且 abort 只在轮边界检查，慢 LLM 调用期间的中断被当前轮跑完抑制了重启）[实测] | ① runSession 改用 liveConfig 构建 provider（persistConfig 包装同步，应用立即生效）② `onConfigChanged`：llm.provider/baseUrl/model 变化 → 重启所有 running 会话 ③ main-loop `llm.complete()` 返回后补 abort 检查（轮内中断立即 break） | `366c6b2` |
 | **LLM call failed 裸报错**（"404 openai_error" 无端点/状态/响应信息——多供应商下无法判断是 baseUrl 填错还是协议不兼容）[实测] | provider 增强：HTTP 错误（数字 status）抛 `LLM API 调用失败（{baseUrl}/chat/completions，HTTP {status}）：{消息} 响应：{body 前 200 字符}——请检查 API 地址是否为 OpenAI 兼容端点（通常以 /v1 结尾）`；非 HTTP 错误（网络）原样透传 | `27d320b` |
+| **供应商信息编辑后行内/下方配置不刷新**（① 更新 baseURL 后需刷新页面左侧才显示新值——KeyRow 保存后不通知父级，KeyManagementCard.meta 是行内 baseUrl 显示源；② 修改供应商信息后需"先应用别的供应商再重新应用 + 刷新"下方配置才更新——POST /api/keys 只写 registry 不同步激活供应商的 llm.baseUrl，且前端 Settings.config 保存后不重拉）[实测] | ① KeyRow 加 `onSaved` → KeyManagementCard `load()` 重拉列表 + Settings `handleRegistryChanged` 重拉 config（仅 registry 实际变化时触发，纯 key 保存不打扰未保存的表单编辑）② keys.ts：`provider === config.llm.provider && hasBaseUrl` 时同一 persist 内同步 `llm.baseUrl` 并触发 `onConfigChanged`（运行中 loop 重启契约，评审补）③ 负向测试：非激活供应商编辑不误伤 llm.baseUrl | `8612a61` |
+| **会话详情 tab 恒跳第一个会话**（多会话时从详情页切走再切回，打开的是 sessions[0] 而非切换前查看的会话——SessionDetailTab 无记忆）[实测] | App.tsx sessionStorage 记忆 lastSessionId（pathname useEffect 记录，刷新可恢复；点击 tab 优先跳 lastSessionId，会话被删回退 sessions[0]；decodeURIComponent try/catch 防畸形 % 编码白屏） | `8612a61` |
 
 ---
 

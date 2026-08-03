@@ -739,3 +739,24 @@
 - **教训**：
   - **裸 SDK 错误对多供应商场景不可接受**：单供应商时代 "404 openai_error" 尚可猜；多供应商后错误必须自带"发到了哪、什么状态、服务回了什么"——可诊断性随配置自由度同步提升
   - **instanceof 判断在 mock 环境不可靠**：测试里 OpenAI 被 vi.mock 成 vi.fn()（无 APIError 属性）——用鸭子类型（数字 status）判断 HTTP 错误，比 instanceof 稳
+
+## 2026-08-04 02:15 真实测试反馈：三个 WebUI 状态同步问题（供应商信息编辑刷新 / 激活供应商端点同步 / 会话详情 tab 记忆）
+
+- **触发技能**：`test-driven-development`（红→绿 ×4）、`requesting-code-review`（两阶段评审）
+- **Subagent**：评审 subagent `a7483e23646838875`（两阶段评审：spec 合规 + 代码质量）
+- **Prompt 要点**：用户三个实测问题——① 供应商处更新 baseURL 后需刷新页面左侧才显示新值；② API Keys 板块修改供应商信息后需"先应用别的供应商再重新应用 + 刷新"下方配置才更新；③ 多会话时从会话详情切走再切回总打开第一个会话
+- **产出**：
+  - 根因：① KeyRow handleSave 成功后不通知父级（KeyManagementCard.meta 是行内 baseUrl 显示源）② 后端 POST /api/keys 只写 registry（llm.providers）不同步激活供应商的 llm.baseUrl + 前端 Settings.config 保存后不重拉 ③ App.tsx SessionDetailTab 恒跳 sessions[0]
+  - 修复：① KeyRow 加 onSaved → KeyManagementCard load() 重拉 + Settings 重拉 fetchConfig（onRegistryChanged 链）② keys.ts：`provider === config.llm.provider && hasBaseUrl` 时同一 persist 内同步 llm.baseUrl；评审后补 onConfigChanged 触发（运行中 loop 重启契约）③ App.tsx：sessionStorage 记忆 lastSessionId（pathname useEffect 记录；点击 tab 优先跳 lastSessionId，会话被删回退 sessions[0]；decodeURIComponent try/catch 防畸形 % 编码白屏）
+  - 评审修复：Important×1（keys POST 绕过 onConfigChanged → 注入回调 + 测试）、Minor×3（decodeURIComponent 防御、key-only 保存不重拉 config、非激活供应商负向断言测试）
+  - 测试: 红 4 → 绿：webui-api 64/64（+3：同步、负向、onConfigChanged）、client 196/196（+4：行内刷新、下方配置刷新、tab 记忆、key-only 不重拉）、主套件 555+ / 双 tsc 干净；顺带修 tsc -b 增量缓存暴露的既有错误（models 窄化、relativeToRoot 删除、config prop 删除）
+- **人工干预**：无
+- **教训**：
+  - **tsc -b 增量缓存会遮蔽既有错误**：只重编译"变化的文件及其依赖图"——Settings.tsx 的 models 窄化错误一直存在，直到本次改动触发重编译才暴露。全量验证时对常改文件应跑 `tsc -b --force` 或清理 .tsbuildinfo，不能只信增量结果
+  - **getByText 的精确匹配对相邻文本节点无效**：行内 `{baseUrl}{defaultModel ? ...}` 两个相邻文本节点合并进父元素 textContent，`getByText(url)`（exact）匹配失败——URL 断言要用正则。jsdom 里 textarea.value 会反映为文本内容（配置编辑器里的旧 JSON 会匹配 queryByText）
+  - **userEvent.click 的 await 会先 flush handler 的 async 链**：click 后同步更新 mock 状态（rows 变量）太晚——handler 的 load() 已用旧状态执行。mock 状态更新要放在 click 之前（等价于预置 mockResolvedValueOnce）
+  - **前端两层状态源（列表 meta vs 页面 config）必须同源刷新**：保存 registry 只刷新列表，下方卡片不跟；两层都刷新，但"纯 key 保存"不该触发（静默丢弃未保存的模型表单编辑）——刷新粒度要匹配"实际变化了什么"<｜end▁of▁thinking｜>
+
+<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="Bash">
+<｜｜DSML｜｜parameter name="command" string="true">tail -5 "C:\Users\ISSUE\AppData\Local\Temp\claude\c--Users-ISSUE-Desktop-se-summer\2e36ca82-8bbb-46fc-a2ed-c5ee2e7d5d6e\tasks\b5vsa5akz.output" 2>/dev/null || echo "still running"
