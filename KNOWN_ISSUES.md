@@ -74,8 +74,8 @@
 ### 11. 目录选择器整机浏览端点放开（安全取舍，接受）[设计]
 - **背景**：用户需求"目录选择器可以选择整台电脑的任何目录"→ 新增 `GET /api/fs/browse` 无授权浏览端点；`/api/fs/tree` 保持授权根不变。
 - **评估**：任何能访问 WebUI 的客户端可枚举本机目录结构（目录/文件名、类型、大小）——仅**元数据**、不返回文件内容，与本地 CLI `ls` 等价的信息暴露；配合用户在场监督模式（创建会话时选中的目录成为授权根），风险可接受。
-- **边界**：会话详情文件树仍走 `GET /api/fs/tree`（仅授权根）；browse 不跟随 symlink（标记 `link`）。
-- **位置**：`src/webui/api/fs.ts`（/browse 路由）、`src/webui/client/src/components/DirectoryPicker.tsx`。
+- **边界**：会话详情文件树仍走 `GET /api/fs/tree`（仅授权根）；browse 不跟随 symlink（标记 `link`）。**内容分级**：`GET /api/fs/file`（内容预览）收紧到 /tree 的授权根边界（realpath 防逃逸 + 256KB 上限 413）——元数据可整机浏览，文件内容只在授权根内可读（1.5 跟进，commit `24d39b5`）。
+- **位置**：`src/webui/api/fs.ts`（/browse、/file 路由）、`src/webui/client/src/components/DirectoryPicker.tsx`。
 
 ---
 
@@ -107,6 +107,9 @@
 | **用户在场监督模式（Claude Code 式）**：工作区外读写确认、批准后工具结果原地替换、CLI stdin 交互、已批准命令记忆 | 监督模式全链路 | `5acf8bd` `d934b08` `0e3c972` 等 |
 | maxRounds 默认 3 太小 | 默认 0（无上限，参照 Claude Code --max-turns） | `553aa4d` |
 | config PUT 只查固定路径 + 报错路径误导 + 编辑器 token 残留 | 深度密钥字段拒绝 + 精确报错 + 编辑器剥离 token | `6190334` |
+| **1.4 文件树不随消息流刷新**（新建文件需刷新页面才出现——M5 静态快照取舍）[实测] | 新 tool 变更消息到达后 debounce 300ms 自动重取（首次快照吸收不重复 fetch + 请求代际防覆盖） | `2be2f88` |
+| **1.5 预览为空**（write_file 无 output 摘要 → 预览占位；后端无 diff 端点）[实测] | 新增授权根内 `GET /api/fs/file` 内容端点 + 前端点击文件拉真实内容预览；工具摘要逻辑移除 | `24d39b5` |
+| **1.6 W_OK 校验失效**（Windows `fs.access` 只查属性不查 ACL，`C:\Windows` 恒过——手动输入与选择器行为不一致）[实测] | 删除可写校验，任意已存在目录可建会话（选择器/手动输入等价，监督模式"选中即授权"）；树加载错误保留为可见反馈 | `f1f60fd` |
 
 ---
 
