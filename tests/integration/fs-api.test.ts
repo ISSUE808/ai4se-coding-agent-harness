@@ -42,7 +42,7 @@ function makeTree(): string {
 }
 
 /** An express app with the fs router bound to one temp root (unit-style). */
-function routerApp(options?: { maxDepth?: number; maxEntriesPerDir?: number }): {
+function routerApp(options?: { maxDepth?: number; maxEntriesPerDir?: number; maxNodes?: number }): {
   app: express.Express;
   root: string;
   other: string;
@@ -56,10 +56,41 @@ function routerApp(options?: { maxDepth?: number; maxEntriesPerDir?: number }): 
       getAllowedRoots: () => [root],
       maxDepth: options?.maxDepth,
       maxEntriesPerDir: options?.maxEntriesPerDir,
+      maxNodes: options?.maxNodes,
     }),
   );
   return { app, root, other };
 }
+
+/**
+ * Create a directory symlink (junction on Windows, dir link elsewhere).
+ * Returns false when the platform forbids it (no privileges / dev mode).
+ */
+function tryCreateLink(target: string, linkPath: string): boolean {
+  try {
+    fs.symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Recursively count the nodes of a tree (global-budget assertions). */
+function countNodes(node: { children?: unknown[] }): number {
+  return 1 + (node.children ?? []).reduce((sum, child) => sum + countNodes(child as { children?: unknown[] }), 0);
+}
+
+/** Whether this machine can create directory links (computed once). */
+const linkSupported = ((): boolean => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-link-'));
+  try {
+    const target = path.join(base, 'target');
+    fs.mkdirSync(target);
+    return tryCreateLink(target, path.join(base, 'link'));
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+})();
 
 /** Full WebUI server fixture (mounting + session-root inclusion). */
 async function serverFixture(workspaceRoot: string): Promise<WebUIServer> {
@@ -211,6 +242,57 @@ describe('GET /api/fs/tree', () => {
     // Unaffected sibling dirs are not flagged.
     const srcNode = res.body.children.find((n: { name: string }) => n.name === 'src');
     expect(srcNode.truncated).toBeUndefined();
+  });
+
+  it('rejects paths that traverse a symlink/junction escaping the root (I1)', async () => {
+    const { app, root, other } = routerApp();
+    // root/link → other (a directory OUTSIDE the allowed root); `other/src`
+    // is a real external directory — today this 200s with the external tree.
+    const link = path.join(root, 'link');
+    if (!tryCreateLink(other, link)) {
+      return;
+    }
+    const res = await request(app).get('/api/fs/tree').query({ path: path.join(link, 'src') });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/outside/i);
+  });
+
+  it('rejects a final-segment symlink/junction pointing outside the root (I1)', async () => {
+    const { app, root, other } = routerApp();
+    const link = path.join(root, 'link');
+    if (!tryCreateLink(other, link)) {
+      return;
+    }
+    const res = await request(app).get('/api/fs/tree').query({ path: link });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/outside/i);
+  });
+
+  it('allows a symlink/junction pointing INSIDE the root (canonical target stays in bounds)', async () => {
+    const { app, root } = routerApp();
+    const link = path.join(root, 'link');
+    if (!tryCreateLink(path.join(root, 'src'), link)) {
+      return;
+    }
+    const res = await request(app).get('/api/fs/tree').query({ path: link });
+    expect(res.status).toBe(200);
+    expect(res.body.children.map((c: { name: string }) => c.name)).toContain('auth');
+  });
+
+  it('caps the total node count with a global budget (M7)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-fs-'));
+    for (let i = 0; i < 60; i++) {
+      fs.writeFileSync(path.join(root, `f${String(i).padStart(3, '0')}.txt`), 'x');
+    }
+    const app = express();
+    app.use('/api/fs', createFsRouter({ getAllowedRoots: () => [root], maxNodes: 8 }));
+
+    const res = await request(app).get('/api/fs/tree');
+    expect(res.status).toBe(200);
+    // root (1) + 7 children max; overflow is flagged truncated.
+    expect(countNodes(res.body)).toBe(8);
+    expect(res.body.truncated).toBe(true);
+    expect(res.body.children).toHaveLength(7);
   });
 
   it('serves the tree for session workspaceRoots through the mounted server (Task 23)', async () => {

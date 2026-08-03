@@ -43,6 +43,17 @@ const COMPLETED = {
   updatedAt: '2026-08-02T08:18:27.000Z',
 };
 
+/** Default-root tree served by fetchFsTree when the picker opens. */
+const FS_ROOT = {
+  path: '/repo',
+  name: 'repo',
+  type: 'dir' as const,
+  children: [
+    { path: '/repo/src', name: 'src', type: 'dir' as const, children: [] },
+    { path: '/repo/README.md', name: 'README.md', type: 'file' as const, size: 8 },
+  ],
+};
+
 function renderDashboard() {
   return render(
     <MemoryRouter initialEntries={['/']}>
@@ -65,22 +76,13 @@ describe('Dashboard', () => {
 
   it('browses the workspace tree in the directory picker and fills 工作目录 (Task 23)', async () => {
     fetchSessionsMock.mockResolvedValue([]);
-    const rootTree = {
-      path: '/repo',
-      name: 'repo',
-      type: 'dir' as const,
-      children: [
-        { path: '/repo/src', name: 'src', type: 'dir' as const, children: [] },
-        { path: '/repo/README.md', name: 'README.md', type: 'file' as const, size: 8 },
-      ],
-    };
     const srcTree = {
       path: '/repo/src',
       name: 'src',
       type: 'dir' as const,
       children: [{ path: '/repo/src/auth', name: 'auth', type: 'dir' as const, children: [] }],
     };
-    fetchFsTreeMock.mockResolvedValueOnce(rootTree).mockResolvedValueOnce(srcTree);
+    fetchFsTreeMock.mockResolvedValueOnce(FS_ROOT).mockResolvedValueOnce(srcTree);
     renderDashboard();
     await screen.findByText(/还没有会话/);
 
@@ -109,6 +111,23 @@ describe('Dashboard', () => {
     await userEvent.clear(rootInput);
     await userEvent.type(rootInput, '/repo/manual');
     expect(rootInput).toHaveValue('/repo/manual');
+  });
+
+  it('closes the directory picker with Escape (M8)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    fetchFsTreeMock.mockResolvedValue(FS_ROOT);
+    renderDashboard();
+    await screen.findByText(/还没有会话/);
+
+    await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
+    await screen.findByRole('dialog');
+    await userEvent.click(screen.getByRole('button', { name: '浏览…' }));
+    await screen.findByRole('dialog', { name: '选择工作目录' });
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: '选择工作目录' })).not.toBeInTheDocument();
+    // The new-session modal itself stays open.
+    expect(screen.getByRole('dialog', { name: '新建会话' })).toBeInTheDocument();
   });
 
   it('renders the session list with id, task, badge, rounds, duration and tokens', async () => {

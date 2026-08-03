@@ -13,14 +13,24 @@ import * as path from 'node:path';
  * session's working directory stays browseable even when it differs from the
  * config root).
  *
+ * Boundary enforcement (CR I1): both the request path and every root are
+ * canonicalized with `fs.realpathSync` before the prefix check. This resolves
+ * EVERY symlink/junction component — middle ones and the final one — so a
+ * link that escapes the workspace surfaces as a canonical path outside the
+ * canonical roots and is rejected, even when the lexical form sits inside
+ * (a junction `root/link → outside` used to enumerate outside directories).
+ * Links pointing INSIDE a root stay browseable (their canonical target is in
+ * bounds). On Windows the prefix comparison lowercases both sides (M6).
+ *
  * Guards:
  * - maxDepth (default 4): directories at the depth cap carry no `children`.
  * - maxEntriesPerDir (default 200): oversized directories are truncated and
  *   flagged with `truncated: true`.
- * - Symlinks are never followed and never listed: a symlink inside the
- *   workspace could point outside it, so the endpoint refuses symlinked
- *   request paths and skips symlinked entries (the same lexical-boundary
- *   caveat documented for ScopeFence, M3).
+ * - maxNodes (default 5000): global node budget across the whole response;
+ *   overflow truncates the level where it would be exceeded and is flagged.
+ * - Symlinked entries inside a directory are never listed and never recursed
+ *   into (they could point anywhere; the boundary is enforced at the request
+ *   path, and listing links would leak target names).
  */
 
 export interface FsTreeNode {
@@ -33,7 +43,7 @@ export interface FsTreeNode {
   size?: number;
   /** Direct children (dirs only, and only within the depth cap). */
   children?: FsTreeNode[];
-  /** True when this directory held more entries than maxEntriesPerDir. */
+  /** True when this directory was truncated (per-level cap or global budget). */
   truncated?: boolean;
 }
 
@@ -47,22 +57,39 @@ export interface FsRouterDeps {
   maxDepth?: number;
   /** Per-directory entry cap; overflow is flagged `truncated`. */
   maxEntriesPerDir?: number;
+  /** Global node budget for the whole response tree (M7). */
+  maxNodes?: number;
 }
 
 const DEFAULT_MAX_DEPTH = 4;
 const DEFAULT_MAX_ENTRIES_PER_DIR = 200;
+const DEFAULT_MAX_NODES = 5000;
 
-/** Lexical prefix check — same semantics as ScopeFence.validatePath (§3.4). */
-function isInside(resolvedPath: string, root: string): boolean {
-  if (resolvedPath === root) {
+/** Canonical prefix check (CR I1: inputs must already be realpath'd forms;
+ *  win32 paths are compared case-insensitively — M6). */
+function isInside(canonicalPath: string, canonicalRoot: string): boolean {
+  const p = process.platform === 'win32' ? canonicalPath.toLowerCase() : canonicalPath;
+  const r = process.platform === 'win32' ? canonicalRoot.toLowerCase() : canonicalRoot;
+  if (p === r) {
     return true;
   }
-  return resolvedPath.startsWith(root + path.sep);
+  return p.startsWith(r + path.sep);
+}
+
+/** Resolve a path to its canonical (real) form, or null when it is missing
+ *  or unreadable. realpathSync resolves every symlink/junction component. */
+function tryRealpath(target: string): string | null {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return null;
+  }
 }
 
 export function createFsRouter(deps: FsRouterDeps): Router {
   const maxDepth = deps.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxEntriesPerDir = deps.maxEntriesPerDir ?? DEFAULT_MAX_ENTRIES_PER_DIR;
+  const maxNodes = deps.maxNodes ?? DEFAULT_MAX_NODES;
   const router = Router();
 
   router.get('/tree', (req, res) => {
@@ -80,6 +107,10 @@ export function createFsRouter(deps: FsRouterDeps): Router {
       res.status(400).json({ error: 'no workspace roots are configured' });
       return;
     }
+    // Canonicalize every root once per request; a root that cannot be
+    // resolved simply falls out of the boundary (enumeration would fail
+    // anyway when a requested path under it is canonicalized).
+    const canonicalRoots = roots.map((root) => tryRealpath(root) ?? root);
 
     // No path → the first allowed root (server.ts wires config
     // agent.workspaceRoot first, so this is the default workspace).
@@ -87,22 +118,27 @@ export function createFsRouter(deps: FsRouterDeps): Router {
       ? path.resolve(rawPath)
       : roots[0];
 
-    if (!roots.some((root) => isInside(target, root))) {
+    // Canonicalize the request path: every symlink/junction component
+    // (middle or final) is resolved, so an escaping link lands outside the
+    // canonical roots and is rejected (I1). Missing paths throw → 400.
+    const canonicalTarget = tryRealpath(target);
+    if (canonicalTarget === null) {
+      res.status(400).json({ error: `directory does not exist or is not readable: ${target}` });
+      return;
+    }
+
+    if (!canonicalRoots.some((root) => isInside(canonicalTarget, root))) {
       res.status(400).json({ error: `path is outside the allowed workspace roots: ${target}` });
       return;
     }
 
-    // lstat (no symlink following): a symlinked request path could point
-    // outside the boundary, so refuse it outright.
+    // The canonical target has no link components left — a plain stat check
+    // decides dir vs file.
     let stat: fs.Stats;
     try {
-      stat = fs.lstatSync(target);
+      stat = fs.statSync(canonicalTarget);
     } catch {
       res.status(400).json({ error: `directory does not exist or is not readable: ${target}` });
-      return;
-    }
-    if (stat.isSymbolicLink()) {
-      res.status(400).json({ error: `path must not be a symbolic link: ${target}` });
       return;
     }
     if (!stat.isDirectory()) {
@@ -112,7 +148,8 @@ export function createFsRouter(deps: FsRouterDeps): Router {
 
     let tree: FsTreeNode;
     try {
-      tree = buildNode(target, 0, maxDepth, maxEntriesPerDir);
+      const state: BuildState = { count: 0, budget: maxNodes };
+      tree = buildNode(canonicalTarget, 0, maxDepth, maxEntriesPerDir, state);
     } catch {
       res.status(400).json({ error: `directory is not readable: ${target}` });
       return;
@@ -123,9 +160,25 @@ export function createFsRouter(deps: FsRouterDeps): Router {
   return router;
 }
 
+/** Mutable recursion state for the global node budget (M7). */
+interface BuildState {
+  /** Nodes created so far (dirs counted at entry, files when listed). */
+  count: number;
+  /** Absolute maximum number of nodes in the response. */
+  budget: number;
+}
+
 /** Enumerate `dir` into an FsTreeNode; entries at `depth >= maxDepth` are
- *  not enumerated (no `children` key). */
-function buildNode(dir: string, depth: number, maxDepth: number, maxEntriesPerDir: number): FsTreeNode {
+ *  not enumerated (no `children` key). Honors the per-level entry cap and
+ *  the global node budget; either overflow flags the node `truncated`. */
+function buildNode(
+  dir: string,
+  depth: number,
+  maxDepth: number,
+  maxEntriesPerDir: number,
+  state: BuildState,
+): FsTreeNode {
+  state.count += 1;
   const node: FsTreeNode = {
     path: dir,
     name: path.basename(dir),
@@ -139,8 +192,7 @@ function buildNode(dir: string, depth: number, maxDepth: number, maxEntriesPerDi
   const dirs: fs.Dirent[] = [];
   const files: fs.Dirent[] = [];
   for (const entry of entries) {
-    // Symlinks are skipped entirely: never listed, never recursed into
-    // (they may point outside the workspace boundary — M3 caveat).
+    // Symlinks are skipped entirely: never listed, never recursed into.
     if (entry.isSymbolicLink()) {
       continue;
     }
@@ -155,17 +207,26 @@ function buildNode(dir: string, depth: number, maxDepth: number, maxEntriesPerDi
   files.sort(byName);
 
   const all = [...dirs, ...files];
-  const truncated = all.length > maxEntriesPerDir;
-  const kept = truncated ? all.slice(0, maxEntriesPerDir) : all;
+  const perLevelCap = all.length > maxEntriesPerDir;
+  let kept = perLevelCap ? all.slice(0, maxEntriesPerDir) : all;
+
+  // Global budget: keep only what fits below the cap; when the budget runs
+  // out mid-level, `kept` becomes empty and recursion stops entirely.
+  const headroom = Math.max(0, state.budget - state.count);
+  const budgetCap = kept.length > headroom;
+  if (budgetCap) {
+    kept = kept.slice(0, headroom);
+  }
 
   node.children = kept.map((entry) => {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      return buildNode(full, depth + 1, maxDepth, maxEntriesPerDir);
+      return buildNode(full, depth + 1, maxDepth, maxEntriesPerDir, state);
     }
+    state.count += 1;
     return fileNode(full, entry.name);
   });
-  if (truncated) {
+  if (perLevelCap || budgetCap) {
     node.truncated = true;
   }
   return node;

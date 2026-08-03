@@ -48,6 +48,18 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
     void loadRoot();
   }, [loadRoot]);
 
+  // M8: Escape dismisses the picker (document-level so it works regardless
+  // of where focus sits inside the dialog).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   /** Fetch one directory's children for expansion; failures are non-fatal. */
   function loadBranch(node: FsTreeNode): void {
     setBranchError(null);
@@ -64,18 +76,25 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
     if (node.type !== 'dir') {
       return;
     }
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(node.path)) {
+    // M4: the fetch side effect lives OUTSIDE the state updater (an updater
+    // may run twice under StrictMode → duplicate requests), and the `trees`
+    // check happens against the current render's closure.
+    if (expanded.has(node.path)) {
+      setExpanded((prev) => {
+        const next = new Set(prev);
         next.delete(node.path);
-      } else {
-        next.add(node.path);
-        if (!trees.has(node.path)) {
-          loadBranch(node);
-        }
+        return next;
+      });
+    } else {
+      if (!trees.has(node.path)) {
+        loadBranch(node);
       }
-      return next;
-    });
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        next.add(node.path);
+        return next;
+      });
+    }
   }
 
   /** The root node of the browser ('': the server default workspace root). */

@@ -91,6 +91,18 @@ const SESSION: SessionDetailData = {
   ],
 };
 
+/** Tree WITHOUT src/auth/token.ts (as if the server depth/per-level caps
+ *  truncated it) — for the I2 fallback-list test. */
+const FS_TREE_SHALLOW = {
+  path: '/repo/auth-app',
+  name: 'auth-app',
+  type: 'dir' as const,
+  children: [
+    { path: '/repo/auth-app/src', name: 'src', type: 'dir' as const, children: [] },
+    { path: '/repo/auth-app/package.json', name: 'package.json', type: 'file' as const, size: 300 },
+  ],
+};
+
 /** Workspace tree served by fetchFsTree for SESSION.workspaceRoot. */
 const FS_TREE = {
   path: '/repo/auth-app',
@@ -209,6 +221,45 @@ describe('SessionDetail', () => {
     // Selecting the file still opens the Monaco diff preview with its output.
     await userEvent.click(changed);
     expect(await screen.findByLabelText('diff-editor')).toHaveValue('applied 2 edits · +84 −32');
+  });
+
+  it('lists changed files missing from the fetched tree in a fallback list (I2)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE_SHALLOW);
+    renderDetail();
+
+    // token.ts is not in the tree payload — it appears in the fallback list
+    // with its A mark and stays selectable for the diff preview.
+    const fallback = await screen.findByText('变更文件（未显示在树中）');
+    expect(fallback).toBeInTheDocument();
+    const item = await screen.findByText('src/auth/token.ts');
+    expect(screen.getByText('A')).toBeInTheDocument();
+    expect(screen.getByText('+84')).toBeInTheDocument();
+    expect(screen.getByText('−32')).toBeInTheDocument();
+
+    await userEvent.click(item);
+    expect(await screen.findByLabelText('diff-editor')).toHaveValue('applied 2 edits · +84 −32');
+  });
+
+  it('shows no fallback list when every changed file is in the fetched tree', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    expect(await screen.findByText('src')).toBeInTheDocument();
+    expect(screen.queryByText('变更文件（未显示在树中）')).not.toBeInTheDocument();
+  });
+
+  it('does not refetch the file tree when only the session status changes (M5)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Pause rebuilds the session object (same workspaceRoot) — the tree
+    // effect must not refetch on that.
+    await userEvent.click(screen.getByRole('button', { name: '暂停' }));
+    act(() => source.emit({ type: 'session:status', data: { sessionId: 's_1', status: 'paused' } }));
+    await screen.findByRole('button', { name: '恢复' });
+    expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
   });
 
   it('collapses expanded directories in the file tree (Task 23)', async () => {

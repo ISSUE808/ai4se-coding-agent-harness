@@ -206,17 +206,20 @@ export default function SessionDetail() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   // Task 23: workspace file tree in the left column, fetched once per session
-  // from the fs endpoint (bounded to the session workspaceRoot).
+  // from the fs endpoint (bounded to the session workspaceRoot). The effect
+  // depends on the workspaceRoot only (M5): status changes rebuild the
+  // session object but must not refetch the tree.
+  const workspaceRoot = session?.workspaceRoot ?? '';
   const [tree, setTree] = useState<FsTreeNode | null>(null);
   const [treeError, setTreeError] = useState<string | null>(null);
   const [treeExpanded, setTreeExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!session) {
+    if (workspaceRoot === '') {
       return;
     }
     let cancelled = false;
-    fetchFsTree(session.workspaceRoot)
+    fetchFsTree(workspaceRoot)
       .then((node) => {
         if (cancelled) {
           return;
@@ -234,7 +237,14 @@ export default function SessionDetail() {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [workspaceRoot]);
+
+  // CR I2: changed files that the fetched tree hides (depth/per-level caps)
+  // stay reachable through a fallback list below the tree.
+  const treeFilePaths = collectTreeFilePaths(tree);
+  const hiddenChangedFiles = files.filter(
+    (f) => !treeFilePaths.has(normalizePath(absoluteWithin(workspaceRoot, f.path))),
+  );
 
   function toggleTreeDir(dirPath: string): void {
     setTreeExpanded((prev) => {
@@ -495,6 +505,37 @@ export default function SessionDetail() {
                     )}
                     {renderFileTreeNode(tree, 0, treeExpanded, fileMarks, selectedPath, setSelectedPath, toggleTreeDir)}
                   </>
+                )}
+                {hiddenChangedFiles.length > 0 && (
+                  <div
+                    style={{
+                      padding: designTokens.spacing[3],
+                      borderTopWidth: 1,
+                      borderTopStyle: 'solid',
+                      borderTopColor: designTokens.colors.border,
+                    }}
+                  >
+                    <div style={fallbackLabelStyle}>变更文件（未显示在树中）</div>
+                    {hiddenChangedFiles.map((file) => {
+                      const absPath = absoluteWithin(workspaceRoot, file.path);
+                      const selected = selectedPath === absPath;
+                      return (
+                        <button
+                          key={file.path}
+                          type="button"
+                          onClick={() => setSelectedPath(absPath)}
+                          style={fallbackRowStyle(selected)}
+                        >
+                          <MarkBadge mark={file.mark} />
+                          <span style={fallbackPathStyle}>{file.path}</span>
+                          <span style={fallbackCountsStyle}>
+                            {file.addCount > 0 && <span style={{ color: designTokens.colors.success }}>+{file.addCount}</span>}
+                            {file.delCount > 0 && <span style={{ color: designTokens.colors.danger }}>−{file.delCount}</span>}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
                 {selectedPath !== null && (
                   <div style={{ padding: designTokens.spacing[3], borderTopWidth: 1, borderTopStyle: 'solid', borderTopColor: designTokens.colors.border }}>
@@ -958,6 +999,96 @@ function markColor(mark: string): { fg: string; bg: string } {
   }
 }
 
+/** Small A/M/D badge used by the tree rows and the fallback change list. */
+function MarkBadge({ mark }: { mark: string }) {
+  const colors = markColor(mark);
+  return (
+    <span
+      style={{
+        display: 'grid',
+        placeItems: 'center',
+        width: 16,
+        height: 16,
+        borderRadius: designTokens.radius.sm,
+        fontFamily: designTokens.typography.fontFamily.mono,
+        fontSize: designTokens.typography.fontSize.xs,
+        fontWeight: designTokens.typography.fontWeight.semibold,
+        flexShrink: 0,
+        color: colors.fg,
+        background: colors.bg,
+      }}
+    >
+      {mark}
+    </span>
+  );
+}
+
+/** Normalized absolute paths of every file node in the fetched tree. */
+function collectTreeFilePaths(tree: FsTreeNode | null): Set<string> {
+  const paths = new Set<string>();
+  if (tree === null) {
+    return paths;
+  }
+  const walk = (node: FsTreeNode): void => {
+    if (node.type === 'file') {
+      paths.add(normalizePath(node.path));
+    }
+    if (node.type === 'dir' && Array.isArray(node.children)) {
+      node.children.forEach(walk);
+    }
+  };
+  walk(tree);
+  return paths;
+}
+
+// ─── Fallback change-list styles (CR I2) ────────────────────────────────────
+
+const fallbackLabelStyle: CSSProperties = {
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.fontSize.xs,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: designTokens.colors.textMuted,
+  marginBottom: designTokens.spacing[1],
+};
+
+function fallbackRowStyle(selected: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: designTokens.spacing[1],
+    width: '100%',
+    padding: `${designTokens.spacing[1]} ${designTokens.spacing[2]}`,
+    border: 'none',
+    borderRadius: designTokens.radius.sm,
+    background: selected ? designTokens.colors.primarySoft : 'transparent',
+    boxShadow: selected ? `inset 2px 0 0 ${designTokens.colors.primary}` : 'none',
+    cursor: 'pointer',
+    textAlign: 'left',
+    fontFamily: designTokens.typography.fontFamily.sans,
+    marginBottom: designTokens.spacing[0],
+  };
+}
+
+const fallbackPathStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.codeSize.md,
+  color: designTokens.colors.text,
+};
+
+const fallbackCountsStyle: CSSProperties = {
+  display: 'inline-flex',
+  gap: designTokens.spacing[1],
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.fontSize.xs,
+  flexShrink: 0,
+};
+
 /**
  * Recursive workspace file tree (Task 23): directories expand/collapse via
  * chevrons; files carry the A/M change badge + line counts when touched, and
@@ -976,7 +1107,6 @@ function renderFileTreeNode(
   const children =
     node.type === 'dir' && Array.isArray(node.children) ? node.children : [];
   const mark = node.type === 'file' ? fileMarks.get(normalizePath(node.path)) : undefined;
-  const markStyle = mark ? markColor(mark.mark) : undefined;
 
   return (
     <div key={node.path}>
@@ -1048,25 +1178,7 @@ function renderFileTreeNode(
               overflow: 'hidden',
             }}
           >
-            {mark !== undefined && markStyle !== undefined && (
-              <span
-                style={{
-                  display: 'grid',
-                  placeItems: 'center',
-                  width: 16,
-                  height: 16,
-                  borderRadius: designTokens.radius.sm,
-                  fontFamily: designTokens.typography.fontFamily.mono,
-                  fontSize: designTokens.typography.fontSize.xs,
-                  fontWeight: designTokens.typography.fontWeight.semibold,
-                  flexShrink: 0,
-                  color: markStyle.fg,
-                  background: markStyle.bg,
-                }}
-              >
-                {mark.mark}
-              </span>
-            )}
+            {mark !== undefined && <MarkBadge mark={mark.mark} />}
             <span
               style={{
                 fontFamily: designTokens.typography.fontFamily.mono,
