@@ -609,3 +609,19 @@
   - **"刷新才出现"先查 effect 依赖再下结论**：树快照 + 实时变更列表是 M5 刻意混合模型（A/M 标记实时 overlay + 树下方回退列表兜底）——不是 bug，但字面偏离测试流程预期；用户真实测试的价值正是抓这种"设计合理但体验断裂"的偏差
   - **"首次吸收 + 只认新消息"是快照合并下的干净信号**：消息流 = REST 快照一次合并 + ws 增量帧，用「最后一条消息 id 变化」区分新旧，快照合并不算"新变更"，初始 fetch 恰好 1 次不破坏 M5 断言
   - **防过期响应用代际计数器**（请求 id 递增）比 cancelled 标志更稳：debounce 的晚到请求不会覆盖切换 workspaceRoot 后的新树
+
+## 2026-08-03 21:50 真实测试反馈：文件内容预览取代工具摘要（1.5）
+
+- **触发技能**：`test-driven-development`（后端红→绿）、`systematic-debugging`（write_file 预览为空的根因追踪）
+- **Subagent**：无（主 agent 直接实现——用户真实测试反馈驱动）
+- **Prompt 要点**：用户测试 1.5 发现「write_file 新建文件后预览仍为空」并建议改文件内容预览。根因：`contentForFile` 取 `toolResult.output ?? error`，而 write_file 的 toolResult 只有 `{ success, duration_ms, filesChanged }`（无 output）→ 必然空。用户批准方向：内容预览，安全前提=内容读取限授权根内（/browse 元数据整机是 §11 既有取舍，内容必须收紧到 /tree 边界）
+- **产出**：
+  - Commit: `24d39b5`（10 文件 +301/-76）
+  - 后端: fs.ts 新增 `GET /api/fs/file`——复用 /tree 边界（canonicalBoundary 辅助函数抽取，roots+canonical 双返回）+ realpath 防 symlink 逃逸 + 非文件 400 + 超 256KB 413；9 个新集成测试（内容/缺 path/越界/不存在/非文件/逃逸 400/向内放行/413/挂载会话根）
+  - 前端: api.ts `fetchFsFile`；SessionDetail 点击文件经 `/api/fs/file` 拉真实内容（loading/error 状态 + 请求代际防快速连点覆盖）；FileDiff 改「文件内容预览」文案 + error 态；`contentForFile` 移除（含其 3 个单测）
+  - 测试: 主 528→537（+9）+ client 179/179；tsc 双项目干净
+- **人工干预**：无
+- **教训**：
+  - **"预览为空"先查工具契约再怀疑 UI**：write_file 从不产出 output 摘要——摘要型预览对写文件类工具结构性失效；用户建议（内容预览）直接消灭了这类空白
+  - **内容端点必须收紧边界，元数据端点放开≠内容放开**：/browse 整机仅元数据（§11）；/api/fs/file 复用 /tree 的 canonical boundary（授权根 + symlink 逃逸拒绝）——安全取舍分层：元数据宽、内容窄
+  - **抽取共享边界时小心暗依赖**：canonicalBoundary 重构 /tree 时丢了 `roots[0]`（默认根），5 个既有测试 500——重构公共逻辑必须全量跑目标文件，不能只看新测试
