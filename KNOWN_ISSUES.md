@@ -111,6 +111,7 @@
 | **1.5 预览为空**（write_file 无 output 摘要 → 预览占位；后端无 diff 端点）[实测] | 新增授权根内 `GET /api/fs/file` 内容端点 + 前端点击文件拉真实内容预览；工具摘要逻辑移除 | `24d39b5` |
 | **1.6 W_OK 校验失效**（Windows `fs.access` 只查属性不查 ACL，`C:\Windows` 恒过——手动输入与选择器行为不一致）[实测] | 删除可写校验，任意已存在目录可建会话（选择器/手动输入等价，监督模式"选中即授权"）；树加载错误保留为可见反馈 | `f1f60fd` |
 | **4.1 模型选择器不渲染**（前端读顶层 `config.model`，真实 Config 的 model 在 `config.llm.model` → `configModel` 恒 null → 渲染条件恒假；测试 mock 恰好用了错误结构所以全绿）[实测] | 改为 `llm.model` 读取（窄化风格同 guardrails）+ 测试 mock 修正为真实结构 | `976b611` |
+| **自定义模型与配置不联动**（会话页手动填模型只改会话 override，设置里的全局默认 llm.model 不变，下次会话仍用旧模型）[实测] | ① 新增 `GET /api/llm/models`（后端持 key 调供应商 `/models`，密钥不出服务端）② 选择器列表模式：仅列出已获取模型（拉取失败回退手动输入+提示）③ 选择模型时 PATCH 会话 override **并** PUT config llm.model 双更新（config 失败不阻断会话切换）④ 设置页"供应商模型列表"区块（自动加载+刷新+点选填入表单） | `a8eca19` `7553229` |
 
 ---
 
