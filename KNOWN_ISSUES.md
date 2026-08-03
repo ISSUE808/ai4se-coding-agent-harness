@@ -114,6 +114,7 @@
 | **自定义模型与配置不联动**（会话页手动填模型只改会话 override，设置里的全局默认 llm.model 不变，下次会话仍用旧模型）[实测] | ① 新增 `GET /api/llm/models`（后端持 key 调供应商 `/models`，密钥不出服务端）② 选择器列表模式：仅列出已获取模型（拉取失败回退手动输入+提示）③ 选择模型时 PATCH 会话 override **并** PUT config llm.model 双更新（config 失败不阻断会话切换）④ 设置页"供应商模型列表"区块（自动加载+刷新+点选填入表单） | `a8eca19` `7553229` |
 | **模型列表只显示当前供应商**（设置里只有 deepseek 的模型，无法看/切其他供应商）[实测] | ① 供应商注册表 `llm.providers`（baseUrl + defaultModel，key 仍存凭据层）② key 行加"应用"按钮：激活 = 切 llm.provider/baseUrl，有 defaultModel 直接带、否则取新供应商模型列表第一个 ③ 添加供应商表单（名称 + baseUrl 必填 + 默认模型可选）④ GET /api/keys 返回 baseUrl/isActive，列表 = 凭据 ∪ 注册表 ⑤ liveConfig 重构：PUT config 后模型列表/keys 端点跟随（getConfig 函数式） | `9b097d8` `69997df` |
 | **切换供应商后已注册供应商被清掉**（nju → deepseek → 再应用 nju 报"未配置 API 地址"——config router 持启动快照 `current`，POST keys 注册只更新 liveConfig，后续 PUT config 以旧快照 merge 把注册表条目覆盖删除，含持久化文件）[实测] | config router 去状态化：GET/PUT 统一读 `getConfig()（liveConfig 单一真源）`，删除 `current` 快照；+回归测试（注册→应用 A→应用 B→注册表存活） | `b6efc7b` |
+| **应用 nju 后调用仍发 deepseek**（应用按钮只切 WebUI 层 liveConfig，agent loop 每次 `buildAgentLoop` 用 createWebHarness 启动快照 config → 新会话/恢复/重启仍用旧供应商；且 abort 只在轮边界检查，慢 LLM 调用期间的中断被当前轮跑完抑制了重启）[实测] | ① runSession 改用 liveConfig 构建 provider（persistConfig 包装同步，应用立即生效）② `onConfigChanged`：llm.provider/baseUrl/model 变化 → 重启所有 running 会话 ③ main-loop `llm.complete()` 返回后补 abort 检查（轮内中断立即 break） | `366c6b2` |
 
 ---
 
