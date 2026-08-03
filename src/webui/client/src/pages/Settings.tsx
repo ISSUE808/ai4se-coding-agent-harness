@@ -18,6 +18,7 @@ import {
   saveConfig,
   saveKey,
   type ConfigValue,
+  type KeyProviderStatus,
 } from '../lib/api';
 import { parseConfigJson } from '../lib/config-json';
 import { defineCodeHarnessTheme, MONACO_THEME } from '../lib/monaco-theme';
@@ -53,6 +54,13 @@ export default function Settings() {
       .catch(() => {
         // Backend unreachable — the cards render their empty/loading states.
       });
+  }, []);
+
+  // Task 26 follow-up: a provider "应用" action in the keys card re-points
+  // the live config — propagate it so the model form and provider list
+  // switch to the activated provider.
+  const handleConfigChanged = useCallback((next: ConfigValue) => {
+    setConfig(next);
   }, []);
 
   return (
@@ -131,7 +139,10 @@ export default function Settings() {
           </nav>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: designTokens.spacing[6], minWidth: 0 }}>
-            <KeyManagementCard />
+            <KeyManagementCard
+              config={config}
+              onConfigChanged={handleConfigChanged}
+            />
             <ConfigEditorCard />
             <ModelGuardrailCard config={config} />
             <GeneralCard config={config} />
@@ -145,17 +156,32 @@ export default function Settings() {
 
 // ─── Key management ──────────────────────────────────────────────────────────
 
-function KeyManagementCard() {
+function KeyManagementCard({
+  config,
+  onConfigChanged,
+}: {
+  config: ConfigValue | null;
+  /** The activated provider's merged config (Task 26 follow-up). */
+  onConfigChanged: (config: ConfigValue) => void;
+}) {
   const [providers, setProviders] = useState<string[] | null>(null);
   const [statuses, setStatuses] = useState<Record<string, string>>({});
+  const [meta, setMeta] = useState<Record<string, KeyProviderStatus>>({});
   const [backend, setBackend] = useState<string | undefined>(undefined);
   const [newProvider, setNewProvider] = useState('');
+  const [newBaseUrl, setNewBaseUrl] = useState('');
+  const [newDefaultModel, setNewDefaultModel] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
+  // Task 26 follow-up: activating a provider re-points config.llm.* and
+  // refreshes the provider/model lists.
+  const [applying, setApplying] = useState<string | null>(null);
+  const [activateError, setActivateError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const list = await fetchKeys();
       setStatuses(Object.fromEntries(list.providers.map((p) => [p.provider, p.status])));
+      setMeta(Object.fromEntries(list.providers.map((p) => [p.provider, p])));
       setProviders(list.providers.map((p) => p.provider));
       setBackend(list.backend);
     } catch {
@@ -165,6 +191,81 @@ function KeyManagementCard() {
       setBackend(undefined);
     }
   }, []);
+
+  /**
+   * Task 26 follow-up: activate a provider — switch config.llm.provider to
+   * it, carry its registry baseUrl, and set llm.model to its defaultModel
+   * (or the FIRST model of its fetched list when no default is registered).
+   * The merged config propagates up so the model form follows.
+   */
+  async function activateProvider(provider: string): Promise<void> {
+    const entry = meta[provider];
+    if (!entry?.baseUrl) {
+      setActivateError(`供应商 ${provider} 未配置 API 地址——请先编辑填写 baseUrl`);
+      return;
+    }
+    setApplying(provider);
+    setActivateError(null);
+    try {
+      let merged = await saveConfig({
+        llm: {
+          provider,
+          baseUrl: entry.baseUrl,
+          ...(entry.defaultModel ? { model: entry.defaultModel } : {}),
+        },
+      });
+      if (!entry.defaultModel) {
+        const { models } = await fetchAvailableModels();
+        if (models.length > 0) {
+          merged = await saveConfig({ llm: { model: models[0] } });
+        }
+      }
+      onConfigChanged(merged);
+      await load();
+    } catch (err) {
+      setActivateError(
+        `切换 ${provider} 失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      setApplying(null);
+    }
+  }
+
+  async function handleAddProvider(): Promise<void> {
+    const name = newProvider.trim();
+    if (name === '') {
+      setAddError('请输入供应商名称');
+      return;
+    }
+    if (name.includes('/')) {
+      setAddError('供应商名称不能包含 "/"');
+      return;
+    }
+    if ((providers ?? []).some((p) => p.toLowerCase() === name.toLowerCase())) {
+      setAddError(`供应商 ${name} 已存在`);
+      return;
+    }
+    // Task 26 follow-up: a provider is useful only with an endpoint — the
+    // registry metadata is what lets the UI fetch its model list and switch
+    // to it. The key can be filled in on the row afterwards.
+    if (newBaseUrl.trim() === '') {
+      setAddError('请填写 API 地址（baseUrl）——供应商需要端点才能拉取模型列表');
+      return;
+    }
+    setAddError(null);
+    try {
+      await saveKey(name, '', {
+        baseUrl: newBaseUrl.trim(),
+        ...(newDefaultModel.trim() !== '' ? { defaultModel: newDefaultModel.trim() } : {}),
+      });
+      await load();
+      setNewProvider('');
+      setNewBaseUrl('');
+      setNewDefaultModel('');
+    } catch (err) {
+      setAddError(`添加供应商失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   /** Remove a deleted provider from the dynamic list (reviewer M2). */
   function removeProvider(provider: string): void {
@@ -179,25 +280,6 @@ function KeyManagementCard() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  function handleAddProvider(): void {
-    const name = newProvider.trim();
-    if (name === '') {
-      setAddError('请输入供应商名称');
-      return;
-    }
-    if (name.includes('/')) {
-      setAddError('供应商名称不能包含 "/"');
-      return;
-    }
-    if ((providers ?? []).some((p) => p.toLowerCase() === name.toLowerCase())) {
-      setAddError(`供应商 ${name} 已存在`);
-      return;
-    }
-    setAddError(null);
-    setProviders((prev) => [...(prev ?? []), name]);
-    setNewProvider('');
-  }
 
   return (
     <section
@@ -262,14 +344,31 @@ function KeyManagementCard() {
               key={provider}
               provider={provider}
               initialStatus={statuses[provider]}
+              baseUrl={meta[provider]?.baseUrl}
+              defaultModel={meta[provider]?.defaultModel}
+              isActive={meta[provider]?.isActive === true}
+              activating={applying === provider}
+              onActivate={() => void activateProvider(provider)}
               onDeleted={() => removeProvider(provider)}
             />
           ))
         )}
       </div>
+      {activateError !== null && (
+        <div
+          style={{
+            padding: `0 ${designTokens.spacing[5]} ${designTokens.spacing[3]}`,
+            color: designTokens.colors.danger,
+            fontSize: designTokens.typography.fontSize.sm,
+          }}
+        >
+          {activateError}
+        </div>
+      )}
       <div
         style={{
           display: 'flex',
+          flexWrap: 'wrap',
           alignItems: 'center',
           gap: designTokens.spacing[3],
           padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
@@ -283,20 +382,27 @@ function KeyManagementCard() {
           value={newProvider}
           onChange={(e) => setNewProvider(e.target.value)}
           placeholder="如 groq、mistral"
-          style={{
-            width: 180,
-            padding: designTokens.spacing[2],
-            borderRadius: designTokens.radius.md,
-            borderWidth: 1,
-            borderStyle: 'solid',
-            borderColor: designTokens.colors.borderStrong,
-            background: designTokens.colors.well,
-            color: designTokens.colors.text,
-            fontSize: designTokens.typography.fontSize.base,
-            fontFamily: designTokens.typography.fontFamily.mono,
-          }}
+          style={providerInputStyle}
         />
-        <button type="button" onClick={handleAddProvider} style={secondaryButtonStyle}>
+        <input
+          aria-label="新供应商 API 地址"
+          value={newBaseUrl}
+          onChange={(e) => setNewBaseUrl(e.target.value)}
+          placeholder="baseUrl，如 https://api.groq.com/openai/v1"
+          style={{ ...providerInputStyle, width: 280 }}
+        />
+        <input
+          aria-label="新供应商默认模型"
+          value={newDefaultModel}
+          onChange={(e) => setNewDefaultModel(e.target.value)}
+          placeholder="默认模型（可选）"
+          style={{ ...providerInputStyle, width: 160 }}
+        />
+        <button
+          type="button"
+          onClick={() => void handleAddProvider()}
+          style={secondaryButtonStyle}
+        >
           添加供应商
         </button>
         {addError !== null && (
@@ -324,16 +430,34 @@ function logoColors(provider: string): { fg: string; bg: string } {
 function KeyRow({
   provider,
   initialStatus,
+  baseUrl,
+  defaultModel,
+  isActive,
+  activating,
+  onActivate,
   onDeleted,
 }: {
   provider: string;
   initialStatus?: string;
+  /** Registry metadata (Task 26 follow-up); shown under the row. */
+  baseUrl?: string;
+  defaultModel?: string;
+  /** True when this provider is the active config.llm.provider. */
+  isActive?: boolean;
+  /** True while an activation request is in flight. */
+  activating?: boolean;
+  /** Activate this provider (switch config.llm.provider to it). */
+  onActivate?: () => void;
   /** Called after a successful delete so the parent drops the row (M2). */
   onDeleted?: () => void;
 }) {
   const [status, setStatus] = useState<string | null>(initialStatus ?? null);
   const [editing, setEditing] = useState(false);
   const [keyText, setKeyText] = useState('');
+  // Task 26 follow-up: the edit form can also carry/refresh registry
+  // metadata (baseUrl / defaultModel) alongside the key.
+  const [baseUrlText, setBaseUrlText] = useState(baseUrl ?? '');
+  const [defaultModelText, setDefaultModelText] = useState(defaultModel ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -358,16 +482,28 @@ function KeyRow({
   const logo = logoColors(provider);
 
   async function handleSave(): Promise<void> {
-    if (keyText.trim() === '') {
+    // Task 26 follow-up: the edit form submits whatever is present — a key,
+    // registry metadata, or both (the backend requires at least one).
+    const hasKey = keyText.trim() !== '';
+    const hasBase = baseUrlText.trim() !== '';
+    const hasDefault = defaultModelText.trim() !== '';
+    if (!hasKey && !hasBase && !hasDefault) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const response = await saveKey(provider, keyText.trim());
-      setStatus(response.masked);
+      const response = await saveKey(provider, keyText.trim(), {
+        ...(hasBase ? { baseUrl: baseUrlText.trim() } : {}),
+        ...(hasDefault ? { defaultModel: defaultModelText.trim() } : {}),
+      });
+      if (hasKey) {
+        setStatus(response.masked);
+      }
       setEditing(false);
       setKeyText('');
+      setBaseUrlText('');
+      setDefaultModelText('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败');
     } finally {
@@ -481,6 +617,19 @@ function KeyRow({
         >
           {configured ? status : '未设置密钥'}
         </div>
+        {baseUrl !== undefined && (
+          <div
+            style={{
+              marginTop: 2,
+              fontFamily: designTokens.typography.fontFamily.mono,
+              fontSize: designTokens.typography.fontSize.xs,
+              color: designTokens.colors.textSubtle,
+            }}
+          >
+            {baseUrl}
+            {defaultModel !== undefined ? ` · 默认 ${defaultModel}` : ''}
+          </div>
+        )}
       </div>
 
       <div
@@ -492,30 +641,41 @@ function KeyRow({
       >
         {editing ? (
           <>
-            <input
-              type="password"
-              aria-label="新密钥"
-              value={keyText}
-              onChange={(e) => setKeyText(e.target.value)}
-              placeholder={`${provider} 的新 API Key`}
-              style={{
-                width: 220,
-                padding: designTokens.spacing[2],
-                borderRadius: designTokens.radius.md,
-                borderWidth: 1,
-                borderStyle: 'solid',
-                borderColor: designTokens.colors.borderStrong,
-                background: designTokens.colors.well,
-                color: designTokens.colors.text,
-                fontSize: designTokens.typography.fontSize.base,
-                fontFamily: designTokens.typography.fontFamily.mono,
-              }}
-            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: designTokens.spacing[1] }}>
+              <input
+                type="password"
+                aria-label="新密钥"
+                value={keyText}
+                onChange={(e) => setKeyText(e.target.value)}
+                placeholder={`${provider} 的新 API Key（可留空）`}
+                style={providerInputStyle}
+              />
+              <input
+                aria-label="新 API 地址"
+                value={baseUrlText}
+                onChange={(e) => setBaseUrlText(e.target.value)}
+                placeholder="baseUrl（可选）"
+                style={{ ...providerInputStyle, width: 280 }}
+              />
+              <input
+                aria-label="新默认模型"
+                value={defaultModelText}
+                onChange={(e) => setDefaultModelText(e.target.value)}
+                placeholder="默认模型（可选）"
+                style={{ ...providerInputStyle, width: 220 }}
+              />
+            </div>
             <button
               type="button"
               onClick={() => void handleSave()}
-              disabled={busy || keyText.trim() === ''}
-              style={{ ...primaryButtonStyle, opacity: busy || keyText.trim() === '' ? 0.5 : 1 }}
+              disabled={busy || (keyText.trim() === '' && baseUrlText.trim() === '' && defaultModelText.trim() === '')}
+              style={{
+                ...primaryButtonStyle,
+                opacity:
+                  busy || (keyText.trim() === '' && baseUrlText.trim() === '' && defaultModelText.trim() === '')
+                    ? 0.5
+                    : 1,
+              }}
             >
               {busy ? <Loader2 size={12} /> : <Save size={12} />}
               保存
@@ -525,6 +685,8 @@ function KeyRow({
               onClick={() => {
                 setEditing(false);
                 setKeyText('');
+                setBaseUrlText('');
+                setDefaultModelText('');
                 setError(null);
               }}
               style={ghostButtonStyle}
@@ -534,6 +696,34 @@ function KeyRow({
           </>
         ) : (
           <>
+            {isActive ? (
+              <span
+                style={{
+                  paddingInline: designTokens.spacing[2],
+                  paddingBlock: designTokens.spacing[0],
+                  borderRadius: designTokens.radius.pill,
+                  borderWidth: 1,
+                  borderStyle: 'solid',
+                  borderColor: designTokens.colors.primaryBorder,
+                  background: designTokens.colors.primarySoft,
+                  color: designTokens.colors.primary,
+                  fontSize: designTokens.typography.fontSize.xs,
+                  fontWeight: designTokens.typography.fontWeight.medium,
+                }}
+              >
+                当前
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={onActivate}
+                disabled={activating}
+                style={{ ...primaryButtonStyle, opacity: activating ? 0.5 : 1 }}
+              >
+                {activating ? <Loader2 size={12} /> : null}
+                {activating ? '切换中…' : '应用'}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setEditing(true)}
@@ -879,9 +1069,15 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
     }
   }, []);
 
+  // Task 26 follow-up: reload the provider model list whenever the config
+  // arrives or changes — activating a provider re-points llm.provider /
+  // baseUrl and the list must follow (the config itself loads async on mount,
+  // so both the initial fetch and later switches land here).
   useEffect(() => {
-    void loadModels();
-  }, [loadModels]);
+    if (config !== null) {
+      void loadModels();
+    }
+  }, [config, loadModels]);
 
   // Seed the form from GET /api/config (the parent fetches it on mount).
   useEffect(() => {
@@ -1489,6 +1685,20 @@ const secondaryButtonStyle: CSSProperties = {
   fontSize: designTokens.typography.fontSize.sm,
   fontWeight: designTokens.typography.fontWeight.medium,
   cursor: 'pointer',
+};
+
+/** Input style shared by the "add provider" form fields (Task 26 follow-up). */
+const providerInputStyle: CSSProperties = {
+  width: 180,
+  padding: designTokens.spacing[2],
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.borderStrong,
+  background: designTokens.colors.well,
+  color: designTokens.colors.text,
+  fontSize: designTokens.typography.fontSize.base,
+  fontFamily: designTokens.typography.fontFamily.mono,
 };
 
 const dangerButtonStyle: CSSProperties = {

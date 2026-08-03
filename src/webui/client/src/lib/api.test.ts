@@ -131,6 +131,24 @@ describe('api client', () => {
     expect(init.method).toBe('DELETE');
   });
 
+  it('saveKey carries optional registry metadata (Task 26 follow-up)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ provider: 'openai', saved: true, masked: '****-9f2c' }));
+    await saveKey('openai', 'sk-plain', { baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/keys/openai');
+    expect(JSON.parse(init.body)).toEqual({
+      apiKey: 'sk-plain',
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModel: 'gpt-4o',
+    });
+  });
+
+  it('saveKey omits empty registry metadata fields (Task 26 follow-up)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ provider: 'groq', saved: true, masked: '****-1111' }));
+    await saveKey('groq', 'sk-g', { baseUrl: '', defaultModel: '' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ apiKey: 'sk-g' });
+  });
+
   it('URL-encodes provider names in every key endpoint (reviewer M1)', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ provider: 'x', status: 'not set' }));
     const provider = 'groq/api key';

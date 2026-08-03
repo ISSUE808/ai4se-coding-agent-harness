@@ -30,6 +30,12 @@ export interface KeyProviderStatus {
   provider: string;
   /** Masked value e.g. `****-9f2c`, or the literal `not set`. */
   status: string;
+  /** Registry endpoint (Task 26 follow-up); absent when not registered. */
+  baseUrl?: string;
+  /** Registry default model (Task 26 follow-up); absent when not set. */
+  defaultModel?: string;
+  /** True when this provider is the ACTIVE one (config.llm.provider). */
+  isActive?: boolean;
 }
 
 export interface KeyListResponse {
@@ -193,10 +199,34 @@ export async function getKeyStatus(provider: string): Promise<KeyStatus> {
   return request<KeyStatus>(`/api/keys/${encodeURIComponent(provider)}`);
 }
 
-export async function saveKey(provider: string, apiKey: string): Promise<KeySaveResponse> {
+/** Optional registry metadata carried by a key save (Task 26 follow-up). */
+export interface KeyMeta {
+  /** Provider base URL (OpenAI-compatible). */
+  baseUrl?: string;
+  /** Default model applied when this provider is activated. */
+  defaultModel?: string;
+}
+
+/**
+ * Save a key and/or registry metadata for a provider. `apiKey` optional when
+ * only registering metadata (`baseUrl`) — the backend rejects a POST with
+ * neither. Keys travel one-way and are never echoed back.
+ */
+export async function saveKey(
+  provider: string,
+  apiKey: string,
+  meta?: KeyMeta,
+): Promise<KeySaveResponse> {
+  const body: Record<string, unknown> = { apiKey };
+  if (meta?.baseUrl !== undefined && meta.baseUrl !== '') {
+    body.baseUrl = meta.baseUrl;
+  }
+  if (meta?.defaultModel !== undefined && meta.defaultModel !== '') {
+    body.defaultModel = meta.defaultModel;
+  }
   return request<KeySaveResponse>(
     `/api/keys/${encodeURIComponent(provider)}`,
-    jsonInit('POST', { apiKey }),
+    jsonInit('POST', body),
   );
 }
 

@@ -63,7 +63,13 @@ describe('Settings', () => {
     }));
     fetchKeysMock.mockResolvedValue({
       providers: [
-        { provider: 'deepseek', status: '****-9f2c' },
+        {
+          provider: 'deepseek',
+          status: '****-9f2c',
+          baseUrl: 'https://api.deepseek.com',
+          defaultModel: 'deepseek-chat',
+          isActive: true,
+        },
         { provider: 'openai', status: 'not set' },
         { provider: 'anthropic', status: 'not set' },
       ],
@@ -140,7 +146,12 @@ describe('Settings', () => {
     await user.click(within(row('deepseek')).getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
-      expect(saveKeyMock).toHaveBeenCalledWith('deepseek', 'sk-secret-new');
+      // The edit form also carries the row's registry metadata (Task 26
+      // follow-up) — deepseek's defaults ride along unchanged.
+      expect(saveKeyMock).toHaveBeenCalledWith('deepseek', 'sk-secret-new', {
+        baseUrl: 'https://api.deepseek.com',
+        defaultModel: 'deepseek-chat',
+      });
     });
     expect(await screen.findByText('****-abcd')).toBeInTheDocument();
     expect(screen.queryByText('sk-secret-new')).not.toBeInTheDocument();
@@ -209,10 +220,44 @@ describe('Settings', () => {
   it('adds a custom provider and saves its key through the existing POST flow', async () => {
     const user = userEvent.setup();
     saveKeyMock.mockResolvedValue({ provider: 'groq', saved: true, masked: '****-7777' });
+    // After the add (which re-fetches), the list includes groq with metadata.
+    fetchKeysMock.mockResolvedValueOnce({
+      providers: [
+        {
+          provider: 'deepseek',
+          status: '****-9f2c',
+          baseUrl: 'https://api.deepseek.com',
+          defaultModel: 'deepseek-chat',
+          isActive: true,
+        },
+        { provider: 'openai', status: 'not set' },
+        { provider: 'anthropic', status: 'not set' },
+      ],
+    });
+    // The re-fetch after the add includes the new provider.
+    fetchKeysMock.mockResolvedValueOnce({
+      providers: [
+        {
+          provider: 'deepseek',
+          status: '****-9f2c',
+          baseUrl: 'https://api.deepseek.com',
+          defaultModel: 'deepseek-chat',
+          isActive: true,
+        },
+        {
+          provider: 'groq',
+          status: 'not set',
+          baseUrl: 'https://api.groq.com/openai/v1',
+        },
+        { provider: 'openai', status: 'not set' },
+        { provider: 'anthropic', status: 'not set' },
+      ],
+    });
     render(<Settings />);
     await screen.findByText('****-9f2c');
 
     await user.type(screen.getByLabelText('新供应商名称'), 'groq');
+    await user.type(screen.getByLabelText('新供应商 API 地址'), 'https://api.groq.com/openai/v1');
     await user.click(screen.getByRole('button', { name: '添加供应商' }));
 
     const groqRow = row('groq');
@@ -220,8 +265,11 @@ describe('Settings', () => {
     await user.type(within(groqRow).getByLabelText('新密钥'), 'sk-groq-key');
     await user.click(within(groqRow).getByRole('button', { name: '保存' }));
 
+    // The key save rides with the registry metadata added above.
     await waitFor(() => {
-      expect(saveKeyMock).toHaveBeenCalledWith('groq', 'sk-groq-key');
+      expect(saveKeyMock).toHaveBeenCalledWith('groq', 'sk-groq-key', {
+        baseUrl: 'https://api.groq.com/openai/v1',
+      });
     });
     expect(await within(groqRow).findByText('****-7777')).toBeInTheDocument();
     expect(screen.queryByText('sk-groq-key')).not.toBeInTheDocument();
@@ -353,5 +401,102 @@ describe('Settings', () => {
     render(<Settings />);
 
     expect(await screen.findByText(/模型列表加载失败：未配置 deepseek 的 API key/)).toBeInTheDocument();
+  });
+
+  it('marks the active provider with 当前 and offers 应用 on others (Task 26 follow-up)', async () => {
+    render(<Settings />);
+
+    const deepseekRow = await screen.findByTestId('key-row-deepseek');
+    expect(within(deepseekRow).getByText('当前')).toBeInTheDocument();
+    expect(within(deepseekRow).queryByRole('button', { name: '应用' })).not.toBeInTheDocument();
+    const openaiRow = screen.getByTestId('key-row-openai');
+    expect(within(openaiRow).getByRole('button', { name: '应用' })).toBeInTheDocument();
+  });
+
+  it('activating a provider switches llm config to it and refreshes the model list (Task 26 follow-up)', async () => {
+    fetchKeysMock.mockResolvedValue({
+      providers: [
+        {
+          provider: 'deepseek',
+          status: '****-9f2c',
+          baseUrl: 'https://api.deepseek.com',
+          defaultModel: 'deepseek-chat',
+          isActive: true,
+        },
+        {
+          provider: 'openai',
+          status: '****-9f2c',
+          baseUrl: 'https://api.openai.com/v1',
+          defaultModel: 'gpt-4o',
+        },
+      ],
+    });
+    saveConfigMock.mockResolvedValue({
+      llm: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
+    });
+    render(<Settings />);
+
+    const openaiRow = await screen.findByTestId('key-row-openai');
+    await userEvent.click(within(openaiRow).getByRole('button', { name: '应用' }));
+
+    await waitFor(() => {
+      expect(saveConfigMock).toHaveBeenCalledWith({
+        llm: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' },
+      });
+    });
+    // The model list reloads for the newly activated provider (config change
+    // propagates to the model/guardrail card via onConfigChanged).
+    await waitFor(() => {
+      expect(fetchAvailableModelsMock).toHaveBeenCalled();
+    });
+  });
+
+  it('activates with the FIRST model of the list when no default is registered (Task 26 follow-up)', async () => {
+    fetchKeysMock.mockResolvedValue({
+      providers: [
+        {
+          provider: 'deepseek',
+          status: '****-9f2c',
+          baseUrl: 'https://api.deepseek.com',
+          defaultModel: 'deepseek-chat',
+          isActive: true,
+        },
+        { provider: 'groq', status: 'not set', baseUrl: 'https://api.groq.com/openai/v1' },
+      ],
+    });
+    saveConfigMock
+      .mockResolvedValueOnce({ llm: { provider: 'groq', baseUrl: 'https://api.groq.com/openai/v1' } })
+      .mockResolvedValueOnce({
+        llm: { provider: 'groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b' },
+      });
+    fetchAvailableModelsMock.mockResolvedValue({ models: ['llama-3.3-70b', 'llama-3.1-8b'] });
+    render(<Settings />);
+
+    const groqRow = await screen.findByTestId('key-row-groq');
+    await userEvent.click(within(groqRow).getByRole('button', { name: '应用' }));
+
+    await waitFor(() => {
+      expect(saveConfigMock).toHaveBeenCalledWith({
+        llm: { provider: 'groq', baseUrl: 'https://api.groq.com/openai/v1' },
+      });
+    });
+    await waitFor(() => {
+      expect(saveConfigMock).toHaveBeenCalledWith({ llm: { model: 'llama-3.3-70b' } });
+    });
+  });
+
+  it('adds a provider with endpoint metadata (Task 26 follow-up)', async () => {
+    render(<Settings />);
+    await userEvent.type(await screen.findByLabelText('新供应商名称'), 'groq');
+    await userEvent.type(screen.getByLabelText('新供应商 API 地址'), 'https://api.groq.com/openai/v1');
+    await userEvent.type(screen.getByLabelText('新供应商默认模型'), 'llama-3.3-70b');
+    await userEvent.click(screen.getByRole('button', { name: '添加供应商' }));
+
+    await waitFor(() => {
+      expect(saveKeyMock).toHaveBeenCalledWith('groq', '', {
+        baseUrl: 'https://api.groq.com/openai/v1',
+        defaultModel: 'llama-3.3-70b',
+      });
+    });
   });
 });
