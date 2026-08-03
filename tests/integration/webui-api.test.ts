@@ -991,3 +991,29 @@ describe('provider registry (multi-provider keys, Task 26 follow-up)', () => {
     expect(getPersisted()?.llm.provider).toBe('openai');
   });
 });
+
+describe('config live state (registry survives PUT switches)', () => {
+  it('a registered provider is never clobbered by later PUT /api/config switches', async () => {
+    const { web, port, getPersisted } = await makeFixture();
+    // 1. Register nju with an endpoint (POST /api/keys writes the registry).
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/nju')
+      .send({ apiKey: 'sk-nju', baseUrl: 'https://nju.example.com/v1' });
+    // 2. Activate nju, then deepseek — two PUT /api/config rounds.
+    await request(`http://127.0.0.1:${port}`)
+      .put('/api/config')
+      .send({ llm: { provider: 'nju', baseUrl: 'https://nju.example.com/v1', model: 'nju-model' } });
+    await request(`http://127.0.0.1:${port}`)
+      .put('/api/config')
+      .send({ llm: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' } });
+    // 3. The registry entry must survive the second PUT (the config router
+    // must merge onto the LIVE config, not a stale startup snapshot).
+    const keys = await request(`http://127.0.0.1:${port}`).get('/api/keys');
+    const njuRow = keys.body.providers.find((p: { provider: string }) => p.provider === 'nju');
+    expect(njuRow.baseUrl).toBe('https://nju.example.com/v1');
+    expect(getPersisted()?.llm.providers?.nju?.baseUrl).toBe('https://nju.example.com/v1');
+    // GET /api/config reflects the registry too (same live source).
+    const cfg = await request(`http://127.0.0.1:${port}`).get('/api/config');
+    expect(cfg.body.llm.providers.nju.baseUrl).toBe('https://nju.example.com/v1');
+  });
+});

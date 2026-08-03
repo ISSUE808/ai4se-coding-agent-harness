@@ -91,8 +91,15 @@ function maskedConfig(config: Config): Config {
 }
 
 export interface ConfigRouterDeps {
-  /** Merged config the server was started with. */
-  config: Config;
+  /**
+   * Reads the LIVE config — the single source of truth, re-pointed by the
+   * server's persistConfig wrapper. This router is STATELESS: GET/PUT always
+   * merge onto the live config, so registry writes from POST /api/keys (which
+   * persist through the same channel) are never clobbered by a later PUT
+   * (real-test regression: a registered provider vanished after activating
+   * another provider, because the old `current` snapshot lacked it).
+   */
+  getConfig: () => Config;
   /** Injectable persistence; defaults to writing the project config file. */
   persistConfig?: (config: Config) => Promise<void>;
   /** Project-level config file path used by the default persistence. */
@@ -100,15 +107,14 @@ export interface ConfigRouterDeps {
 }
 
 export function createConfigRouter(deps: ConfigRouterDeps): Router {
-  const { config, configFilePath = join(process.cwd(), '.codeharness.json') } = deps;
+  const { configFilePath = join(process.cwd(), '.codeharness.json') } = deps;
   const persist = deps.persistConfig ?? (async (c: Config) => {
     await fs.writeFile(configFilePath, `${JSON.stringify(c, null, 2)}\n`, 'utf-8');
   });
-  let current: Config = config;
   const router = Router();
 
   router.get('/', (_req, res) => {
-    res.json(maskedConfig(current));
+    res.json(maskedConfig(deps.getConfig()));
   });
 
   router.put('/', (req: Request, res: Response, next: NextFunction) => {
@@ -128,11 +134,10 @@ export function createConfigRouter(deps: ConfigRouterDeps): Router {
       });
       return;
     }
-    const merged = mergeConfig(current, body as Record<string, unknown>);
+    const merged = mergeConfig(deps.getConfig(), body as Record<string, unknown>);
     persist(merged)
       .then(() => {
-        current = merged;
-        res.json(maskedConfig(current));
+        res.json(maskedConfig(merged));
       })
       .catch(next);
   });

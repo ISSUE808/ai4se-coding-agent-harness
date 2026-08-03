@@ -158,7 +158,9 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
   );
   app.use(
     '/api/config',
-    createConfigRouter({ config: deps.config, persistConfig }),
+    // Stateless: reads the LIVE config (single source of truth) so registry
+    // writes from POST /api/keys are never clobbered by a later PUT.
+    createConfigRouter({ getConfig: () => liveConfig, persistConfig }),
   );
   // Task 23: fs browsing (directory picker / file tree). Allowed roots = the
   // config workspace root plus every known session workspaceRoot, queried
