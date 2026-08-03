@@ -692,3 +692,19 @@
   - **"传引用"要传函数，不要传当时的引用值**：`config: liveConfig` 在组装时求值成快照，liveConfig 变量后续重新赋值不影响 deps——必须 `getConfig: () => liveConfig`。引用传递的意图要用闭包函数表达
   - **同名函数定义在文件后段会覆盖前段**：新增 async handleAddProvider 与旧同步版同名共存，后者（定义在文件更后）覆盖前者——功能"看起来改了但行为没变"，测试救回（saveKey 0 调用 + 输入被旧逻辑清空）
   - **无 key 供应商也要能出现在 keys 列表**：providers = 凭据 ∪ 注册表——"添加供应商（仅元数据）"才有意义，否则用户填完 baseUrl 后列表里看不到
+
+---
+
+## 2026-08-04 01:00 真实测试修复：注册的供应商在切换后被清掉（config 双状态源）
+
+- **触发技能**：`systematic-debugging`（根因追查）、`test-driven-development`（红→绿）
+- **Subagent**：无（主 agent 直接修复——用户真实测试反馈）
+- **Prompt 要点**：用户操作链复现：添加 nju（baseUrl+key）→ 应用 nju ✓ → 应用 deepseek ✓ → 再应用 nju ✗ 报"供应商 nju 未配置 API 地址"。根因：**config router 持有自己的 `current` 快照**——POST /api/keys 注册 nju 只更新 liveConfig + 持久化文件，config router 的 current 不变；下一次 PUT /api/config 以旧 current 为 base merge → merged 丢 nju 注册表条目 → persist 覆盖 liveConfig 与文件 → nju 条目永久消失 → 再应用 nju 时 GET /api/keys 查不到 baseUrl
+- **产出**：
+  - Commit: `b6efc7b`（config.ts 去状态化：deps 改 `getConfig: () => Config`，GET/PUT 都读 liveConfig，删除 `let current`；server.ts 传 `getConfig: () => liveConfig`；webui-api.test.ts +1 回归测试——注册→应用 A→应用 B→断言注册表存活）
+  - 测试: 红 1（复现）→ 绿：webui-api+models-api 67/67；主套件 551/551；client 192/192；双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **两个可变状态源必然失同步**：config router 的 current 与 server 的 liveConfig 并存，keys 路由写一个、config 路由读另一个——任何"启动快照 + 运行时更新"的双轨都埋雷。去状态化（单一真源 + getConfig 函数式）一次性消除整类 bug
+  - **用户操作链是比单测更强的回归场景**：单测各自测 POST keys 和 PUT config 都过，只有完整链（注册→切换×2）暴露覆盖——把用户复现链原样写成集成测试
+  - **持久化覆盖比内存丢失更严重**：不只是运行时拿不到 baseUrl，`.codeharness.json` 里的注册表条目也被旧 current merge 的结果覆盖删除了——状态丢失要同时检查内存与落盘
