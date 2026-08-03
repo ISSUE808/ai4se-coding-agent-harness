@@ -21,6 +21,31 @@ const SECRET_FIELDS: ReadonlyArray<{ path: string[]; kind: 'mask' | 'hide' }> = 
   { path: ['llm', 'apiKey'], kind: 'mask' },
 ];
 
+/** Key-like field names rejected at ANY nesting depth (SPEC §3.6). */
+const SECRET_KEY_RE = /^(apiKey|api_key|secret|secretKey|token|password)$/i;
+
+/**
+ * Find the first secret-like field in a config patch (any depth), returning
+ * its dotted path — e.g. `apiKey`, `llm.apiKey`, `webui.token`. Deep check
+ * beats a fixed whitelist: a future config shape cannot silently accept a
+ * plaintext key into the persisted project file.
+ */
+function findSecretField(node: Record<string, unknown>, prefix = ''): string | null {
+  for (const [key, value] of Object.entries(node)) {
+    const dotted = prefix ? `${prefix}.${key}` : key;
+    if (SECRET_KEY_RE.test(key)) {
+      return dotted;
+    }
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      const found = findSecretField(value as Record<string, unknown>, dotted);
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return null;
+}
+
 /** Deep-overlay of a partial config onto a full one (loader.ts semantics). */
 function mergeConfig(base: Config, patch: Record<string, unknown>): Config {
   const result = structuredClone(base) as unknown as Record<string, unknown>;
@@ -93,20 +118,15 @@ export function createConfigRouter(deps: ConfigRouterDeps): Router {
       return;
     }
     // SPEC §3.6: config never holds keys — reject secret fields outright so a
-    // user cannot persist a plaintext key into the project config file.
-    for (const { path } of SECRET_FIELDS) {
-      let node: Record<string, unknown> | undefined = body as Record<string, unknown>;
-      for (let i = 0; i < path.length - 1 && node !== undefined; i++) {
-        const next = node[path[i]];
-        if (typeof next !== 'object' || next === null) break;
-        node = next as Record<string, unknown>;
-      }
-      if (node !== undefined && path[path.length - 1] in node) {
-        res.status(400).json({
-          error: `${path.join('.')} cannot be set via config — use POST /api/keys/:provider instead (SPEC §3.6)`,
-        });
-        return;
-      }
+    // user cannot persist a plaintext key into the project config file. The
+    // deep check reports the ACTUAL offending path (top-level `apiKey` is not
+    // misreported as `llm.apiKey`).
+    const secretPath = findSecretField(body as Record<string, unknown>);
+    if (secretPath !== null) {
+      res.status(400).json({
+        error: `${secretPath} cannot be set via config — use POST /api/keys/:provider instead (SPEC §3.6)`,
+      });
+      return;
     }
     const merged = mergeConfig(current, body as Record<string, unknown>);
     persist(merged)

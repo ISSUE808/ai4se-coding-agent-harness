@@ -446,7 +446,15 @@ function ConfigEditorCard() {
   const load = useCallback(async () => {
     try {
       const config = await fetchConfig();
-      setText(JSON.stringify(config, null, 2));
+      // Strip secret fields from the editor buffer: the masked response
+      // carries webui.token ("not set") which PUT would reject — the editor
+      // must never round-trip a secret-shaped field back into the config.
+      const cleaned = JSON.parse(JSON.stringify(config)) as Record<string, unknown>;
+      const webui = cleaned.webui as Record<string, unknown> | undefined;
+      if (webui) {
+        delete webui.token;
+      }
+      setText(JSON.stringify(cleaned, null, 2));
       setStatus(null);
     } catch {
       setText('{\n  // 无法加载配置：请确认 WebUI 后端已启动（默认端口 3000）\n}');
