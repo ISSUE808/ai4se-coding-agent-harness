@@ -274,6 +274,59 @@ describe('SessionDetail', () => {
     expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
   });
 
+  it('refetches the file tree when a tool message with changed files arrives (new files appear live, 1.4)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+    });
+
+    // A new tool message that changed files lands over the WS stream (the
+    // 1.4 scenario: `运行命令：echo x > notes.md` creates a file the tree
+    // snapshot does not know yet).
+    act(() =>
+      source.emit({
+        type: 'message:added',
+        data: {
+          sessionId: 's_1',
+          id: 'm4',
+          role: 'tool',
+          content: 'created notes.md',
+          timestamp: '2026-08-02T08:07:00.000Z',
+          metadata: {
+            toolName: 'run_command',
+            toolInput: { command: 'echo x > notes.md' },
+            toolResult: { success: true, duration_ms: 10, filesChanged: ['notes.md'] },
+          },
+        },
+      }),
+    );
+
+    // The debounced refetch lands shortly after.
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledTimes(2);
+    });
+    expect(fetchFsTreeMock).toHaveBeenLastCalledWith('/repo/auth-app');
+  });
+
+  it('does not refetch the tree for messages that changed no files (1.4: only file changes trigger)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+    });
+
+    act(() =>
+      source.emit({
+        type: 'message:added',
+        data: { sessionId: 's_1', id: 'm4', role: 'user', content: '继续', timestamp: '2026-08-02T08:07:00.000Z' },
+      }),
+    );
+    // Longer than the refresh debounce — still exactly the initial fetch.
+    await new Promise((r) => setTimeout(r, 350));
+    expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+  });
+
   it('collapses expanded directories in the file tree (Task 23)', async () => {
     fetchFsTreeMock.mockResolvedValue(FS_TREE);
     renderDetail();

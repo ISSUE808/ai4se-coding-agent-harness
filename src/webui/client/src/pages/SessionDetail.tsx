@@ -8,7 +8,7 @@
  * and dedupes by message id. All colors/fonts/spacing resolve to
  * design-tokens.ts.
  */
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -53,6 +53,7 @@ import {
   aggregateFiles,
   contentForFile,
   formatDateTime,
+  toolFiles,
   type FileEntry,
 } from '../lib/session-messages';
 
@@ -292,24 +293,28 @@ export default function SessionDetail() {
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
-  // Task 23: workspace file tree in the left column, fetched once per session
-  // from the fs endpoint (bounded to the session workspaceRoot). The effect
-  // depends on the workspaceRoot only (M5): status changes rebuild the
-  // session object but must not refetch the tree.
+  // Task 23: workspace file tree in the left column, fetched from the fs
+  // endpoint (bounded to the session workspaceRoot). The workspaceRoot
+  // effect fetches once per session (M5: status changes rebuild the session
+  // object but must not refetch the tree); a second effect refetches after
+  // NEW file-changing tool messages so freshly created files appear without
+  // a manual page refresh (1.4). A request generation counter makes a stale
+  // response (switched root, superseded refetch) a no-op.
   const workspaceRoot = session?.workspaceRoot ?? '';
   const [tree, setTree] = useState<FsTreeNode | null>(null);
   const [treeError, setTreeError] = useState<string | null>(null);
   const [treeExpanded, setTreeExpanded] = useState<Set<string>>(new Set());
+  const treeRequestRef = useRef(0);
 
-  useEffect(() => {
+  const loadTree = useCallback(() => {
     if (workspaceRoot === '') {
       return;
     }
-    let cancelled = false;
+    const requestId = ++treeRequestRef.current;
     fetchFsTree(workspaceRoot)
       .then((node) => {
-        if (cancelled) {
-          return;
+        if (requestId !== treeRequestRef.current) {
+          return; // a newer request (or a root switch) superseded this one
         }
         setTree(node);
         setTreeError(null);
@@ -317,14 +322,62 @@ export default function SessionDetail() {
         setTreeExpanded((prev) => new Set(prev).add(node.path));
       })
       .catch((err) => {
-        if (!cancelled) {
-          setTreeError(err instanceof Error ? err.message : '无法加载文件树');
+        if (requestId !== treeRequestRef.current) {
+          return;
         }
+        setTreeError(err instanceof Error ? err.message : '无法加载文件树');
       });
-    return () => {
-      cancelled = true;
-    };
   }, [workspaceRoot]);
+
+  useEffect(() => {
+    loadTree();
+  }, [loadTree]);
+
+  // 1.4: refetch the tree when the live message stream reports a NEW
+  // file-changing tool message (a file the snapshot does not know yet must
+  // appear without refreshing the page). The first non-empty message list —
+  // the REST snapshot merged once by the hook — is absorbed without a
+  // refetch (the workspaceRoot effect already covered it); only messages
+  // arriving after that trigger, debounced so a burst of tool calls costs
+  // one fetch.
+  const treeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const treeSnapshotSeenRef = useRef(false);
+  const treeLastMessageRef = useRef<string | null>(null);
+  useEffect(() => {
+    const messages = events.messages;
+    const last = messages[messages.length - 1];
+    if (last === undefined) {
+      return;
+    }
+    if (!treeSnapshotSeenRef.current) {
+      treeSnapshotSeenRef.current = true;
+      treeLastMessageRef.current = last.id;
+      return;
+    }
+    if (last.id === treeLastMessageRef.current) {
+      return;
+    }
+    treeLastMessageRef.current = last.id;
+    if (last.role !== 'tool' || toolFiles(last).length === 0) {
+      return;
+    }
+    if (treeRefreshTimerRef.current !== null) {
+      clearTimeout(treeRefreshTimerRef.current);
+    }
+    treeRefreshTimerRef.current = setTimeout(() => {
+      treeRefreshTimerRef.current = null;
+      loadTree();
+    }, 300);
+  }, [events.messages, loadTree]);
+
+  useEffect(
+    () => () => {
+      if (treeRefreshTimerRef.current !== null) {
+        clearTimeout(treeRefreshTimerRef.current);
+      }
+    },
+    [],
+  );
 
   // CR I2: changed files that the fetched tree hides (depth/per-level caps)
   // stay reachable through a fallback list below the tree.
