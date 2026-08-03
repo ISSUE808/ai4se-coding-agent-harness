@@ -102,6 +102,11 @@ export interface ConfigRouterDeps {
   getConfig: () => Config;
   /** Injectable persistence; defaults to writing the project config file. */
   persistConfig?: (config: Config) => Promise<void>;
+  /**
+   * Real-test fix: invoked with (before, after) after a successful PUT — the
+   * harness restarts running sessions whose provider became stale.
+   */
+  onConfigChanged?: (prev: Config, next: Config) => void;
   /** Project-level config file path used by the default persistence. */
   configFilePath?: string;
 }
@@ -134,9 +139,11 @@ export function createConfigRouter(deps: ConfigRouterDeps): Router {
       });
       return;
     }
-    const merged = mergeConfig(deps.getConfig(), body as Record<string, unknown>);
+    const prev = deps.getConfig();
+    const merged = mergeConfig(prev, body as Record<string, unknown>);
     persist(merged)
       .then(() => {
+        deps.onConfigChanged?.(prev, merged);
         res.json(maskedConfig(merged));
       })
       .catch(next);

@@ -79,6 +79,12 @@ export interface WebUIServerDeps {
    * model — the harness restarts a running session on the new model.
    */
   onModelChanged?: (session: Session) => void;
+  /**
+   * Real-test fix: invoked after PUT /api/config persisted a change — the
+   * harness decides whether running loops are stale (provider/baseUrl/model
+   * changed → restart them all).
+   */
+  onConfigChanged?: (prev: Config, next: Config) => void;
 }
 
 export interface WebUIServer {
@@ -160,7 +166,7 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
     '/api/config',
     // Stateless: reads the LIVE config (single source of truth) so registry
     // writes from POST /api/keys are never clobbered by a later PUT.
-    createConfigRouter({ getConfig: () => liveConfig, persistConfig }),
+    createConfigRouter({ getConfig: () => liveConfig, persistConfig, onConfigChanged: deps.onConfigChanged }),
   );
   // Task 23: fs browsing (directory picker / file tree). Allowed roots = the
   // config workspace root plus every known session workspaceRoot, queried

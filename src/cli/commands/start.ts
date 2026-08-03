@@ -484,6 +484,17 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
   const sessionStore =
     opts.sessionStore ?? new InMemorySessionStore(config.agent.maxRounds, config.agent.workspaceRoot);
 
+  // Real-test fix: the LOOP layer must follow config changes. `liveConfig` is
+  // re-pointed by the server's persist channel (PUT /api/config and the
+  // POST /api/keys registry write both persist through it), so every
+  // runSession builds its provider from the CURRENT config — activating a
+  // provider in Settings immediately applies to new/restarted sessions.
+  let liveConfig = config;
+  const persistConfig = async (next: Config): Promise<void> => {
+    liveConfig = next;
+    await opts.persistConfig?.(next);
+  };
+
   /** Live runs by session id — the pause/stop endpoints abort them (I2). */
   const activeRuns = new Map<string, AbortController>();
   /** Sessions whose running loop should restart with a fresh user message. */
@@ -510,7 +521,11 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
       // Task 26: hand the stored session to the factory so the provider is
       // built with `session.model` when the session overrides the config
       // default (model switches → the restarted run rebuilds the provider).
-      const loop = await buildAgentLoop({ config, events, hitl, session });
+      // LIVE config: activating another provider re-points llm.provider /
+      // baseUrl, and a fresh run must build against that (not the startup
+      // snapshot) — real-test: after activating nju, requests still went to
+      // deepseek until the process restarted.
+      const loop = await buildAgentLoop({ config: liveConfig, events, hitl, session });
       await loop.run(session.task, { session, signal: controller.signal });
     } catch (err) {
       // The loop never throws for LLM/tool failures, but guard against
@@ -601,7 +616,23 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     credentialStore,
     config,
     hitl,
-    persistConfig: opts.persistConfig,
+    persistConfig,
+    // Real-test fix: switching the provider/endpoint makes every running
+    // loop's provider stale — restart them all (same abort+restart path as a
+    // model switch). Other config fields (maxRounds etc.) do not restart.
+    onConfigChanged: (prev, next) => {
+      if (
+        prev.llm.provider !== next.llm.provider ||
+        prev.llm.baseUrl !== next.llm.baseUrl ||
+        prev.llm.model !== next.llm.model
+      ) {
+        for (const session of sessionStore.list()) {
+          if (session.status === 'running') {
+            restartLiveRun(session);
+          }
+        }
+      }
+    },
     onSessionCreated: (session) => {
       void runSession(session);
     },

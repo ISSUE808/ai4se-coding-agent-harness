@@ -287,6 +287,15 @@ export class AgentLoop {
       let response: LLMResponse;
       try {
         response = await this.llm.complete(messages, toolList);
+        // I2-fix: an abort can land DURING the LLM call — the loop only
+        // checked at the round boundary above. Without this check a
+        // single-round task would complete anyway (session → completed),
+        // which suppresses the harness's restart-in-finally for message
+        // injection / model switch / provider switch. The endpoint already
+        // owns the final status for pause/stop, so a bare break is safe.
+        if (options.signal?.aborted) {
+          break;
+        }
       } catch (llmError: unknown) {
         const msg = llmError instanceof Error ? llmError.message : String(llmError);
         session.status = 'failed';

@@ -832,12 +832,13 @@ describe('full integration — start --web wiring (Task 19)', () => {
     it('PATCH while running aborts the run and restarts with the new model (spy + timing)', async () => {
       const builtModels: Array<string | undefined> = [];
       // Slow provider: the PATCH lands while the first run is mid-call.
-      // Scripted: tool call, then enough completions for every restart order.
+      // Scripted: the FIRST tool call is cut by the abort (the loop breaks
+      // right after the LLM response); the restarted run executes the next
+      // tool call and completes.
       const provider = slowMockProvider(
         [
           { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
-          { content: '完成。' },
-          { content: '完成。' },
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
           { content: '完成。' },
         ],
         400,
@@ -902,8 +903,9 @@ describe('full integration — start --web wiring (Task 19)', () => {
       const id = created.body.id as string;
 
       // Model switch while running, then pause IMMEDIATELY — the pause lands
-      // while the aborted run is still finishing (abort is honored only at
-      // the round boundary).
+      // while the aborted run is still finishing. The abort cuts the loop
+      // right after the in-flight LLM response (the round's tool call is
+      // dropped), and the pause's final status suppresses any restart.
       await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
       const paused = await request(web.app).post(`/api/sessions/${id}/pause`);
       expect(paused.status).toBe(200);
@@ -918,8 +920,8 @@ describe('full integration — start --web wiring (Task 19)', () => {
       expect(session?.status).toBe('paused');
       // The switch itself is still recorded — the NEXT run honors it.
       expect(session?.model).toBe('deepseek-v3');
-      // Exactly the in-flight tool round executed — no restart flow.
-      expect(toolCount(sessionStore, id)).toBe(1);
+      // No restart flow behind the pause — and the cut round ran NO tool.
+      expect(toolCount(sessionStore, id)).toBe(0);
       expect(builtModels).toEqual([undefined]);
     });
 
@@ -963,10 +965,67 @@ describe('full integration — start --web wiring (Task 19)', () => {
       // Exactly TWO provider builds: the original run and the resumed one.
       expect(builtModels).toEqual([undefined, 'deepseek-v3']);
 
-      // Nothing keeps flowing after completion.
+      // Nothing keeps flowing after completion. The cut round ran no tool,
+      // and the resumed run (re-seeded, no tool message) completes directly.
       await silence(900);
       expect(builtModels).toEqual([undefined, 'deepseek-v3']);
-      expect(toolCount(sessionStore, id)).toBe(1);
+      expect(toolCount(sessionStore, id)).toBe(0);
     });
+  });
+}, 15000);
+
+describe('provider activation follows the LIVE config (real-test fix)', () => {
+  it('sessions built after PUT /api/config use the NEW provider; running sessions restart onto it', async () => {
+    const builds: BuildAgentLoopOptions[] = [];
+    const config = makeConfig(os.tmpdir());
+    // Slow responses keep the first session RUNNING while the switch lands.
+    const slow = slowMockProvider(
+      [
+        { role: 'assistant', content: 'done', toolCalls: [] },
+        { role: 'assistant', content: 'done 2', toolCalls: [] },
+        { role: 'assistant', content: 'done 3', toolCalls: [] },
+      ],
+      400,
+    );
+    const { harness, port, sessionStore } = await makeHarness(
+      config,
+      slow,
+      undefined,
+      undefined,
+      (opts) => builds.push(opts),
+    );
+
+    // First session runs on the STARTUP provider (deepseek).
+    const first = await request(`http://127.0.0.1:${port}`)
+      .post('/api/sessions')
+      .send({ task: 't1' });
+    expect(first.status).toBe(201);
+    await waitForStatus(sessionStore, first.body.id, 'running');
+    expect(builds[0].config.llm.provider).toBe('mock');
+
+    // Activate another provider — the Settings 应用 action.
+    const put = await request(`http://127.0.0.1:${port}`)
+      .put('/api/config')
+      .send({ llm: { provider: 'nju', baseUrl: 'https://nju.example.com/v1', model: 'nju-model' } });
+    expect(put.status).toBe(200);
+
+    // The RUNNING session restarts onto the new provider and completes.
+    await waitForStatus(sessionStore, first.body.id, 'completed', 10000);
+    expect(builds.length).toBeGreaterThanOrEqual(2);
+    const restarted = builds[builds.length - 1];
+    expect(restarted.config.llm.provider).toBe('nju');
+    expect(restarted.config.llm.baseUrl).toBe('https://nju.example.com/v1');
+
+    // A NEW session also builds with the LIVE config, not the startup one.
+    const before = builds.length;
+    const second = await request(`http://127.0.0.1:${port}`)
+      .post('/api/sessions')
+      .send({ task: 't2' });
+    expect(second.status).toBe(201);
+    await waitForStatus(sessionStore, second.body.id, 'completed', 10000);
+    expect(builds.length).toBeGreaterThan(before);
+    const built = builds[builds.length - 1];
+    expect(built.config.llm.provider).toBe('nju');
+    expect(built.config.llm.baseUrl).toBe('https://nju.example.com/v1');
   });
 }, 15000);
