@@ -675,3 +675,20 @@
   - **每次给组件加新 import 都要全局搜 vi.mock 工厂**：SessionDetail 加了 fetchAvailableModels，App.test.tsx 的 api mock 工厂没有它 → 挂 2 个壳级测试（vitest 报 "No export defined on the mock"）。Mock 工厂与组件 import 面必须同步
   - **"自定义输入"是纸面能力也是双刃剑**：列表模式隐藏自定义入口让"只能在已获取列表选"成立，但失败回退保住可用性——功能收窄必须配套降级路径，否则断网/无 key 时模型切换整个瘫痪
   - **双更新（PATCH+PATCH config）的失败语义**：会话切换是主操作（运行中立即生效），config 持久化是副操作——副失败不能回滚主成功，提示而非阻断
+
+---
+
+## 2026-08-04 00:45 用户需求：多供应商模型列表（key 行"应用"按钮 + 添加供应商填 baseUrl）
+
+- **触发技能**：`test-driven-development`（红→绿）、AskUserQuestion（设计决策）
+- **Subagent**：无（主 agent 直接实现——用户功能需求）
+- **Prompt 要点**：用户反馈"设置里的模型列表只显示 deepseek 的，希望显示所有供应商的模型列表"——方案（用户提出）：每个 key 后加"应用"按钮，点击后配置自动切换、模型与护栏板块显示对应信息与模型列表；key 不够的（需 baseUrl）在添加供应商时提供填写框。设计决策（用户确认）：切换时**有 defaultModel 就自动带，没有就用模型列表第一个**
+- **产出**：
+  - Commit `9b097d8`（后端）：`Config.llm.providers` 注册表（provider → { baseUrl, defaultModel? }，schema 预设 deepseek）；POST /api/keys/:provider 扩展（apiKey 可选 + baseUrl/defaultModel 写注册表，两者皆空 400）；GET /api/keys 返回 baseUrl/defaultModel/isActive，providers = 凭据 ∪ 注册表；**liveConfig 引用重构**——server 的 persistConfig 包装更新 liveConfig，keys/models 路由经 getConfig() 读最新（PUT /api/config 切供应商后模型列表端点自动跟随）
+  - Commit `69997df`（前端）：KeyRow 加"当前"chip + "应用"按钮（激活 = saveConfig llm.provider/baseUrl/model——有 defaultModel 直接带，否则拉新供应商模型列表取第一个，再 saveConfig）；行内编辑可改 baseUrl/defaultModel；添加供应商表单（名称 + baseUrl 必填 + 默认模型可选）；模型列表随 config 变化重拉（ModelGuardrailCard effect 依赖 config）
+  - 测试: 红→绿：webui-api +9（注册表/无 key 注册/isActive/切换后 models URL 跟随）、models-api 6/6 保持、client +7（应用/无默认取第一/添加供应商/saveKey meta/当前 chip）；全量 主套件 550/550 + client 192/192 + 双 tsc 干净
+- **人工干预**：修复两处隐藏问题——① models router 曾把 config 解构为快照（PUT config 后不跟随），改 getConfig() 函数式；② 旧 handleAddProvider 残留覆盖新 async 版（同名函数后者覆盖前者，点添加只走本地加列表不调 API）
+- **教训**：
+  - **"传引用"要传函数，不要传当时的引用值**：`config: liveConfig` 在组装时求值成快照，liveConfig 变量后续重新赋值不影响 deps——必须 `getConfig: () => liveConfig`。引用传递的意图要用闭包函数表达
+  - **同名函数定义在文件后段会覆盖前段**：新增 async handleAddProvider 与旧同步版同名共存，后者（定义在文件更后）覆盖前者——功能"看起来改了但行为没变"，测试救回（saveKey 0 调用 + 输入被旧逻辑清空）
+  - **无 key 供应商也要能出现在 keys 列表**：providers = 凭据 ∪ 注册表——"添加供应商（仅元数据）"才有意义，否则用户填完 baseUrl 后列表里看不到
