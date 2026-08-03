@@ -483,6 +483,35 @@ describe('DeepSeekProvider', () => {
     expect(openAiConstructorCall.baseURL).toBe('https://api.deepseek.com/v1');
   });
 
+  it('enriches HTTP failures with the endpoint URL, status and a compatibility hint', async () => {
+    // Real-test: a bare "404 openai_error" tells nobody WHY. HTTP errors
+    // (numeric status) must surface the target URL and a hint.
+    const httpError = Object.assign(new Error('404 openai_error'), {
+      status: 404,
+      error: { message: 'not found' },
+    });
+    mockCreate.mockRejectedValue(httpError);
+
+    const provider = new DeepSeekProvider({
+      ...defaultConfig,
+      baseUrl: 'https://njusehub.info/v1',
+    });
+    const promise = provider.complete(dummyMessages, []);
+    await expect(promise).rejects.toThrow(/njusehub\.info\/v1\/chat\/completions/);
+    await expect(promise).rejects.toThrow(/HTTP 404/);
+    await expect(promise).rejects.toThrow(/OpenAI 兼容端点/);
+    // The response body fragment is included for diagnosis.
+    await expect(promise).rejects.toThrow(/not found/);
+  });
+
+  it('passes through non-HTTP errors unchanged', async () => {
+    const networkError = new TypeError('fetch failed');
+    mockCreate.mockRejectedValue(networkError);
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await expect(provider.complete(dummyMessages, [])).rejects.toThrow('fetch failed');
+  });
+
   it('handles multiple tool_calls in a single response', async () => {
     mockCreate.mockResolvedValue({
       choices: [

@@ -74,6 +74,8 @@ export class DeepSeekProvider implements LLMProvider {
    * mid-conversation builds a fresh provider.
    */
   readonly model: string;
+  /** Endpoint this provider talks to — surfaced in enriched error messages. */
+  readonly baseUrl: string;
 
   constructor(config: DeepSeekConfig) {
     this.client = new OpenAI({
@@ -82,6 +84,7 @@ export class DeepSeekProvider implements LLMProvider {
     });
     this.model = config.model;
     this.maxTokens = config.maxTokens;
+    this.baseUrl = config.baseUrl;
   }
 
   async complete(messages: Message[], tools: Tool[]): Promise<LLMResponse> {
@@ -131,12 +134,37 @@ export class DeepSeekProvider implements LLMProvider {
       },
     }));
 
-    const response = await this.client.chat.completions.create({
-      model: this.model,
-      messages: stabilized as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      tools: openaiTools.length > 0 ? openaiTools : undefined,
-      max_tokens: this.maxTokens,
-    });
+    let response: OpenAI.Chat.Completions.ChatCompletion;
+    try {
+      response = await this.client.chat.completions.create({
+        model: this.model,
+        messages: stabilized as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+        tools: openaiTools.length > 0 ? openaiTools : undefined,
+        max_tokens: this.maxTokens,
+      });
+    } catch (err) {
+      // Real-test: a bare "404 openai_error" told nobody WHY. Enrich HTTP
+      // failures (numeric status) with the target URL, status and response
+      // body so wrong endpoints (missing /v1, non-OpenAI-compatible servers)
+      // are diagnosable; non-HTTP errors (network) pass through unchanged.
+      const status = (err as { status?: unknown })?.status;
+      if (typeof status === 'number') {
+        const body = (err as { error?: unknown })?.error;
+        const detail =
+          body !== undefined
+            ? typeof body === 'string'
+              ? body
+              : JSON.stringify(body)
+            : '';
+        throw new Error(
+          `LLM API 调用失败（${this.baseUrl}/chat/completions，HTTP ${status}）：` +
+            `${err instanceof Error ? err.message : String(err)}` +
+            (detail !== '' ? ` 响应：${detail.slice(0, 200)}` : '') +
+            '——请检查 API 地址是否为 OpenAI 兼容端点（通常以 /v1 结尾）',
+        );
+      }
+      throw err;
+    }
 
     const choice = response.choices[0]?.message;
 
