@@ -214,6 +214,207 @@ describe('DeepSeekProvider', () => {
     expect(serialized).not.toContain('dummyExecute');
   });
 
+  it('normalizes property-table parameters into a JSON Schema object (real tool format)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    // Real tools declare parameters as a bare property table (no type/properties
+    // wrapper) — DeepSeek rejects schemas without `type: "object"` (400).
+    const realTool: Tool = {
+      name: 'read_file',
+      description: 'Read a file from the workspace',
+      parameters: {
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of file paths to read, relative to the workspace root.',
+        },
+      },
+      execute: dummyExecute,
+    };
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(dummyMessages, [realTool]);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.tools[0].function.parameters).toEqual({
+      type: 'object',
+      properties: {
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of file paths to read, relative to the workspace root.',
+        },
+      },
+      required: ['paths'],
+    });
+  });
+
+  it('formats assistant tool_calls and tool results with tool_call_id (OpenAI protocol)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    // Round 2 context: assistant declared tool_calls, tool reported its result.
+    const messages: Message[] = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: 'Reading the file.',
+        metadata: {
+          toolInput: {
+            toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { paths: ['a.ts'] } }],
+          },
+        },
+        timestamp: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 't1',
+        role: 'tool',
+        content: 'ok',
+        metadata: { toolCallId: 'call_1' },
+        timestamp: '2026-01-01T00:00:01.000Z',
+      },
+    ];
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(messages, []);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.messages).toEqual([
+      {
+        role: 'assistant',
+        content: 'Reading the file.',
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"paths":["a.ts"]}' },
+          },
+        ],
+      },
+      { role: 'tool', content: 'ok', tool_call_id: 'call_1' },
+    ]);
+  });
+
+  it('carries tool_call ids through to the parsed toolCalls', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_xyz',
+                type: 'function',
+                function: { name: 'read_file', arguments: '{"paths":["a.ts"]}' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    const result = await provider.complete(dummyMessages, []);
+
+    expect(result.toolCalls![0].id).toBe('call_xyz');
+  });
+
+  it('maps feedback-role messages to system (OpenAI protocol has no feedback role)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    const messages: Message[] = [
+      {
+        id: 'f1',
+        role: 'feedback',
+        content: '[feedback] tsc: type error at add.ts:1',
+        timestamp: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(messages, []);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.messages).toEqual([
+      { role: 'system', content: '[feedback] tsc: type error at add.ts:1' },
+    ]);
+  });
+
+  it('keeps tool responses contiguous after an assistant tool_calls message (feedback system messages move after the pairs)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    // Round order as produced by the main loop: assistant declares 2 calls,
+    // action 1 executes (tool), its feedback lands (→ system), action 2
+    // executes (tool). DeepSeek 400s when a non-tool message sits between an
+    // assistant's tool_calls and its tool responses.
+    const messages: Message[] = [
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '',
+        metadata: {
+          toolInput: {
+            toolCalls: [
+              { id: 'call_1', name: 'run_shell', arguments: { command: 'pwd' } },
+              { id: 'call_2', name: 'list_directory', arguments: { path: '.' } },
+            ],
+          },
+        },
+        timestamp: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        id: 't1',
+        role: 'tool',
+        content: 'ok',
+        metadata: { toolCallId: 'call_1' },
+        timestamp: '2026-01-01T00:00:01.000Z',
+      },
+      {
+        id: 'f1',
+        role: 'feedback',
+        content: 'tsc: no errors',
+        timestamp: '2026-01-01T00:00:02.000Z',
+      },
+      {
+        id: 't2',
+        role: 'tool',
+        content: 'entries',
+        metadata: { toolCallId: 'call_2' },
+        timestamp: '2026-01-01T00:00:03.000Z',
+      },
+    ];
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(messages, []);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    const roles = callArgs.messages.map((m: { role: string }) => m.role);
+    expect(roles).toEqual(['assistant', 'tool', 'tool', 'system']);
+    // The system (feedback) message must come after both tool responses.
+    expect(callArgs.messages[1].tool_call_id).toBe('call_1');
+    expect(callArgs.messages[2].tool_call_id).toBe('call_2');
+    expect(callArgs.messages[3]).toEqual({ role: 'system', content: 'tsc: no errors' });
+  });
+
+  it('passes through already-standard JSON Schema parameters unchanged', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'OK' } }],
+    });
+
+    const provider = new DeepSeekProvider(defaultConfig);
+    await provider.complete(dummyMessages, dummyTools);
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.tools[0].function.parameters).toEqual(dummyTools[0].parameters);
+  });
+
   it('does not pass tools field when tools array is empty', async () => {
     mockCreate.mockResolvedValue({
       choices: [{ message: { content: 'OK' } }],
@@ -316,10 +517,12 @@ describe('DeepSeekProvider', () => {
 
     expect(result.toolCalls).toHaveLength(2);
     expect(result.toolCalls![0]).toEqual({
+      id: 'call_1',
       name: 'read_file',
       arguments: { filePath: '/src/a.ts' },
     });
     expect(result.toolCalls![1]).toEqual({
+      id: 'call_2',
       name: 'write_file',
       arguments: { filePath: '/src/b.ts', content: '// code' },
     });

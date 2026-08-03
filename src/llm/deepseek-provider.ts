@@ -8,6 +8,63 @@ export interface DeepSeekConfig {
   maxTokens: number;
 }
 
+/**
+ * Normalize a tool's `parameters` into a standard JSON Schema object for the
+ * OpenAI-compatible API. Our tools declare parameters as a bare property table
+ * (e.g. `{ paths: {...} }`) — DeepSeek rejects schemas without
+ * `type: "object"` with 400. Already-standard schemas (carrying `type` or
+ * `properties`) pass through unchanged.
+ */
+
+interface OpenAIMessage {
+  role: string;
+  content: string;
+  tool_calls?: unknown[];
+  tool_call_id?: string;
+}
+
+/**
+ * DeepSeek (OpenAI protocol) requires tool responses to be contiguous after
+ * the assistant message that declared them — an interleaved system message
+ * (our feedback → system mapping) triggers 400 "insufficient tool messages
+ * following tool_calls". Stable-partition each assistant tool-call block:
+ * tool responses first (in order), then the interleaved non-tool messages.
+ */
+function stabilizeToolPairs(msgs: OpenAIMessage[]): OpenAIMessage[] {
+  const out: OpenAIMessage[] = [];
+  let i = 0;
+  while (i < msgs.length) {
+    const m = msgs[i];
+    out.push(m);
+    i++;
+    if (m.role !== 'assistant' || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0) {
+      continue;
+    }
+    // Collect everything until the next assistant message.
+    const block: OpenAIMessage[] = [];
+    while (i < msgs.length && msgs[i].role !== 'assistant') {
+      block.push(msgs[i]);
+      i++;
+    }
+    const tools = block.filter((b) => b.role === 'tool');
+    const rest = block.filter((b) => b.role !== 'tool');
+    out.push(...tools, ...rest);
+  }
+  return out;
+}
+export function toOpenAIToolParameters(
+  parameters: Record<string, unknown>,
+): Record<string, unknown> {
+  if (typeof parameters.type === 'string' || 'properties' in parameters) {
+    return parameters;
+  }
+  return {
+    type: 'object',
+    properties: parameters,
+    required: Object.keys(parameters),
+  };
+}
+
 export class DeepSeekProvider implements LLMProvider {
   private client: OpenAI;
   private model: string;
@@ -23,23 +80,55 @@ export class DeepSeekProvider implements LLMProvider {
   }
 
   async complete(messages: Message[], tools: Tool[]): Promise<LLMResponse> {
-    const openaiMessages = messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+    // OpenAI tool-calling protocol: an assistant message that declared tool
+    // calls must resend them (`tool_calls`), and every tool result message
+    // must reference its call (`tool_call_id`) — DeepSeek rejects a missing
+    // `tool_call_id` with 400.
+    const openaiMessages = messages.map((m) => {
+      if (m.role === 'assistant') {
+        const calls = m.metadata?.toolInput?.toolCalls;
+        if (Array.isArray(calls) && calls.length > 0) {
+          return {
+            role: 'assistant',
+            content: m.content,
+            tool_calls: calls.map((c) => ({
+              id: c.id ?? 'call_unknown',
+              type: 'function' as const,
+              function: { name: c.name, arguments: JSON.stringify(c.arguments) },
+            })),
+          };
+        }
+        return { role: 'assistant', content: m.content };
+      }
+      if (m.role === 'tool') {
+        return {
+          role: 'tool',
+          content: m.content,
+          tool_call_id: m.metadata?.toolCallId ?? 'call_unknown',
+        };
+      }
+      // The OpenAI protocol has no `feedback` role — feedback content must
+      // reach the LLM (it drives the correction loop), so send it as system.
+      const role = m.role === 'feedback' ? 'system' : m.role;
+      return { role, content: m.content };
+    }) as OpenAIMessage[];
+
+    // Tool responses must be contiguous after their declaring assistant
+    // message — feedback-as-system messages interleave otherwise.
+    const stabilized = stabilizeToolPairs(openaiMessages);
 
     const openaiTools = tools.map((t) => ({
       type: 'function' as const,
       function: {
         name: t.name,
         description: t.description,
-        parameters: t.parameters,
+        parameters: toOpenAIToolParameters(t.parameters),
       },
     }));
 
     const response = await this.client.chat.completions.create({
       model: this.model,
-      messages: openaiMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+      messages: stabilized as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       tools: openaiTools.length > 0 ? openaiTools : undefined,
       max_tokens: this.maxTokens,
     });
@@ -49,6 +138,7 @@ export class DeepSeekProvider implements LLMProvider {
     let toolCalls: LLMResponse['toolCalls'];
     if (choice?.tool_calls && choice.tool_calls.length > 0) {
       toolCalls = choice.tool_calls.map((tc) => ({
+        id: tc.id,
         name: tc.function.name,
         arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>,
       }));

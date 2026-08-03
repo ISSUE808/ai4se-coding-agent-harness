@@ -1082,20 +1082,26 @@ describe('Agent Main Loop (integration)', () => {
 - 修改：`src/cli/commands/start.ts`——增加 `--web` 标志
 - 创建：`tests/integration/full-loop.test.ts`
 
-- [ ] **步骤 1：接入 `--web` 标志**——在同一进程中同时启动 agent 循环和 Express 服务器
+- [x] **步骤 1：接入 `--web` 标志**——在同一进程中同时启动 agent 循环和 Express 服务器（commit `860336b`：`createWebHarness` 复用 createWebUIServer 注入模式；onSessionCreated/onApprovalResolved/onSessionResumed/onSessionControl 集成接缝；共享 HITLManager/事件总线/凭据库；`dev-webui.ts` 保留为无凭据前端 dev 入口）
 
-**需求备注（Phase 10 收尾时用户决策）**：会话级工作目录绑定（"打开/新建项目"）统一在 Task 19 实现——
-- `Session` 增加 `workspaceRoot` 字段（当前为全局 `config.agent.workspaceRoot`，会话无项目绑定）
-- `POST /api/sessions` 接受并校验 workspaceRoot（目录存在/可写）；`SessionStore.create` 支持
-- `AgentLoop.run` 按会话 workspaceRoot 构建 ToolContext/验证器 cwd/scope-fence 基准（当前单项目进程模型）
-- WebUI 新建会话 modal 加「工作目录」字段（默认当前 workspaceRoot）；会话详情显示项目路径
-- CLI `start` 加 `--cwd` 选项（可选增强）
-- 安全面：WebUI 指定任意目录 = 授权 agent 在该目录执行命令，需确认 + 越界护栏按会话基准
-- [ ] **步骤 2：使用 MockProvider 进行完整集成测试**——启动 agent → tool call → 反馈管线 → 会话完成；护栏 HITL → 用户通过 API 批准 → agent 继续；反馈失败 3 次 → 升级 → 用户介入
-- [ ] **步骤 3：运行全部测试** → `npx vitest run` → 每个测试均通过
-- [ ] **步骤 4：提交**
+**需求备注（Phase 10 收尾时用户决策）**：会话级工作目录绑定（"打开/新建项目"）统一在 Task 19 实现——✅ 全部落地（commit `860336b`）：
+- ✅ `Session` 增加 `workspaceRoot` 字段（当前为全局 `config.agent.workspaceRoot`，会话无项目绑定）
+- ✅ `POST /api/sessions` 接受并校验 workspaceRoot（绝对路径/存在/目录/可写四重校验 + 400；7 种非法输入测试）；`SessionStore.create` 支持
+- ✅ `AgentLoop.run` 按会话 workspaceRoot 构建 ToolContext/验证器 cwd/scope-fence 基准（run(options) 会话 > 显式参数 > config 回退链）
+- ✅ WebUI 新建会话 modal 加「工作目录」字段（默认当前 workspaceRoot）；会话详情显示项目路径
+- ⬜ CLI `start` 加 `--cwd` 选项（可选增强，未实现——start.ts 注释注明）
+- ✅ 安全面：越界护栏按会话基准（越界写拦截测试证明 config 根不受影响）；已知限制：scope-fence 词法路径校验的符号链接局限（Task 8 既有，注释注明）、单会话并发 HITL 键控（注释注明）
+- [x] **步骤 2：使用 MockProvider 进行完整集成测试**——`tests/integration/full-loop.test.ts`（真实 Express + WS + AgentLoop，仅 LLM MockProvider）：① 完成闭环；② HITL warn → API 批准 → 继续 → completed（+ 修复后新增：同进程第二次 warn 批准）；③ 反馈失败 3 次 → 升级暂停 → 批准后提高上限恢复（maxRounds = currentRound + maxRounds）→ completed；④ pause/resume/stop 真实控制（AbortSignal 轮级取消）
+- [x] **步骤 3：运行全部测试**——主项目 436/436 + client 123/123 + tsc + 双 build 通过（commit `d411349` 为两阶段评审修复：C1 HITL 回 IDLE / I1 升级恢复 / I2 控制端点真实化 / M1 --help 退出码）
+- [x] **步骤 4：提交**
+- [x] **步骤 5：真实 LLM 全流程测试 + 用户在场监督模式**（2026-08-02~03，用户主导测试 32 commits `be7c51a`~`c31bddc`）：
+  1. 真实 API 协议修复 4 个（schema 转换 / tool_call_id 链路 / feedback 角色 / 配对顺序稳定化）
+  2. Windows 环境适配（run_shell 用 Git Bash；eslint/tsc 前提跳过）；WS 广播截断；前端 flex/line-height/批准卡持久化/SystemCard
+  3. **用户在场监督模式（用户决策，Claude Code 式）**：工作区外读写 + 敏感路径 → 确认卡（WebUI）/ stdin 交互（CLI）；批准后**工具消息原地替换为真实执行结果**（LLM 只见正常工具结果，零中间态噪音）；已批准命令记忆防重复确认
+  4. completed 会话消息注入恢复；maxRounds 默认无上限（参照 Claude Code --max-turns 默认 Unlimited）；config PUT 深度密钥拒绝 + 精确报错
+  5. 验证：主项目 449/449 + client 123/123 + 双 build；CLI 2.1-2.4 / WebUI 3.1-3.6 / 会话级工作目录 / 安全验证全部通过
 
-提交：`feat: full integration — CLI --web mode, agent loop + WebUI in single process`
+提交：`feat: full integration — CLI --web mode, agent loop + WebUI in single process`（`860336b` + 评审修复 `d411349` + 真实测试 32 commits）
 
 ---
 

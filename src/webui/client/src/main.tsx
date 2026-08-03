@@ -28,6 +28,9 @@ body.style.background = designTokens.colors.bg;
 body.style.color = designTokens.colors.text;
 body.style.fontFamily = designTokens.typography.fontFamily.sans;
 body.style.fontSize = designTokens.typography.fontSize.base;
+// Prototype body uses line-height 1.5 — without it, inherited `normal` (~1.2)
+// makes multi-line mono/system text rows overlap visually.
+body.style.lineHeight = String(designTokens.typography.lineHeight.normal);
 
 // CSS variables consumed by global.css (scrollbar / focus / keyframes) — the
 // token file remains the only place raw values are written.

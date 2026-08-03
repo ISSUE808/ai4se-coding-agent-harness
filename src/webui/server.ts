@@ -6,7 +6,7 @@ import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
-import type { Config } from '../types.js';
+import type { Config, Message, Session } from '../types.js';
 import type { HarnessEvents } from '../events.js';
 import type { HarnessEventMap } from '../events.js';
 import type { CredentialStore } from '../credentials/store.js';
@@ -40,6 +40,33 @@ export interface WebUIServerDeps {
   hitl: HITLManager;
   /** Injectable config persistence (defaults to writing the project file). */
   persistConfig?: (config: Config) => Promise<void>;
+  /**
+   * Task 19: invoked after a session is created (POST /api/sessions) so the
+   * integrated harness can run the AgentLoop on the stored session in-process.
+   */
+  onSessionCreated?: (session: Session) => void;
+  /**
+   * Task 19: invoked after an HITL decision (approve/modify/deny) so the
+   * integrated harness can resume a paused session.
+   */
+  onApprovalResolved?: (session: Session) => void;
+  /**
+   * Task 19 (I2): invoked after pause/stop — the endpoint already set the
+   * final status; the harness aborts the live run so the loop really halts.
+   */
+  onSessionControl?: (session: Session, action: 'pause' | 'stop') => void;
+  /**
+   * Task 19 (I2): invoked after resume so the harness really starts the loop
+   * on the stored session (a status change alone would leave a fake running).
+   */
+  onSessionResumed?: (session: Session) => void;
+  /**
+   * Task 19 (user feedback): invoked after a user message is appended to an
+   * existing session — the harness injects it into the loop (resumes a
+   * completed/paused session, or interrupts a running one so the new
+   * instruction lands in the next LLM context).
+   */
+  onMessageAdded?: (session: Session, message: Message) => void;
 }
 
 export interface WebUIServer {
@@ -78,7 +105,14 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
 
   app.use(
     '/api/sessions',
-    createSessionsRouter({ sessionStore: deps.sessionStore, events: deps.events }),
+    createSessionsRouter({
+      sessionStore: deps.sessionStore,
+      events: deps.events,
+      onSessionCreated: deps.onSessionCreated,
+      onSessionControl: deps.onSessionControl,
+      onSessionResumed: deps.onSessionResumed,
+      onMessageAdded: deps.onMessageAdded,
+    }),
   );
   app.use(
     '/api/approvals',
@@ -86,6 +120,7 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
       sessionStore: deps.sessionStore,
       hitl: deps.hitl,
       events: deps.events,
+      onApprovalResolved: deps.onApprovalResolved,
     }),
   );
   app.use(

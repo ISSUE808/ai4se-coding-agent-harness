@@ -31,6 +31,7 @@ import {
   runStartTask,
   createLLMProvider,
 } from '../../../src/cli/commands/start.js';
+import { createProgram } from '../../../src/cli/index.js';
 import { mockBackend, parseCaptured } from './helpers.js';
 
 /**
@@ -54,7 +55,15 @@ function makeConfig(root = workspaceRoot): Config {
 
 /** Real AgentLoop wired with MockProvider (mirrors the integration harness). */
 function buildMockAgentLoop(responses: LLMResponse[]) {
-  return async ({ config, events }: { config: Config; events: HarnessEvents }) => {
+  return async ({
+    config,
+    events,
+    hitl,
+  }: {
+    config: Config;
+    events: HarnessEvents;
+    hitl?: HITLManager;
+  }) => {
     const mockLLM = new MockProvider(responses);
     const tools = new ToolRegistry();
     tools.register(readFileTool);
@@ -62,7 +71,7 @@ function buildMockAgentLoop(responses: LLMResponse[]) {
     const guard = {
       patternGuard: new PatternGuard(),
       scopeFence: new ScopeFence(),
-      hitl: new HITLManager(),
+      hitl: hitl ?? new HITLManager(),
     };
     const validatorMap = new Map<string, Validator>();
     validatorMap.set('eslint', new EslintValidator());
@@ -122,6 +131,48 @@ describe('runStartTask', () => {
     });
     expect(session.status).toBe('failed');
     expect(printed.some((l) => l.includes('status=failed'))).toBe(true);
+  });
+
+  it('CLI interactive approval: approve executes the operation and resumes', async () => {
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { content: 'done' },
+    ];
+    const session = await runStartTask({
+      task: 'push',
+      config: makeConfig(),
+      buildAgentLoop: buildMockAgentLoop(responses),
+      hitl: new HITLManager(),
+      promptApproval: async () => true, // user says yes
+    });
+    expect(session.status).toBe('completed');
+    // The approved shell command was executed by the harness (it fails — not
+    // a git repo — but it RAN): the paused tool message was rewritten with
+    // the real execution result, visible to the LLM.
+    const executed = session.messages.filter(
+      (m) =>
+        m.role === 'tool' &&
+        ((m.metadata?.toolResult?.error as string | undefined) ?? '').includes('fatal'),
+    );
+    expect(executed.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('CLI interactive approval: deny records the decision and continues', async () => {
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { content: 'done' },
+    ];
+    const session = await runStartTask({
+      task: 'push',
+      config: makeConfig(),
+      buildAgentLoop: buildMockAgentLoop(responses),
+      hitl: new HITLManager(),
+      promptApproval: async () => false, // user says no
+    });
+    expect(session.status).toBe('completed');
+    expect(session.messages.some((m) => m.content.includes('Command denied'))).toBe(true);
+    // The command was NOT executed.
+    expect(session.messages.some((m) => m.content.includes('Approved operation executed'))).toBe(false);
   });
 
   it('sets exit code 1 when the session ends without completing (I3 CR)', async () => {
@@ -246,5 +297,75 @@ describe('createStartCommand wiring', () => {
     expect(errLines.join('')).toMatch(/Failed to parse config/i);
     expect(process.exitCode).toBe(1);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('`start --web` starts the server in-process and prints the URL (no task needed)', async () => {
+    const printed: string[] = [];
+    const cmd = createStartCommand({
+      config: {
+        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+        cliArgs: { webui: { port: 0 } }, // ephemeral port — no collision with other servers
+      },
+      storeFactory: async () => new CredentialStore([mockBackend('mem', { secret: 'sk-mock' }).backend]),
+      buildAgentLoop: buildMockAgentLoop([{ content: 'done' }]),
+      print: (line) => printed.push(line),
+      waitForShutdown: async () => {
+        // Test-only: resolve immediately so the command exits.
+      },
+    });
+    const result = await parseCaptured(cmd, ['start', '--web']);
+    expect(printed.some((l) => l.includes('[web] WebUI'))).toBe(true);
+    expect(result.err).toBe('');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('`start` without a task and without --web exits 1 with a task-required error', async () => {
+    // Parse through createProgram (as the real CLI does) so `start` is
+    // dispatched as the subcommand name instead of a positional task.
+    const errLines: string[] = [];
+    const program = createProgram(
+      {
+        start: {
+          config: {
+            userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+            projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+          },
+          buildAgentLoop: buildMockAgentLoop([]),
+          errPrint: (line) => errLines.push(line),
+        },
+      },
+      { exitOverride: true },
+    );
+    await parseCaptured(program, ['start']);
+    expect(errLines.join('')).toMatch(/task/i);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('`start --help` displays usage and exits cleanly (M1: no exitOverride in production)', async () => {
+    // Production (no deps.exitOverride): commander's help path is untouched —
+    // `start --help` must NOT throw a helpDisplayed error for index.ts to catch.
+    const cmd = createStartCommand({
+      config: {
+        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+      },
+    }) as unknown as { _exitCallback?: unknown };
+    expect(cmd._exitCallback).toBeNull();
+
+    // Test-injected exitOverride: help still displays, and the help exit
+    // surfaces as a distinguishable code-0 throw instead of process.exit.
+    const injected = createStartCommand({
+      config: {
+        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+      },
+      exitOverride: true,
+    });
+    const result = await parseCaptured(injected, ['start', '--help']);
+    expect(result.out).toContain('Usage');
+    const thrown = result.thrown as { code?: string; exitCode?: number };
+    expect(thrown?.code).toBe('commander.helpDisplayed');
+    expect(thrown?.exitCode).toBe(0);
   });
 });

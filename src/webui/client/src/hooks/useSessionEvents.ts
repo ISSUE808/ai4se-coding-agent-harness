@@ -61,13 +61,36 @@ export function useSessionEvents(
       return;
     }
     initialMergedRef.current = true;
-    setState((prev) => ({
-      messages: mergeMessages(prev.messages, initial.messages),
-      status: prev.status ?? initial.status,
-      currentRound: prev.currentRound ?? initial.currentRound ?? null,
-      maxRounds: prev.maxRounds ?? initial.maxRounds ?? null,
-      pendingApproval: prev.pendingApproval,
-    }));
+    setState((prev) => {
+      // Rebuild a pending approval from the REST snapshot: the harness records
+      // approvalRequired + command/rule on a system message (approval state is
+      // not persisted separately), so a refresh restores the card. Only for
+      // sessions still paused — a completed session's stale approval message
+      // must not resurrect an unusable card ("Cannot approve in state IDLE").
+      let pendingApproval = prev.pendingApproval;
+      if (pendingApproval === null && (initial.status ?? prev.status) === 'paused') {
+        const lastApproval = [...initial.messages]
+          .reverse()
+          .find((m) => m.metadata?.approvalRequired === true);
+        if (lastApproval?.metadata?.guardrailCommand !== undefined) {
+          pendingApproval = {
+            rule:
+              typeof lastApproval.metadata.guardrailRule === 'string'
+                ? lastApproval.metadata.guardrailRule
+                : 'unknown',
+            command: lastApproval.metadata.guardrailCommand,
+            level: 'warn',
+          };
+        }
+      }
+      return {
+        messages: mergeMessages(prev.messages, initial.messages),
+        status: prev.status ?? initial.status,
+        currentRound: prev.currentRound ?? initial.currentRound ?? null,
+        maxRounds: prev.maxRounds ?? initial.maxRounds ?? null,
+        pendingApproval,
+      };
+    });
   }, [initial]);
 
   useEffect(() => {

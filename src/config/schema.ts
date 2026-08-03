@@ -10,7 +10,10 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
     apiKeyService: 'codeharness/deepseek',
   },
   agent: {
-    maxRounds: 3,
+    // 0 = unlimited, mirroring Claude Code `--max-turns` default (no cap
+    // unless a number is configured). Set a number to cap runaway loops;
+    // the HITL upgrade path (maxRounds exceeded) only triggers with a cap.
+    maxRounds: 0,
     contextThreshold: 0.8,
     workspaceRoot: process.cwd(),
   },

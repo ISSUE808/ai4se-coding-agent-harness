@@ -6,6 +6,12 @@ export interface Message {
     toolName?: string;
     toolInput?: Record<string, unknown>;
     toolResult?: ToolResult;
+    /** OpenAI tool_call id — present on `tool` role result messages. */
+    toolCallId?: string;
+    /** Guardrail rule + command on a blocked system message — lets the WebUI
+     *  rebuild the pending approval card from the REST snapshot. */
+    guardrailRule?: string;
+    guardrailCommand?: string;
     feedbackResult?: FeedbackResult;
     approvalRequired?: boolean;
     important?: boolean;
@@ -20,6 +26,8 @@ export interface Session {
   status: 'running' | 'paused' | 'completed' | 'failed';
   maxRounds: number;
   currentRound: number;
+  /** Session workspace root — tool cwd / scope-fence base / validator cwd (Task 19). */
+  workspaceRoot: string;
   messages: Message[];
   tokenCount: number;
   createdAt: string;
@@ -29,6 +37,8 @@ export interface Session {
 export interface Action {
   tool: string;
   params: Record<string, unknown>;
+  /** OpenAI tool_call id — links the tool result message back to the call. */
+  id?: string;
 }
 
 export interface ToolResult {
@@ -64,7 +74,7 @@ export interface LLMProvider {
 
 export interface LLMResponse {
   content: string | null;
-  toolCalls?: { name: string; arguments: Record<string, unknown> }[];
+  toolCalls?: { id?: string; name: string; arguments: Record<string, unknown> }[];
 }
 
 export interface Validator {

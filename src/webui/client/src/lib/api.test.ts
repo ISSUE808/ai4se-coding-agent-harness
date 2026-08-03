@@ -58,6 +58,18 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toEqual({ task: 't', maxRounds: 5 });
   });
 
+  it('createSession sends the workspaceRoot when provided (Task 19)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's_2', task: 't', maxRounds: 0 }));
+    await createSession('t', 0, '/repo/proj-a');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/sessions');
+    expect(JSON.parse(init.body)).toEqual({ task: 't', maxRounds: 0, workspaceRoot: '/repo/proj-a' });
+    // Omitting workspaceRoot must not send the key at all.
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's_2', task: 't', maxRounds: 0 }));
+    await createSession('t', 0);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ task: 't', maxRounds: 0 });
+  });
+
   it('getKeyStatus GETs /api/keys/:provider', async () => {
     const body = { provider: 'deepseek', status: '****-9f2c' };
     fetchMock.mockResolvedValue(jsonResponse(body));

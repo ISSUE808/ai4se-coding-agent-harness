@@ -11,6 +11,8 @@ export interface SessionSummary {
   status: 'running' | 'paused' | 'completed' | 'failed';
   maxRounds: number;
   currentRound: number;
+  /** Session workspace root (Task 19) — bound per session, defaults to the config root. */
+  workspaceRoot: string;
   tokenCount: number;
   createdAt: string;
   updatedAt: string;
@@ -81,8 +83,16 @@ export async function fetchSessions(): Promise<SessionSummary[]> {
   return request<SessionSummary[]>('/api/sessions');
 }
 
-export async function createSession(task: string, maxRounds: number): Promise<SessionSummary> {
-  return request<SessionSummary>('/api/sessions', jsonInit('POST', { task, maxRounds }));
+/** Create a session; `workspaceRoot` defaults server-side to the config root. */
+export async function createSession(
+  task: string,
+  maxRounds: number,
+  workspaceRoot?: string,
+): Promise<SessionSummary> {
+  return request<SessionSummary>(
+    '/api/sessions',
+    jsonInit('POST', { task, maxRounds, workspaceRoot }),
+  );
 }
 
 /** Session with its full message history (GET /api/sessions/:id). */

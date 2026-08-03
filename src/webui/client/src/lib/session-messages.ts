@@ -31,6 +31,10 @@ export interface SessionMessageMetadata {
   toolResult?: ToolResult;
   feedbackResult?: FeedbackResult;
   approvalRequired?: boolean;
+  /** Guardrail rule + command recorded on a blocked system message — lets a
+   *  WebUI refresh rebuild the pending approval card from the REST snapshot. */
+  guardrailRule?: string;
+  guardrailCommand?: string;
   important?: boolean;
   compressed?: boolean;
 }

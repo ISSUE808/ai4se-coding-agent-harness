@@ -405,3 +405,49 @@
   - **用户问"字段有没有用"是真实 bug 探测器**：POST /api/sessions 静默丢弃 maxRounds（store 固定 defaultMaxRounds=3）——WebUI 里"最大轮次"一直无效。修复为透传 + `0 = 无上限`语义（RoundManager/shouldTerminate 支持 0）。**教训：UI 字段与后端消费链必须端到端核对，不能只看前端**（端到端 curl 验证才暴露）
   - **原型复刻的诚实性取舍**：原型是演示数据——"显示密钥明文"（安全约束拒绝）、Token 输入/输出明细（后端无数据）、模型/工作目录字段（创建 API 不支持）都不造假，用占位/说明替代并在汇报中明示
   - **旧 dev 进程不热重载**：`npx tsx`（非 watch）启动的后端不感知代码改动——改后端后必须重启进程，前端 HMR 推送后旧实例会白屏（HMR 状态损坏），强刷或换新端口实例
+
+---
+
+## 2026-08-02 17:22 Task 19：完整集成——CLI `--web` + Agent 循环 + 会话级工作目录绑定
+
+- **触发技能**：`test-driven-development`（subagent）、`requesting-code-review`（两阶段评审）、`subagent-driven-development`
+- **Subagent**：`a1972c7f`（实现 `860336b` + 评审修复 `d411349`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：`start --web` 同进程集成（复用 createWebUIServer 注入模式）；会话级 workspaceRoot 全链路（Session 字段 → API 校验 → 主循环 ToolContext/护栏/验证器基准 → WebUI modal 字段 + 详情显示）；full-loop.test.ts 三场景 MockProvider 确定性；PLAN「需求备注」5 子项逐项验证
+- **产出**：
+  - Commit: `860336b`（20 files +1061/−86）+ `d411349`（7 files +304/−9，评审修复）
+  - 涉及文件: start.ts、main-loop.ts、round-manager.ts、session-store.ts、api/{sessions,approvals}.ts、server.ts、types.ts、scope-fence.ts（注释）、client {api,Dashboard,SessionDetail}.tsx + full-loop.test.ts 等
+  - 测试: 主项目 419→432→436（修复后 436/436）+ client 120→123；tsc + 双 build 通过
+- **评审**：两轮——首轮 1 CRITICAL（C1 HITL 无回 IDLE）+ 2 IMPORTANT（I1 升级暂停无法恢复 / I2 控制端点与 loop 不一致）+ 1 Minor（M1 --help 退出码）→ subagent 修复 → 复验通过（436+123 全绿 + 代码抽查）
+- **人工干预**：无（评审结论与修复决策由主 agent 给出，subagent 执行）
+- **教训**：
+  - **"单次消费"测试会掩盖状态机缺陷**：full-loop 场景 2 只批准一次，HITLManager 批准后永不回 IDLE 的缺陷被测试掩盖——第一次批准后所有后续 warn 命令静默拦截。评审价值正在于此：**评审要找测试路径之外的确定性失败**
+  - **升级/恢复语义要闭环**：upgrade 暂停后批准恢复，RoundManager(currentRound) 立即再升级形成死循环——"暂停"必须配"如何恢复"（决策：人工批准 = 授权继续，maxRounds += currentRound 写回持久化）
+  - **REST 控制端点与执行器必须共享同一生命周期**：status-only 的 resume/pause 在真实 loop 面前是假状态——resume 必须真实启动 loop、pause/stop 必须真实取消（AbortSignal 轮级检查），否则 WebUI 按钮语义失真
+  - **TDD 在修复中的价值**：C1/I1/I2/M1 各配一个先 RED 的失败测试（第二次 warn 批准、升级批准恢复、慢 provider 控制时序、exitOverride 白盒）——修复有回归锚点
+  - **评审注入的决策项**：I3（并发 HITL 键控）/M2（--cwd）/M3（符号链接词法校验）均按范围评估后不修并文档注明——不是所有评审项都要修，范围决策要显式
+
+---
+
+## 2026-08-03 12:57 Task 19 真实测试验证 + 用户在场监督模式（32 commits, master..HEAD）
+
+- **触发技能**：无（用户主导全流程真实测试：CLI 场景 2.1-2.4、WebUI 3.1-3.6、会话级工作目录、安全验证；主 agent 直接修复）
+- **Subagent**：主 agent（全部修复主 agent 直接实现，commit 标注 `— by 主 agent`）
+- **Prompt 要点**：无派发；测试流程由主 agent 设计（第 0-5 步），用户逐场景执行，发现即修
+- **产出**：
+  - Commit: 32 个（`be7c51a` ~ `c31bddc`），覆盖 20+ 修复
+  - 测试: 主项目 449/449 + client 123/123 + 双 build 通过
+- **修复分类**（真实测试暴露，每一类都是 Mock 测试覆盖不到的）：
+  1. **真实 API 协议（4 个 400 错误）**：工具 schema 属性表 → JSON Schema 转换；tool_call_id 链路（LLMResponse/Action/Message 贯穿）；feedback 角色 → system；tool 响应连续性稳定化（feedback-as-system 穿插导致 400）
+  2. **Windows 环境**：run_shell 改用 Git Bash（cmd 不认 `/c/...` 路径与 POSIX 命令）；eslint/tsc 环境前提跳过（npx 下载废弃包）；`2>` stderr 重定向误判修复
+  3. **WS/前端**：广播 substring(0,200) 截断（长文本实时截断根因）；flex 子项收缩卡片塌陷成线；body line-height 缺失行重叠；批准卡刷新恢复（approvalRequired 消息重建 + 仅 paused）；长 system 消息 SystemCard（工具卡式可折叠）
+  4. **用户在场监督模式（Claude Code 式，用户决策）**：工作区外读写 + 敏感路径 → 确认卡；批准后**工具消息原地替换为真实结果**（LLM 只看到正常工具结果，零中间态噪音——彻底解决"AI 后知后觉"）；CLI stdin 交互确认；已批准命令记忆（防重复确认）
+  5. **功能补齐**：completed 会话发消息恢复（onMessageAdded 注入）；maxRounds 默认无上限（参照 Claude Code --max-turns 默认 Unlimited，用户决策）
+  6. **安全**：config PUT 深度密钥字段拒绝（任意层 apiKey/token/secret，报精确路径）；编辑器剥离 webui.token 残留；用户可见处移除 SPEC § 引用
+- **人工干预**：无（全部主 agent 直接实现）
+- **教训**：
+  - **Mock 全绿 ≠ 真实可用**：4 个 DeepSeek 协议 400（schema/tool_call_id/feedback 角色/配对顺序）全部只在真实 API 暴露——MockProvider 不校验协议契约。**真实 LLM 测试是 Mock 的必要补充，且不可替代**
+  - **"AI 后知后觉"的本质**：批准后注入中间 system 消息（approved/executed）依赖 LLM 理解——**LLM 行为随机**（同一消息格式写任务成功、读任务失败）。**正确架构是 Claude Code 式**：批准后工具正常执行、结果正常返回——LLM 看到的只有普通工具结果，零中间态
+  - **消息措辞影响 LLM 认知**：`Guardrail blocked` 被 LLM 读作"永久拦截"——改为 `Operation paused for human approval` 后认知显著改善；提示词必须与消息格式同步（格式改了提示词没改导致失效）
+  - **测试 fixture 与真实格式一致**：Mock fixture 没给 tool_call id 导致批准替换链路测试假失败——**fixture 必须反映真实协议结构**
+  - **Windows shell 是系统性差异**：LLM 生成 POSIX 命令、cmd.exe 不兼容——run_shell 必须跑在 Git Bash（`'cat' is not recognized` 系列报错的根因）
+  - **用户测试流程的价值**：20+ 修复全部由真实场景驱动（Console 脚本对比 DOM/API 内容定位广播截断、curl 手动批准区分前后端问题）——**系统化测试流程 + 数据定位是高效调试的组合**

@@ -15,7 +15,19 @@ describe('TscValidator', () => {
 
   beforeEach(() => {
     execSync = makeExec();
-    validator = new TscValidator(execSync);
+    validator = new TscValidator(execSync, () => true);
+  });
+
+  it('skips (passes) when no tsconfig.json exists in the workspace — env prerequisite', async () => {
+    const result: ToolResult = { success: true, duration_ms: 10, filesChanged: ['src/index.ts'] };
+    const noConfigValidator = new TscValidator(execSync, () => false);
+
+    const feedback = await noConfigValidator.validate(action, result, ctx);
+
+    expect(feedback.passed).toBe(true);
+    expect(feedback.validator).toBe('tsc');
+    expect(feedback.evidence).toContain('skipped');
+    expect(execSync).not.toHaveBeenCalled();
   });
 
   it('has name "tsc"', () => {

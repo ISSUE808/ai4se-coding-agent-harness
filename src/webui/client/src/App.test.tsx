@@ -60,6 +60,7 @@ describe('App shell / TopBar', () => {
         status: 'running',
         maxRounds: 40,
         currentRound: 1,
+        workspaceRoot: '/repo/app',
         tokenCount: 0,
         createdAt: '2026-08-02T00:00:00.000Z',
         updatedAt: '2026-08-02T00:00:00.000Z',

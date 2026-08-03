@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import type { Session } from '../../types.js';
 import type { HarnessEvents } from '../../events.js';
 import type { HITLManager } from '../../guardrail/hitl-manager.js';
 import type { SessionStore } from '../session-store.js';
@@ -16,6 +17,8 @@ export interface ApprovalsRouterDeps {
   sessionStore: SessionStore;
   hitl: HITLManager;
   events: HarnessEvents;
+  /** Task 19: invoked after a decision so the harness can resume the session. */
+  onApprovalResolved?: (session: Session) => void;
 }
 
 const DECISIONS = ['approve', 'modify', 'deny'] as const;
@@ -70,6 +73,9 @@ export function createApprovalsRouter(deps: ApprovalsRouterDeps): Router {
         timestamp: message.timestamp,
       });
     }
+    // Task 19: hand the session back to the integrated harness — a paused
+    // (HITL) session is re-run with the decision recorded in its history.
+    deps.onApprovalResolved?.(session);
     res.json({ sessionId: session.id, decision, state: hitl.getState() });
   });
 

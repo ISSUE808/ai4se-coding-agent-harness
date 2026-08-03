@@ -71,9 +71,17 @@ export default function MessageList({ messages, approval }: MessageListProps) {
       }}
     >
       {messages.map((message) => (
-        <MessageRow key={message.id} message={message} />
+        // flexShrink: 0 — a long feed must scroll, never compress its cards
+        // (overflow:hidden cards would collapse into a 1px line otherwise).
+        <div key={message.id} style={{ flexShrink: 0 }}>
+          <MessageRow message={message} />
+        </div>
       ))}
-      {approval !== null && approval !== undefined && <ApprovalCard {...approval} />}
+      {approval !== null && approval !== undefined && (
+        <div style={{ flexShrink: 0 }}>
+          <ApprovalCard {...approval} />
+        </div>
+      )}
       {paused && (
         <button
           type="button"
@@ -117,8 +125,15 @@ function MessageRow({ message }: { message: SessionMessage }) {
       return <ToolCard message={message} />;
     case 'feedback':
       return <FeedbackCard message={message} />;
-    default:
-      // System note — center pill (prototype .sys-note).
+    default: {
+      // Short system notes render as a centered pill (prototype .sys-note);
+      // long ones (e.g. "[HITL] Approved command executed" + output) get a
+      // tool-card-like rounded box with a collapsible detail — consistent
+      // with tool cards, and long content never spills or dominates.
+      const isLong = message.content.includes('\n') || message.content.length > 80;
+      if (isLong) {
+        return <SystemCard message={message} />;
+      }
       return (
         <div
           style={{
@@ -143,7 +158,116 @@ function MessageRow({ message }: { message: SessionMessage }) {
           </span>
         </div>
       );
+    }
   }
+}
+
+/**
+ * Long system message — tool-card-like rounded box with a collapsible body
+ * (mirrors ToolCard): header shows the first line (ellipsized), expanding
+ * reveals the full content in a code well.
+ */
+function SystemCard({ message }: { message: SessionMessage }) {
+  const [open, setOpen] = useState(false);
+  const firstLine = message.content.split('\n')[0] ?? message.content;
+
+  return (
+    <article
+      style={{
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: designTokens.colors.border,
+        borderRadius: designTokens.radius.md,
+        background: designTokens.colors.surface,
+        overflow: 'hidden',
+        marginTop: 6,
+      }}
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={open ? '收起系统消息' : '展开系统消息'}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: designTokens.spacing[2],
+          width: '100%',
+          padding: `${designTokens.spacing[2]} ${designTokens.spacing[3]}`,
+          border: 'none',
+          background: 'transparent',
+          cursor: 'pointer',
+          color: designTokens.colors.text,
+          fontFamily: designTokens.typography.fontFamily.sans,
+          fontSize: designTokens.typography.fontSize.base,
+        }}
+      >
+        <span
+          style={{
+            display: 'grid',
+            placeItems: 'center',
+            width: 20,
+            height: 20,
+            borderRadius: designTokens.radius.sm,
+            background: designTokens.colors.well,
+            color: designTokens.colors.roleSystem,
+            flexShrink: 0,
+            fontFamily: designTokens.typography.fontFamily.mono,
+            fontSize: designTokens.typography.fontSize.xs,
+          }}
+        >
+          i
+        </span>
+        <span
+          style={{
+            fontFamily: designTokens.typography.fontFamily.mono,
+            fontSize: designTokens.typography.fontSize.xs,
+            color: designTokens.colors.textMuted,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
+          {firstLine}
+        </span>
+        <span
+          style={{
+            color: designTokens.colors.textMuted,
+            fontSize: designTokens.typography.fontSize.xs,
+            transition: 'transform 0.15s',
+            transform: open ? 'rotate(90deg)' : 'none',
+            flexShrink: 0,
+          }}
+        >
+          <ChevronRight size={13} />
+        </span>
+      </button>
+
+      {open && (
+        <pre
+          style={{
+            margin: 0,
+            padding: '10px 12px',
+            borderTopWidth: 1,
+            borderTopStyle: 'solid',
+            borderTopColor: designTokens.colors.border,
+            background: designTokens.colors.well,
+            color: designTokens.colors.codeText,
+            fontFamily: designTokens.typography.fontFamily.mono,
+            fontSize: designTokens.typography.codeSize.md,
+            lineHeight: designTokens.typography.lineHeight.normal,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            overflowX: 'auto',
+          }}
+        >
+          {message.content}
+        </pre>
+      )}
+    </article>
+  );
 }
 
 function TextMessage({

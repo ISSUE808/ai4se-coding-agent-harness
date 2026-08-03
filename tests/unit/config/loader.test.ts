@@ -35,7 +35,7 @@ describe('loadConfig - 三层覆盖配置系统', () => {
     expect(cfg.llm.model).toBe(DEFAULT_CONFIG.llm.model);
     expect(cfg.llm.maxTokens).toBe(DEFAULT_CONFIG.llm.maxTokens);
     expect(cfg.llm.apiKeySource).toBe(DEFAULT_CONFIG.llm.apiKeySource);
-    expect(cfg.agent.maxRounds).toBe(3);
+    expect(cfg.agent.maxRounds).toBe(DEFAULT_CONFIG.agent.maxRounds);
     expect(cfg.agent.contextThreshold).toBe(0.8);
     expect(cfg.agent.workspaceRoot).toBe(DEFAULT_CONFIG.agent.workspaceRoot);
     expect(cfg.feedback.validatorMode).toBe('fail_fast');
@@ -201,7 +201,7 @@ describe('loadConfig - 三层覆盖配置系统', () => {
 
     expect(cfg.shell.timeoutSeconds).toBe(120);
     // 其余保持默认
-    expect(cfg.agent.maxRounds).toBe(3);
+    expect(cfg.agent.maxRounds).toBe(DEFAULT_CONFIG.agent.maxRounds);
     expect(cfg.webui.port).toBe(3000);
   });
 

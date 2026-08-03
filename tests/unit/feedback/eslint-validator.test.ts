@@ -15,7 +15,7 @@ describe('EslintValidator', () => {
 
   beforeEach(() => {
     execSync = makeExec();
-    validator = new EslintValidator(execSync);
+    validator = new EslintValidator(execSync, () => true);
   });
 
   it('has name "eslint"', () => {
@@ -76,6 +76,18 @@ describe('EslintValidator', () => {
       expect.stringContaining('a.ts b.ts'),
       expect.objectContaining({ cwd: '/tmp/test' }),
     );
+  });
+
+  it('skips (passes) when no eslint config exists in the workspace — env prerequisite', async () => {
+    const result: ToolResult = { success: true, duration_ms: 10, filesChanged: ['src/index.ts'] };
+    const noConfigValidator = new EslintValidator(execSync, () => false);
+
+    const feedback = await noConfigValidator.validate(action, result, ctx);
+
+    expect(feedback.passed).toBe(true);
+    expect(feedback.validator).toBe('eslint');
+    expect(feedback.evidence).toContain('skipped');
+    expect(execSync).not.toHaveBeenCalled();
   });
 
   it('handles warnings-only output as passed', async () => {

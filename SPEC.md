@@ -325,7 +325,7 @@ interface Config {
     apiKeyService: string;      // 'codeharness/deepseek'
   };
   agent: {
-    maxRounds: number;          // default 3
+    maxRounds: number;          // default 0 (unlimited, mirroring Claude Code --max-turns); set a number to cap
     contextThreshold: number;   // 0.8 (80% window → compress)
     workspaceRoot: string;
   };
