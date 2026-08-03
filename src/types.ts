@@ -28,6 +28,14 @@ export interface Session {
   currentRound: number;
   /** Session workspace root — tool cwd / scope-fence base / validator cwd (Task 19). */
   workspaceRoot: string;
+  /**
+   * Session-level model override (Task 26). When set, the provider built for
+   * this session uses it instead of config.llm.model; `undefined` = follow
+   * the config default. Switchable mid-conversation via PATCH
+   * /api/sessions/:id/model (running sessions abort + restart on the new
+   * model).
+   */
+  model?: string;
   messages: Message[];
   tokenCount: number;
   createdAt: string;

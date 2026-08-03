@@ -35,6 +35,13 @@ export interface SessionsRouterDeps {
    * (resume completed/paused sessions; interrupt running ones).
    */
   onMessageAdded?: (session: Session, message: Message) => void;
+  /**
+   * Task 26: invoked after PATCH /api/sessions/:id/model actually changed the
+   * session's model — the harness aborts a live run and restarts it on the
+   * new model (same abort+restart path as message injection). Not invoked
+   * when the patched value equals the current one.
+   */
+  onModelChanged?: (session: Session) => void;
 }
 
 const MESSAGE_ROLES = ['user', 'assistant', 'tool', 'system', 'feedback'] as const;
@@ -80,6 +87,25 @@ const TRANSITIONS: Record<string, { from: Session['status'][]; to: Session['stat
   stop: { from: ['running', 'paused'], to: 'completed' },
 };
 
+/**
+ * Task 26 model validation. POST requires a non-empty string; PATCH also
+ * accepts `''` (or whitespace) to CLEAR the override back to the config
+ * default. Returns the trimmed model or `null` (clear) when valid.
+ */
+function normalizeModel(value: unknown, allowClear: boolean): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (typeof value !== 'string') {
+    return { ok: false, error: 'model must be a string' };
+  }
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    if (allowClear) {
+      return { ok: true, value: null };
+    }
+    return { ok: false, error: 'model must be a non-empty string' };
+  }
+  return { ok: true, value: trimmed };
+}
+
 export function createSessionsRouter(deps: SessionsRouterDeps): Router {
   const { sessionStore, events } = deps;
   const router = Router();
@@ -92,7 +118,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
     }
     // Optional round cap: 0 = unlimited, undefined = store default. Anything
     // else must be a non-negative integer (SPEC §3.1 hard termination rule).
-    const { maxRounds, workspaceRoot } = req.body ?? {};
+    const { maxRounds, workspaceRoot, model } = req.body ?? {};
     let rounds: number | undefined;
     if (maxRounds !== undefined) {
       if (typeof maxRounds !== 'number' || !Number.isInteger(maxRounds) || maxRounds < 0) {
@@ -106,7 +132,17 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
       res.status(400).json({ error: root.error });
       return;
     }
-    const session = sessionStore.create(task, rounds, root.value || undefined);
+    // Optional session-level model override (Task 26): non-empty string.
+    let sessionModel: string | undefined;
+    if (model !== undefined) {
+      const parsed = normalizeModel(model, false);
+      if (!parsed.ok) {
+        res.status(400).json({ error: parsed.error });
+        return;
+      }
+      sessionModel = parsed.value ?? undefined;
+    }
+    const session = sessionStore.create(task, rounds, root.value || undefined, sessionModel);
     const message = sessionStore.appendMessage(session.id, { role: 'user', content: task });
     if (message) {
       events.emit('message:added', {
@@ -173,6 +209,45 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
     // interrupted so the message lands in the next LLM context.
     deps.onMessageAdded?.(session, message);
     res.json(message);
+  });
+
+  /**
+   * Task 26: switch the session-level model override mid-conversation.
+   * `''` clears the override (back to the config default). A real change is
+   * broadcast as `session:updated` over WS and handed to the harness so a
+   * RUNNING session aborts and restarts on the new model; paused/completed
+   * sessions simply record it — the next run uses it.
+   */
+  router.patch('/:id/model', (req, res) => {
+    const session = sessionStore.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: `Session not found: ${req.params.id}` });
+      return;
+    }
+    const parsed = normalizeModel(req.body?.model, true);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    const next = parsed.value;
+    const previous = session.model ?? null;
+    if (next === previous) {
+      // No-op — keep the session untouched and do not signal the harness.
+      res.json(session);
+      return;
+    }
+    const updated = sessionStore.updateModel(session.id, next);
+    if (!updated) {
+      res.status(404).json({ error: `Session not found: ${req.params.id}` });
+      return;
+    }
+    events.emit('session:updated', {
+      sessionId: updated.id,
+      model: updated.model ?? null,
+      updatedAt: updated.updatedAt,
+    });
+    deps.onModelChanged?.(updated);
+    res.json(updated);
   });
 
   for (const [action, transition] of Object.entries(TRANSITIONS)) {

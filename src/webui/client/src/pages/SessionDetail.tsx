@@ -37,9 +37,11 @@ import {
   fetchConfig,
   fetchFsTree,
   fetchSession,
+  fetchSessions,
   postMessage,
   resolveApproval,
   sessionControl,
+  updateSessionModel,
   type ApprovalDecision,
   type ConfigValue,
   type FsTreeNode,
@@ -77,6 +79,7 @@ export default function SessionDetail() {
           status: session.status,
           currentRound: session.currentRound,
           maxRounds: session.maxRounds,
+          model: session.model,
         }
       : undefined,
   );
@@ -109,6 +112,76 @@ export default function SessionDetail() {
         // Config unavailable — context sections just omit model/chips.
       });
   }, []);
+
+  // Task 26: "recently used models" = distinct session-level models across
+  // every known session (fetched once; the dropdown dedupes against the
+  // config default).
+  const [recentModels, setRecentModels] = useState<string[]>([]);
+  useEffect(() => {
+    fetchSessions()
+      .then((sessions) => {
+        const seen = new Set<string>();
+        for (const s of sessions) {
+          if (typeof s.model === 'string' && s.model !== '' && !seen.has(s.model)) {
+            seen.add(s.model);
+          }
+        }
+        setRecentModels([...seen]);
+      })
+      .catch(() => {
+        // Sessions unavailable — the selector falls back to default + custom.
+      });
+  }, []);
+
+  // ─── Model selector (Task 26) ─────────────────────────────────────────────
+
+  const [customMode, setCustomMode] = useState(false);
+  const [customModel, setCustomModel] = useState('');
+  const [modelBusy, setModelBusy] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+
+  async function handleModelSelect(value: string): Promise<void> {
+    if (value === CUSTOM_MODEL_VALUE) {
+      setCustomMode(true);
+      return;
+    }
+    // Picking the default option clears the override ('' = config default).
+    const next = value === configModel ? '' : value;
+    if (sessionId === '' || modelBusy) {
+      return;
+    }
+    setModelBusy(true);
+    setModelError(null);
+    try {
+      const updated = await updateSessionModel(sessionId, next);
+      events.updateModel(updated.model ?? null);
+      setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : '切换模型失败');
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  async function applyCustomModel(): Promise<void> {
+    const trimmed = customModel.trim();
+    if (trimmed === '' || sessionId === '' || modelBusy) {
+      return;
+    }
+    setModelBusy(true);
+    setModelError(null);
+    try {
+      const updated = await updateSessionModel(sessionId, trimmed);
+      events.updateModel(updated.model ?? null);
+      setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
+      setCustomMode(false);
+      setCustomModel('');
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : '切换模型失败');
+    } finally {
+      setModelBusy(false);
+    }
+  }
 
   // ─── Header controls ───────────────────────────────────────────────────────
 
@@ -324,7 +397,19 @@ export default function SessionDetail() {
   const roundPercent =
     maxRounds <= 0 ? 0 : Math.min(100, Math.max(0, (currentRound / maxRounds) * 100));
   const roundsLeft = maxRounds - currentRound;
-  const model = typeof config?.model === 'string' ? config.model : null;
+  // Task 26: effective model = session override (WS/PATCH state) → REST
+  // snapshot → config default. The selector options are the config default,
+  // distinct models from other sessions, and a custom entry.
+  const configModel = typeof config?.model === 'string' ? config.model : null;
+  const effectiveModel = events.model ?? session?.model ?? configModel;
+  const sessionModel = typeof session?.model === 'string' ? session.model : null;
+  const otherModels = Array.from(
+    new Set(
+      recentModels
+        .concat(effectiveModel !== null && effectiveModel !== configModel ? [effectiveModel] : [])
+        .filter((m): m is string => typeof m === 'string' && m !== '' && m !== configModel),
+    ),
+  );
   // guardrails is unknown (Record<string, unknown>); narrow before member access.
   const guardrailsRaw = config?.guardrails;
   const guardrails =
@@ -734,8 +819,77 @@ export default function SessionDetail() {
                 v={events.pendingApproval !== null ? 'HITL · 已触发' : '未触发'}
                 vColor={events.pendingApproval !== null ? designTokens.colors.warning : undefined}
               />
-              {model !== null && <ContextKV k="模型" v={model} mono />}
             </ContextSection>
+
+            {/* model (Task 26: session-level override selector) */}
+            {configModel !== null && (
+              <ContextSection label="模型">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: designTokens.spacing[2] }}>
+                    <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                      {sessionModel !== null ? '会话模型' : '默认模型'}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: designTokens.typography.fontFamily.mono,
+                        fontSize: designTokens.typography.codeSize.md,
+                        color: sessionModel !== null ? designTokens.colors.primary : designTokens.colors.text,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {effectiveModel}
+                    </span>
+                  </div>
+                  <select
+                    aria-label="选择模型"
+                    value={effectiveModel ?? ''}
+                    onChange={(e) => void handleModelSelect(e.target.value)}
+                    disabled={modelBusy}
+                    style={modelSelectStyle}
+                  >
+                    <option value={configModel}>默认模型 · {configModel}</option>
+                    {otherModels.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_MODEL_VALUE}>自定义模型…</option>
+                  </select>
+                  {customMode && (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        aria-label="自定义模型输入"
+                        value={customModel}
+                        onChange={(e) => setCustomModel(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void applyCustomModel();
+                          }
+                        }}
+                        placeholder="模型名称，如 deepseek-v3"
+                        style={modelInputStyle}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void applyCustomModel()}
+                        disabled={modelBusy || customModel.trim() === ''}
+                        style={modelApplyStyle}
+                      >
+                        {modelBusy ? <Loader2 size={12} /> : '应用'}
+                      </button>
+                    </div>
+                  )}
+                  {modelError !== null && (
+                    <span style={{ color: designTokens.colors.danger, fontSize: designTokens.typography.fontSize.sm }}>
+                      {modelError}
+                    </span>
+                  )}
+                </div>
+              </ContextSection>
+            )}
 
             {/* rounds progress */}
             <ContextSection label="轮次进度">
@@ -1400,4 +1554,54 @@ const iconBtnStyle: CSSProperties = {
   background: 'transparent',
   color: designTokens.colors.textMuted,
   cursor: 'pointer',
+};
+
+/** Sentinel option value for the model selector's custom entry (Task 26). */
+const CUSTOM_MODEL_VALUE = '__custom__';
+
+/** Model selector dropdown (Task 26) — token-driven, matches the composer. */
+const modelSelectStyle: CSSProperties = {
+  width: '100%',
+  padding: '6px 8px',
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.borderStrong,
+  background: designTokens.colors.well,
+  color: designTokens.colors.text,
+  fontFamily: designTokens.typography.fontFamily.sans,
+  fontSize: designTokens.typography.fontSize.sm,
+  cursor: 'pointer',
+};
+
+const modelInputStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  padding: '6px 8px',
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.borderStrong,
+  background: designTokens.colors.well,
+  color: designTokens.colors.text,
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.codeSize.md,
+  outline: 'none',
+};
+
+const modelApplyStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: designTokens.spacing[1],
+  padding: '5px 10px',
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.primary,
+  background: designTokens.colors.primary,
+  color: designTokens.colors.onPrimary,
+  fontSize: designTokens.typography.fontSize.sm,
+  fontWeight: designTokens.typography.fontWeight.medium,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
 };

@@ -68,6 +68,11 @@ export interface WebUIServerDeps {
    * instruction lands in the next LLM context).
    */
   onMessageAdded?: (session: Session, message: Message) => void;
+  /**
+   * Task 26: invoked after PATCH /api/sessions/:id/model changed the session
+   * model — the harness restarts a running session on the new model.
+   */
+  onModelChanged?: (session: Session) => void;
 }
 
 export interface WebUIServer {
@@ -88,6 +93,7 @@ const EVENT_TYPES: ReadonlyArray<keyof HarnessEventMap> = [
   'guardrail:triggered',
   'session:status',
   'round:changed',
+  'session:updated',
 ];
 
 function jsonErrorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
@@ -113,6 +119,7 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
       onSessionControl: deps.onSessionControl,
       onSessionResumed: deps.onSessionResumed,
       onMessageAdded: deps.onMessageAdded,
+      onModelChanged: deps.onModelChanged,
     }),
   );
   app.use(
@@ -187,9 +194,12 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
         continue;
       }
       const filter = filters.get(client);
-      // Only session:status carries a sessionId in its payload; events
-      // without one are broadcast to every connected client.
-      if (filter !== undefined && type === 'session:status') {
+      // session:status and session:updated carry a sessionId in their payload;
+      // events without one are broadcast to every connected client.
+      if (
+        filter !== undefined &&
+        (type === 'session:status' || type === 'session:updated')
+      ) {
         if ((data as { sessionId: string }).sessionId !== filter) {
           continue;
         }

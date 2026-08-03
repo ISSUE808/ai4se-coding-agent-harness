@@ -28,6 +28,8 @@ export interface SessionEventsState {
   status: SessionStatus | null;
   currentRound: number | null;
   maxRounds: number | null;
+  /** Session-level model override (Task 26); null = config default. */
+  model: string | null;
   pendingApproval: PendingApproval | null;
   wsConnected: boolean;
   /** Tear down and re-open the transport (retry after a drop). */
@@ -39,6 +41,11 @@ export interface SessionEventsState {
    * broadcasts the same message via `message:added` — id dedupe keeps one.
    */
   appendMessage(message: SessionMessage): void;
+  /**
+   * Locally apply a model override (PATCH response, Task 26). The server
+   * also broadcasts `session:updated` over WS — both paths agree.
+   */
+  updateModel(model: string | null): void;
 }
 
 export function useSessionEvents(
@@ -88,6 +95,7 @@ export function useSessionEvents(
         status: prev.status ?? initial.status,
         currentRound: prev.currentRound ?? initial.currentRound ?? null,
         maxRounds: prev.maxRounds ?? initial.maxRounds ?? null,
+        model: prev.model ?? initial.model ?? null,
         pendingApproval,
       };
     });
@@ -123,15 +131,21 @@ export function useSessionEvents(
     setState((prev) => ({ ...prev, messages: upsertMessage(prev.messages, message) }));
   }, []);
 
+  const updateModel = useCallback((model: string | null) => {
+    setState((prev) => ({ ...prev, model }));
+  }, []);
+
   return {
     messages: state.messages,
     status: state.status,
     currentRound: state.currentRound,
     maxRounds: state.maxRounds,
+    model: state.model,
     pendingApproval: state.pendingApproval,
     wsConnected,
     reconnect,
     dismissApproval,
     appendMessage,
+    updateModel,
   };
 }

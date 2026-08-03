@@ -20,6 +20,8 @@ export interface SessionRuntimeState {
   status: SessionStatus | null;
   currentRound: number | null;
   maxRounds: number | null;
+  /** Session-level model override (Task 26); null = follow the config default. */
+  model: string | null;
   pendingApproval: PendingApproval | null;
 }
 
@@ -34,6 +36,8 @@ export interface InitialRuntimeState {
   status: SessionStatus;
   currentRound?: number;
   maxRounds?: number;
+  /** Session-level model override from the REST snapshot (Task 26). */
+  model?: string;
 }
 
 const KNOWN_STATUSES: SessionStatus[] = ['running', 'paused', 'completed', 'failed'];
@@ -44,6 +48,7 @@ export function createInitialRuntimeState(initial?: InitialRuntimeState): Sessio
     status: initial?.status ?? null,
     currentRound: initial?.currentRound ?? null,
     maxRounds: initial?.maxRounds ?? null,
+    model: initial?.model ?? null,
     pendingApproval: null,
   };
 }
@@ -86,6 +91,16 @@ export function reduceSessionEvent(state: SessionRuntimeState, event: SessionEve
         return state;
       }
       return { ...state, currentRound: data.currentRound, maxRounds: data.maxRounds };
+    }
+
+    case 'session:updated': {
+      // Task 26: the session-level model override changed (`null` = cleared,
+      // back to the config default). Anything else than a string/null is a
+      // malformed frame — keep the previous model.
+      if (typeof data.model !== 'string' && data.model !== null) {
+        return state;
+      }
+      return { ...state, model: data.model };
     }
 
     case 'guardrail:triggered': {

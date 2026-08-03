@@ -7,6 +7,12 @@ export interface HarnessEventMap {
   'guardrail:triggered': { rule: string; command: string; level: 'block' | 'warn' };
   'session:status': { sessionId: string; status: string };
   'round:changed': { currentRound: number; maxRounds: number };
+  /**
+   * Task 26: a session-level model override changed (PATCH
+   * /api/sessions/:id/model). `model: null` means the override was cleared —
+   * the session falls back to the config default.
+   */
+  'session:updated': { sessionId: string; model: string | null; updatedAt: string };
 }
 
 export interface HarnessEvents {

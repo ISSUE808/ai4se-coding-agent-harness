@@ -40,7 +40,7 @@ import type {
   Tool,
   Validator,
 } from '../../src/types.js';
-import type { BuildAgentLoop } from '../../src/cli/commands/start.js';
+import type { BuildAgentLoop, BuildAgentLoopOptions } from '../../src/cli/commands/start.js';
 
 /**
  * Task 19 full integration (SPEC §5.1, §9): `start --web` wiring — the real
@@ -182,6 +182,8 @@ async function makeHarness(
   provider: LLMProvider,
   validators?: Map<string, Validator>,
   guardOverrides?: { patternGuard?: PatternGuard; scopeFence?: ScopeFence },
+  /** Task 26: per-build observer (records what runSession passed the factory). */
+  onBuild?: (opts: BuildAgentLoopOptions) => void,
 ): Promise<Fixture> {
   const events = createEventBus();
   const credentialStore = new CredentialStore([memoryBackend()]);
@@ -191,7 +193,10 @@ async function makeHarness(
     events,
     credentialStore,
     sessionStore,
-    buildAgentLoop: buildLoopFactory(provider, validators, guardOverrides),
+    buildAgentLoop: async (opts) => {
+      onBuild?.(opts);
+      return buildLoopFactory(provider, validators, guardOverrides)(opts);
+    },
     persistConfig: async () => {
       // Test-only: never touch the project config file.
     },
@@ -798,5 +803,78 @@ describe('full integration — start --web wiring (Task 19)', () => {
     await silence(300);
     expect(toolCount(sessionStore, id)).toBeLessThanOrEqual(countAtStop + 1);
     expect(sessionStore.get(id)?.status).toBe('completed');
+  });
+
+  describe('Task 26 — session-level model override', () => {
+    it('a session created WITH a model hands it to the first provider build (spy)', async () => {
+      const builtModels: Array<string | undefined> = [];
+      const provider = new MockProvider([{ content: '完成。' }]);
+      const { sessionStore, web } = await makeHarness(
+        makeConfig(configRoot),
+        provider,
+        undefined,
+        undefined,
+        (opts) => {
+          builtModels.push(opts.session?.model);
+        },
+      );
+
+      const created = await request(web.app)
+        .post('/api/sessions')
+        .send({ task: '带模型的会话', model: 'deepseek-r1' });
+      expect(created.status).toBe(201);
+      await waitForStatus(sessionStore, created.body.id, 'completed');
+
+      // The very first loop build already carried the session's model.
+      expect(builtModels).toEqual(['deepseek-r1']);
+    });
+
+    it('PATCH while running aborts the run and restarts with the new model (spy + timing)', async () => {
+      const builtModels: Array<string | undefined> = [];
+      // Slow provider: the PATCH lands while the first run is mid-call.
+      // Scripted: tool call, then enough completions for every restart order.
+      const provider = slowMockProvider(
+        [
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { content: '完成。' },
+          { content: '完成。' },
+          { content: '完成。' },
+        ],
+        400,
+      );
+      const { harness, sessionStore, web, port } = await makeHarness(
+        makeConfig(configRoot),
+        provider,
+        undefined,
+        undefined,
+        (opts) => {
+          builtModels.push(opts.session?.model);
+        },
+      );
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '模型切换任务' });
+      const id = created.body.id as string;
+      // The initial build happened with no session-level model.
+      expect(builtModels).toEqual([undefined]);
+
+      const ws = await wsConnect(port);
+      const patched = await request(web.app)
+        .patch(`/api/sessions/${id}/model`)
+        .send({ model: 'deepseek-v3' });
+      expect(patched.status).toBe(200);
+
+      // The abort+restart mechanism rebuilt the loop — the new build carries
+      // the session's model (spec: provider construction spy).
+      await waitForCondition(() => builtModels.length >= 2, 8000, 'provider rebuild after switch');
+      expect(builtModels).toEqual([undefined, 'deepseek-v3']);
+
+      // The restarted agent continued and completed under the new model.
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.model).toBe('deepseek-v3');
+      expect(done.messages.some((m) => m.role === 'tool')).toBe(true);
+      // The model change reached WebSocket clients too.
+      const frame = await nextEvent(ws, (f) => f.type === 'session:updated' && f.data.sessionId === id);
+      expect(frame.data.model).toBe('deepseek-v3');
+    });
   });
 }, 15000);

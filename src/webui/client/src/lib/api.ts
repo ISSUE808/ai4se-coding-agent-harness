@@ -13,6 +13,8 @@ export interface SessionSummary {
   currentRound: number;
   /** Session workspace root (Task 19) — bound per session, defaults to the config root. */
   workspaceRoot: string;
+  /** Session-level model override (Task 26); absent = follow the config default. */
+  model?: string;
   tokenCount: number;
   createdAt: string;
   updatedAt: string;
@@ -104,11 +106,13 @@ export async function createSession(
   task: string,
   maxRounds: number,
   workspaceRoot?: string,
+  model?: string,
 ): Promise<SessionSummary> {
-  return request<SessionSummary>(
-    '/api/sessions',
-    jsonInit('POST', { task, maxRounds, workspaceRoot }),
-  );
+  const body: Record<string, unknown> = { task, maxRounds, workspaceRoot };
+  if (model !== undefined) {
+    body.model = model;
+  }
+  return request<SessionSummary>('/api/sessions', jsonInit('POST', body));
 }
 
 /** Session with its full message history (GET /api/sessions/:id). */
@@ -125,6 +129,19 @@ export async function postMessage(sessionId: string, content: string): Promise<S
   return request<SessionMessage>(
     `/api/sessions/${encodeURIComponent(sessionId)}/message`,
     jsonInit('POST', { role: 'user', content }),
+  );
+}
+
+/**
+ * Switch the session-level model override (Task 26). An empty string clears
+ * the override so the session falls back to the config default. The backend
+ * broadcasts `session:updated` over WS; a running session restarts on the
+ * new model.
+ */
+export async function updateSessionModel(sessionId: string, model: string): Promise<SessionSummary> {
+  return request<SessionSummary>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/model`,
+    jsonInit('PATCH', { model }),
   );
 }
 

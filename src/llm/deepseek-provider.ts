@@ -67,8 +67,13 @@ export function toOpenAIToolParameters(
 
 export class DeepSeekProvider implements LLMProvider {
   private client: OpenAI;
-  private model: string;
   private maxTokens: number;
+  /**
+   * The model this provider serves (Task 26): the config default or the
+   * session-level override that constructed it. Read-only — switching models
+   * mid-conversation builds a fresh provider.
+   */
+  readonly model: string;
 
   constructor(config: DeepSeekConfig) {
     this.client = new OpenAI({

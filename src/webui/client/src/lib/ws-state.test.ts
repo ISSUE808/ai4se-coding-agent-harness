@@ -85,6 +85,38 @@ describe('reduceSessionEvent — round:changed', () => {
   });
 });
 
+describe('reduceSessionEvent — session:updated (Task 26)', () => {
+  it('seeds the model from the REST snapshot', () => {
+    const state = createInitialRuntimeState({ messages: [], status: 'running', model: 'deepseek-r1' });
+    expect(state.model).toBe('deepseek-r1');
+  });
+
+  it('starts with no model when the snapshot has none (config default)', () => {
+    const state = createInitialRuntimeState({ messages: [], status: 'running' });
+    expect(state.model).toBeNull();
+  });
+
+  it('updates the model from a session:updated frame', () => {
+    const next = reduceSessionEvent(
+      createInitialRuntimeState(),
+      frame('session:updated', { sessionId: 's1', model: 'deepseek-v3', updatedAt: '2026-08-03T00:00:00.000Z' }),
+    );
+    expect(next.model).toBe('deepseek-v3');
+  });
+
+  it('clears the model when the payload carries null (back to the config default)', () => {
+    const state = createInitialRuntimeState({ messages: [], status: 'running', model: 'deepseek-v3' });
+    const next = reduceSessionEvent(state, frame('session:updated', { sessionId: 's1', model: null }));
+    expect(next.model).toBeNull();
+  });
+
+  it('ignores an invalid model payload', () => {
+    const state = createInitialRuntimeState({ messages: [], status: 'running', model: 'deepseek-v3' });
+    const next = reduceSessionEvent(state, frame('session:updated', { sessionId: 's1', model: 42 }));
+    expect(next.model).toBe('deepseek-v3');
+  });
+});
+
 describe('reduceSessionEvent — guardrail:triggered', () => {
   it('records a warn-level command as pending human approval', () => {
     const next = reduceSessionEvent(createInitialRuntimeState(), frame('guardrail:triggered', {

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -329,6 +329,107 @@ describe('REST /api/sessions', () => {
     expect(stopAgain.status).toBe(409);
     const ghost = await request(web.app).post('/api/sessions/ghost/pause');
     expect(ghost.status).toBe(404);
+  });
+
+  it('POST /api/sessions accepts an optional model and stores it (Task 26)', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).post('/api/sessions').send({ task: 't', model: 'deepseek-v3' });
+    expect(res.status).toBe(201);
+    expect(res.body.model).toBe('deepseek-v3');
+    const detail = await request(web.app).get(`/api/sessions/${res.body.id}`);
+    expect(detail.body.model).toBe('deepseek-v3');
+  });
+
+  it('POST /api/sessions rejects an invalid model with 400 JSON (Task 26)', async () => {
+    const { web } = await makeFixture();
+    for (const model of [42, null, '', '   ']) {
+      const res = await request(web.app).post('/api/sessions').send({ task: 't', model });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBeTypeOf('string');
+    }
+    // Omitting the model is fine (config default).
+    const ok = await request(web.app).post('/api/sessions').send({ task: 't' });
+    expect(ok.status).toBe(201);
+  });
+
+  it('PATCH /api/sessions/:id/model updates the model, returns the session and broadcasts session:updated over WS (Task 26)', async () => {
+    const { web, port } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 't' });
+    const id = created.body.id as string;
+    const ws = await wsConnect(port, `?sessionId=${id}`);
+
+    const res = await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+    expect(res.status).toBe(200);
+    expect(res.body.model).toBe('deepseek-v3');
+    const detail = await request(web.app).get(`/api/sessions/${id}`);
+    expect(detail.body.model).toBe('deepseek-v3');
+
+    const frame = await nextEvent(ws, (f) => f.type === 'session:updated' && f.data.sessionId === id);
+    expect(frame.data.model).toBe('deepseek-v3');
+    expect(frame.data.updatedAt).toBeTypeOf('string');
+  });
+
+  it('PATCH /api/sessions/:id/model with an empty model clears the override back to the config default (Task 26)', async () => {
+    const { web } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 't', model: 'deepseek-v3' });
+    const id = created.body.id as string;
+
+    const res = await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: '' });
+    expect(res.status).toBe(200);
+    expect(res.body.model).toBeUndefined();
+    const detail = await request(web.app).get(`/api/sessions/${id}`);
+    expect(detail.body.model).toBeUndefined();
+  });
+
+  it('PATCH /api/sessions/:id/model validates the body and 404s unknown sessions (Task 26)', async () => {
+    const { web } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 't' });
+    const id = created.body.id as string;
+
+    const bad = await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 42 });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toBeTypeOf('string');
+    const missing = await request(web.app).patch('/api/sessions/ghost/model').send({ model: 'x' });
+    expect(missing.status).toBe(404);
+  });
+
+  it('PATCH /api/sessions/:id/model notifies the harness only when the model actually changed (Task 26)', async () => {
+    const onModelChanged = vi.fn();
+    const events = createEventBus();
+    const sessionStore = new InMemorySessionStore();
+    const web = createWebUIServer({
+      sessionStore,
+      events,
+      credentialStore: new CredentialStore([memoryBackend()]),
+      config: structuredClone(DEFAULT_CONFIG),
+      hitl: new HITLManager(),
+      onModelChanged,
+    });
+    const port = await web.listen(0);
+    openServers.push(web);
+
+    const created = await request(web.app).post('/api/sessions').send({ task: 't' });
+    const id = created.body.id as string;
+    await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+    expect(onModelChanged).toHaveBeenCalledTimes(1);
+    expect(onModelChanged).toHaveBeenCalledWith(expect.objectContaining({ id, model: 'deepseek-v3' }));
+
+    // Patching the same model again is a no-op — no restart signal.
+    await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+    expect(onModelChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('session:updated frames are filtered by the WS sessionId (Task 26)', async () => {
+    const { web, port } = await makeFixture();
+    const a = await request(web.app).post('/api/sessions').send({ task: 'a' });
+    const b = await request(web.app).post('/api/sessions').send({ task: 'b' });
+    const wsA = await wsConnect(port, `?sessionId=${a.body.id}`);
+    const wsB = await wsConnect(port, `?sessionId=${b.body.id}`);
+
+    await request(web.app).patch(`/api/sessions/${a.body.id}/model`).send({ model: 'deepseek-v3' });
+    await nextEvent(wsA, (f) => f.type === 'session:updated' && f.data.sessionId === a.body.id);
+    // Session B's filtered client must never receive A's model change.
+    await expect(nextEvent(wsB, (f) => f.type === 'session:updated', 200)).rejects.toThrow('timeout');
   });
 });
 

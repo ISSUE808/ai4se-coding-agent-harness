@@ -35,6 +35,29 @@ import { createProgram } from '../../../src/cli/index.js';
 import { mockBackend, parseCaptured } from './helpers.js';
 
 /**
+ * Task 26: capture every DeepSeekProvider constructed by createLLMProvider so
+ * tests can assert which model the session override produced. A subclass is
+ * used instead of a complete spy because the provider is constructed inside
+ * the SecureHandle closure — `complete` is never called at build time.
+ */
+const { capturedProviders } = vi.hoisted(() => ({
+  capturedProviders: [] as Array<{ model: string }>,
+}));
+
+vi.mock('../../../src/llm/deepseek-provider.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/llm/deepseek-provider.js')>();
+  return {
+    ...actual,
+    DeepSeekProvider: class extends actual.DeepSeekProvider {
+      constructor(config: { model: string }) {
+        super(config as never);
+        capturedProviders.push(this);
+      }
+    },
+  };
+});
+
+/**
  * start command (SPEC §4.3, §8.2): runs the AgentLoop, streams messages to
  * stdout, bootstraps the API key on first run. All loops use MockProvider —
  * deterministic, zero network.
@@ -256,6 +279,25 @@ describe('createLLMProvider', () => {
     await expect(createLLMProvider(deepseekConfig(), store, {})).rejects.toThrow(
       /key update/i,
     );
+  });
+
+  it('an explicit model override wins over config.llm.model (Task 26 session override)', async () => {
+    const backend = mockBackend('mock', { secret: 'sk-abc' });
+    const store = new CredentialStore([backend.backend]);
+    capturedProviders.length = 0;
+    const provider = await createLLMProvider(deepseekConfig(), store, { model: 'deepseek-v3' });
+    expect(provider).toBeInstanceOf(DeepSeekProvider);
+    // The DeepSeekProvider was constructed with the session's model.
+    expect(capturedProviders).toHaveLength(1);
+    expect(capturedProviders[0].model).toBe('deepseek-v3');
+  });
+
+  it('without a model override the provider uses config.llm.model (CLI sessions unaffected)', async () => {
+    const backend = mockBackend('mock', { secret: 'sk-abc' });
+    const store = new CredentialStore([backend.backend]);
+    capturedProviders.length = 0;
+    await createLLMProvider(deepseekConfig(), store, {});
+    expect(capturedProviders[0].model).toBe(DEFAULT_CONFIG.llm.model);
   });
 });
 

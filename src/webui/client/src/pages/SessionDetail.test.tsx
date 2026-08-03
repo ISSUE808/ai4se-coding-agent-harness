@@ -15,6 +15,8 @@ vi.mock('../lib/api', () => ({
   resolveApproval: vi.fn(),
   fetchConfig: vi.fn().mockResolvedValue({ model: 'deepseek-v4-pro', guardrails: { requireApproval: ['prod'], blockOutbound: true } }),
   fetchFsTree: vi.fn(),
+  fetchSessions: vi.fn(),
+  updateSessionModel: vi.fn(),
 }));
 
 vi.mock('../lib/ws-source', () => ({
@@ -30,9 +32,11 @@ vi.mock('@monaco-editor/react', () => ({
 import {
   fetchFsTree,
   fetchSession,
+  fetchSessions,
   postMessage,
   resolveApproval,
   sessionControl,
+  updateSessionModel,
 } from '../lib/api';
 import { createWebSocketEventSource } from '../lib/ws-source';
 
@@ -41,6 +45,8 @@ const postMessageMock = vi.mocked(postMessage);
 const sessionControlMock = vi.mocked(sessionControl);
 const resolveApprovalMock = vi.mocked(resolveApproval);
 const fetchFsTreeMock = vi.mocked(fetchFsTree);
+const fetchSessionsMock = vi.mocked(fetchSessions);
+const updateSessionModelMock = vi.mocked(updateSessionModel);
 const createSourceMock = vi.mocked(createWebSocketEventSource);
 
 class FakeSource implements SessionEventSource {
@@ -153,6 +159,12 @@ describe('SessionDetail', () => {
     // The left column always fetches the workspace tree; default to the
     // standard fixture so every test renders without stubbing.
     fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    // Task 26: the model selector lists models used by other sessions;
+    // default to the current session (no model) so recent models are empty.
+    fetchSessionsMock.mockReset();
+    fetchSessionsMock.mockResolvedValue([SESSION]);
+    updateSessionModelMock.mockReset();
+    updateSessionModelMock.mockResolvedValue(SESSION);
     createSourceMock.mockReset();
     createSourceMock.mockImplementation(() => {
       source = new FakeSource();
@@ -415,5 +427,104 @@ describe('SessionDetail', () => {
 
     await userEvent.click(screen.getByRole('link', { name: /返回/ }));
     expect(screen.getByText('回到会话列表')).toBeInTheDocument();
+  });
+
+  it('shows the default model from config in the model selector (Task 26)', async () => {
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    const select = screen.getByLabelText('选择模型');
+    expect(select).toHaveValue('deepseek-v4-pro');
+    expect(screen.getByText('默认模型 · deepseek-v4-pro')).toBeInTheDocument();
+  });
+
+  it('shows the session-level model when the session overrides the default (Task 26)', async () => {
+    renderDetail({ ...SESSION, model: 'deepseek-r1' });
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    const select = screen.getByLabelText('选择模型');
+    expect(select).toHaveValue('deepseek-r1');
+    // The label row distinguishes a session-level override from the default.
+    expect(screen.getByText('会话模型')).toBeInTheDocument();
+    expect(screen.getAllByText('deepseek-r1').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('lists models used by other sessions in the dropdown, deduplicated (Task 26)', async () => {
+    fetchSessionsMock.mockResolvedValue([
+      { ...SESSION, id: 's_old', model: 'deepseek-v3' },
+      { ...SESSION, id: 's_older', model: 'deepseek-v3' },
+      { ...SESSION, id: 's_plain' },
+    ]);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    expect(screen.getByRole('option', { name: 'deepseek-v3' })).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: 'deepseek-v3' })).toHaveLength(1);
+  });
+
+  it('switching the model PATCHes the session and updates the displayed model (Task 26)', async () => {
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: 'deepseek-v3' });
+    fetchSessionsMock.mockResolvedValue([{ ...SESSION, id: 's_old', model: 'deepseek-v3' }]);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-v3');
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', 'deepseek-v3');
+    });
+    // The selector now shows the switched model.
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-v3');
+    });
+  });
+
+  it('selecting the default model clears the override (back to config, Task 26)', async () => {
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: undefined as unknown as string });
+    fetchSessionsMock.mockResolvedValue([]);
+    renderDetail({ ...SESSION, model: 'deepseek-r1' });
+    await screen.findByText('把认证模块改成刷新令牌');
+    expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-r1');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-v4-pro');
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', '');
+    });
+    // Falls back to the config default.
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-v4-pro');
+    });
+  });
+
+  it('supports entering a custom model via the input (Task 26)', async () => {
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: 'my-custom-llm' });
+    fetchSessionsMock.mockResolvedValue([]);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), '__custom__');
+    const input = screen.getByLabelText('自定义模型输入');
+    await userEvent.type(input, 'my-custom-llm');
+    await userEvent.click(screen.getByRole('button', { name: '应用' }));
+
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', 'my-custom-llm');
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('my-custom-llm');
+    });
+  });
+
+  it('updates the model live from the session:updated WS frame (Task 26)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    act(() =>
+      source.emit({
+        type: 'session:updated',
+        data: { sessionId: 's_1', model: 'deepseek-r1', updatedAt: '2026-08-03T00:00:00.000Z' },
+      }),
+    );
+    expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-r1');
   });
 });

@@ -63,6 +63,14 @@ export interface BuildAgentLoopOptions {
    * "approve in the browser → the paused session resumes" works end-to-end.
    */
   hitl?: HITLManager;
+  /**
+   * Task 26: the stored session being run (WebUI path only). Its
+   * `session.model` override (if any) wins over config.llm.model when the
+   * loop factory builds the LLM provider. CLI `start <task>` has no stored
+   * session at build time — the option stays absent and the factory falls
+   * back to the config default.
+   */
+  session?: Session;
 }
 
 export type BuildAgentLoop = (
@@ -315,6 +323,12 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
 export interface CreateProviderOptions {
   readHidden?: (label: string) => Promise<string>;
   print?: (line: string) => void;
+  /**
+   * Task 26 session-level model override. When provided it wins over
+   * config.llm.model (the DeepSeekProvider is constructed with it); absent
+   * means "follow the config default" — CLI sessions never set this.
+   */
+  model?: string;
 }
 
 /**
@@ -363,7 +377,8 @@ export async function createLLMProvider(
       new DeepSeekProvider({
         baseUrl: config.llm.baseUrl,
         apiKey: key,
-        model: config.llm.model,
+        // Task 26: the session-level override wins when present.
+        model: opts.model ?? config.llm.model,
         maxTokens: config.llm.maxTokens,
       }),
   );
@@ -371,7 +386,7 @@ export async function createLLMProvider(
 
 /** Default production wiring: real tools, real validators, configured provider. */
 function buildDefaultAgentLoop(deps: StartCommandDeps): BuildAgentLoop {
-  return async ({ config, events, hitl }) => {
+  return async ({ config, events, hitl, session }) => {
     const readHidden = deps.readHidden ?? promptHidden;
     const store =
       deps.store ??
@@ -381,7 +396,13 @@ function buildDefaultAgentLoop(deps: StartCommandDeps): BuildAgentLoop {
             readHidden,
             apiKeySource: config.llm.apiKeySource, // SPEC §4.2: explicit source only
           })))());
-    const llm = await createLLMProvider(config, store, { readHidden });
+    // Task 26: the session-level model override (if any) wins over
+    // config.llm.model — CLI `start <task>` has no session, so it always
+    // falls back to the config default.
+    const llm = await createLLMProvider(config, store, {
+      readHidden,
+      model: session?.model,
+    });
 
     const tools = new ToolRegistry();
     tools.register(readFileTool);
@@ -466,7 +487,10 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     const controller = new AbortController();
     activeRuns.set(session.id, controller);
     try {
-      const loop = await buildAgentLoop({ config, events, hitl });
+      // Task 26: hand the stored session to the factory so the provider is
+      // built with `session.model` when the session overrides the config
+      // default (model switches → the restarted run rebuilds the provider).
+      const loop = await buildAgentLoop({ config, events, hitl, session });
       await loop.run(session.task, { session, signal: controller.signal });
     } catch (err) {
       // The loop never throws for LLM/tool failures, but guard against
@@ -564,6 +588,18 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
         activeRuns.get(session.id)?.abort();
       } else {
         continueSession(session);
+      }
+    },
+    onModelChanged: (session) => {
+      // Task 26 model switch: REUSE the message-injection abort+restart path
+      // (pendingInjection → runSession finally → continueSession). The
+      // restarted run rebuilds the provider with the session's NEW model and
+      // re-seeds memory from the store, so the agent continues seamlessly.
+      // Paused/completed sessions only record the override — the next run
+      // picks it up (restarting a paused approval would be wrong).
+      if (session.status === 'running') {
+        pendingInjection.set(session.id, true);
+        activeRuns.get(session.id)?.abort();
       }
     },
     onSessionControl: (session, action) => {

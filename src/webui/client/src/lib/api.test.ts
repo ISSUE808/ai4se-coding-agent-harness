@@ -12,6 +12,7 @@ import {
   saveConfig,
   saveKey,
   sessionControl,
+  updateSessionModel,
 } from './api';
 
 const fetchMock = vi.fn();
@@ -69,6 +70,33 @@ describe('api client', () => {
     fetchMock.mockResolvedValue(jsonResponse({ id: 's_2', task: 't', maxRounds: 0 }));
     await createSession('t', 0);
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ task: 't', maxRounds: 0 });
+  });
+
+  it('createSession sends the session-level model when provided (Task 26)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's_2', task: 't', maxRounds: 0, model: 'deepseek-v3' }));
+    await createSession('t', 0, undefined, 'deepseek-v3');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ task: 't', maxRounds: 0, model: 'deepseek-v3' });
+    // Omitting the model must not send the key at all.
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's_2', task: 't', maxRounds: 0 }));
+    await createSession('t', 0);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ task: 't', maxRounds: 0 });
+  });
+
+  it('updateSessionModel PATCHes the model and returns the updated session (Task 26)', async () => {
+    const updated = { id: 's_1', task: 't', status: 'running', model: 'deepseek-v3' };
+    fetchMock.mockResolvedValue(jsonResponse(updated));
+    const result = await updateSessionModel('s_1', 'deepseek-v3');
+    expect(result.model).toBe('deepseek-v3');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/sessions/s_1/model');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ model: 'deepseek-v3' });
+  });
+
+  it('updateSessionModel clears the override with an empty string (back to default, Task 26)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 's_1', task: 't', status: 'running' }));
+    await updateSessionModel('s_1', '');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ model: '' });
   });
 
   it('getKeyStatus GETs /api/keys/:provider', async () => {
