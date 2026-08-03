@@ -110,11 +110,17 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
     }
   }
 
-  function renderNode(node: FsBrowseEntry, depth: number): ReactNode {
+  function renderNode(node: FsBrowseEntry, depth: number, ancestors: ReadonlySet<string>): ReactNode {
     const listing = node.type === 'dir' ? dirs.get(node.path) : undefined;
     const children = listing?.entries ?? [];
     const isExpanded = expanded.has(node.path);
     const isDir = node.type === 'dir';
+    // Cycle guard (defense in depth): the server contract says every entry
+    // path is strictly deeper than its parent, but a malformed listing must
+    // not stack-overflow the render — children already on this branch's
+    // ancestor chain are skipped.
+    const childAncestors = new Set(ancestors);
+    childAncestors.add(node.path);
 
     return (
       <div key={node.path}>
@@ -168,7 +174,11 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
           {listing?.truncated === true && <span style={truncatedHintStyle}>…截断</span>}
         </div>
         {isDir && isExpanded && children.length > 0 && (
-          <div>{children.map((child) => renderNode(child, depth + 1))}</div>
+          <div>
+            {children
+              .filter((child) => !childAncestors.has(child.path))
+              .map((child) => renderNode(child, depth + 1, childAncestors))}
+          </div>
         )}
       </div>
     );
@@ -243,7 +253,7 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
               </button>
             </div>
           )}
-          {phase === 'ready' && renderNode(MACHINE_ROOT, 0)}
+          {phase === 'ready' && renderNode(MACHINE_ROOT, 0, new Set())}
           {branchError !== null && (
             <p style={{ margin: `${designTokens.spacing[2]} 0 0`, color: designTokens.colors.danger, fontSize: designTokens.typography.fontSize.sm }}>
               {branchError}

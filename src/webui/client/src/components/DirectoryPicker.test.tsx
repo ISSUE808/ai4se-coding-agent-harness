@@ -12,7 +12,25 @@ vi.mock('../lib/api', () => ({
 const fetchMachineRootsMock = vi.mocked(fetchMachineRoots);
 const fetchFsBrowseMock = vi.mocked(fetchFsBrowse);
 
-/** Listing for C:\Users\me — one dir, one file, one symlink. */
+// A consistent browse tree: C:\ → Users → me → Desktop → papers, with one
+// file and one symlink at the `me` level. Each level has a DISTINCT listing
+// so no directory ever serves a listing that contains itself (a listing for
+// `me` that also listed `me` would be a cycle, not a valid browse response).
+const DRIVE_C = {
+  path: 'C:\\',
+  parent: '',
+  entries: [
+    { path: 'C:\\Users', name: 'Users', type: 'dir' as const },
+    { path: 'C:\\a.txt', name: 'a.txt', type: 'file' as const, size: 3 },
+  ],
+};
+
+const USERS_DIR = {
+  path: 'C:\\Users',
+  parent: 'C:\\',
+  entries: [{ path: 'C:\\Users\\me', name: 'me', type: 'dir' as const }],
+};
+
 const USER_DIR = {
   path: 'C:\\Users\\me',
   parent: 'C:\\Users',
@@ -22,6 +40,34 @@ const USER_DIR = {
     { path: 'C:\\Users\\me\\alias', name: 'alias', type: 'link' as const },
   ],
 };
+
+const DESKTOP_DIR = {
+  path: 'C:\\Users\\me\\Desktop',
+  parent: 'C:\\Users\\me',
+  entries: [{ path: 'C:\\Users\\me\\Desktop\\papers', name: 'papers', type: 'dir' as const }],
+};
+
+/** Per-path default listings; any other path is an unexpected fetch. */
+function defaultBrowse(path: string): Promise<typeof USER_DIR> {
+  if (path === 'C:\\') {
+    return Promise.resolve(DRIVE_C);
+  }
+  if (path === 'C:\\Users') {
+    return Promise.resolve(USERS_DIR);
+  }
+  if (path === 'C:\\Users\\me') {
+    return Promise.resolve(USER_DIR);
+  }
+  if (path === 'C:\\Users\\me\\Desktop') {
+    return Promise.resolve(DESKTOP_DIR);
+  }
+  return Promise.reject(new Error('unexpected browse path: ' + path));
+}
+
+/** Expand the given dir row inside the picker dialog. */
+async function expand(picker: HTMLElement, name: string): Promise<void> {
+  await userEvent.click(within(picker).getByRole('button', { name: `展开 ${name}` }));
+}
 
 function renderPicker(onSelect = vi.fn(), onClose = vi.fn()) {
   const utils = render(<DirectoryPicker onSelect={onSelect} onClose={onClose} />);
@@ -33,6 +79,7 @@ describe('DirectoryPicker (browse: machine-wide, unrestricted)', () => {
     fetchMachineRootsMock.mockReset();
     fetchFsBrowseMock.mockReset();
     fetchMachineRootsMock.mockResolvedValue(['C:\\', 'D:\\']);
+    fetchFsBrowseMock.mockImplementation(defaultBrowse);
   });
 
   it('opens on the machine roots (no path arg) and shows every drive as a selectable dir', async () => {
@@ -51,53 +98,67 @@ describe('DirectoryPicker (browse: machine-wide, unrestricted)', () => {
     expect(onSelect).toHaveBeenCalledWith('C:\\');
   });
 
-  it('expanding a directory lazily fetches its entries via /api/fs/browse', async () => {
-    fetchFsBrowseMock.mockResolvedValue(USER_DIR);
+  it('expanding a directory lazily fetches its entries via /api/fs/browse, one level at a time', async () => {
     renderPicker();
     const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
 
-    await userEvent.click(within(picker).getByRole('button', { name: '展开 C:\\' }));
+    await expand(picker, 'C:\\');
     expect(fetchFsBrowseMock).toHaveBeenCalledWith('C:\\');
+    expect(await within(picker).findByText('Users')).toBeInTheDocument();
+
+    await expand(picker, 'Users');
+    expect(fetchFsBrowseMock).toHaveBeenCalledWith('C:\\Users');
+    expect(await within(picker).findByText('me')).toBeInTheDocument();
+
+    await expand(picker, 'me');
+    expect(fetchFsBrowseMock).toHaveBeenCalledWith('C:\\Users\\me');
     expect(await within(picker).findByText('Desktop')).toBeInTheDocument();
     expect(within(picker).getByText('notes.txt')).toBeInTheDocument();
 
-    // Drilling down one more level fetches the next directory.
-    await userEvent.click(within(picker).getByRole('button', { name: '展开 Desktop' }));
+    // Drilling down one more level fetches the next directory (distinct
+    // listing, so no cycle).
+    await expand(picker, 'Desktop');
     expect(fetchFsBrowseMock).toHaveBeenCalledWith('C:\\Users\\me\\Desktop');
+    expect(await within(picker).findByText('papers')).toBeInTheDocument();
   });
 
   it('selecting a nested directory reports its absolute path', async () => {
-    fetchFsBrowseMock.mockResolvedValue(USER_DIR);
     const { onSelect } = renderPicker();
     const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
-    await userEvent.click(within(picker).getByRole('button', { name: '展开 C:\\' }));
+    await expand(picker, 'C:\\');
+    await expand(picker, 'Users');
+    await expand(picker, 'me');
     await userEvent.click(await within(picker).findByRole('button', { name: '选择 Desktop' }));
     expect(onSelect).toHaveBeenCalledWith('C:\\Users\\me\\Desktop');
   });
 
   it('renders symlink entries as inert rows (no expand, no select)', async () => {
-    fetchFsBrowseMock.mockResolvedValue(USER_DIR);
     renderPicker();
     const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
-    await userEvent.click(within(picker).getByRole('button', { name: '展开 C:\\' }));
+    await expand(picker, 'C:\\');
+    await expand(picker, 'Users');
+    await expand(picker, 'me');
     expect(await within(picker).findByText('alias')).toBeInTheDocument();
     expect(within(picker).queryByRole('button', { name: '展开 alias' })).not.toBeInTheDocument();
     expect(within(picker).queryByRole('button', { name: '选择 alias' })).not.toBeInTheDocument();
   });
 
   it('flags truncated directories with the …截断 hint', async () => {
-    fetchFsBrowseMock.mockResolvedValue({ ...USER_DIR, truncated: true });
+    fetchFsBrowseMock.mockImplementation(() => Promise.resolve({ ...USER_DIR, truncated: true }));
     renderPicker();
     const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
-    await userEvent.click(within(picker).getByRole('button', { name: '展开 C:\\' }));
+    // Every listing is served truncated — the hint shows on the expanded
+    // directory's own row as soon as its listing loads.
+    await expand(picker, 'C:\\');
     expect(await within(picker).findByText('…截断')).toBeInTheDocument();
+    expect(within(picker).getByText('Desktop')).toBeInTheDocument();
   });
 
   it('a branch fetch failure is non-fatal (picker keeps working, error shown)', async () => {
-    fetchFsBrowseMock.mockRejectedValue(new Error('目录不可读'));
+    fetchFsBrowseMock.mockImplementation(() => Promise.reject(new Error('目录不可读')));
     renderPicker();
     const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
-    await userEvent.click(within(picker).getByRole('button', { name: '展开 C:\\' }));
+    await expand(picker, 'C:\\');
     expect(await within(picker).findByText('目录不可读')).toBeInTheDocument();
     // The machine roots are still visible and usable.
     expect(within(picker).getByRole('button', { name: '选择 D:\\' })).toBeInTheDocument();

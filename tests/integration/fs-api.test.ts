@@ -325,9 +325,10 @@ describe('GET /api/fs/browse（目录选择器浏览端点——整机浏览，�
     const res = await request(app).get('/api/fs/browse').query({ path: other });
     expect(res.status).toBe(200);
     expect(res.body.path).toBe(other);
-    // Entries: dirs first, then files, alphabetical (same contract as tree).
+    // Entries: dirs first, then alphabetical by code unit (same comparator
+    // as /tree — README.md sorts before package.json because 'R' < 'p').
     const names = res.body.entries.map((e: { name: string }) => e.name);
-    expect(names).toEqual(['src', 'package.json', 'README.md']);
+    expect(names).toEqual(['src', 'README.md', 'package.json']);
     const src = res.body.entries.find((e: { name: string }) => e.name === 'src');
     expect(src.type).toBe('dir');
     const pkg = res.body.entries.find((e: { name: string }) => e.name === 'package.json');
@@ -373,5 +374,30 @@ describe('GET /api/fs/browse（目录选择器浏览端点——整机浏览，�
     const link = res.body.entries.find((e: { name: string }) => e.name === 'link-out');
     expect(link).toBeDefined();
     expect(link.type).toBe('link');
+  });
+
+  it('rejects a non-string path parameter with 400', async () => {
+    const { app } = routerApp();
+    const res = await request(app).get('/api/fs/browse').query({ path: ['a', 'b'] });
+    expect(res.status).toBe(400);
+  });
+
+  it('lists an empty directory with no entries and truncated false', async () => {
+    const { app } = routerApp();
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-browse-empty-'));
+    const res = await request(app).get('/api/fs/browse').query({ path: empty });
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toEqual([]);
+    expect(res.body.truncated).toBe(false);
+  });
+
+  it('truncates oversized directories to the alphabetically first entries and flags them (same contract as /tree)', async () => {
+    const { app, other } = routerApp({ maxEntriesPerDir: 2 });
+    // other has src (dir) + README.md + package.json; cap 2 keeps the first
+    // two in sorted order (dirs first) — the cap applies AFTER sorting.
+    const res = await request(app).get('/api/fs/browse').query({ path: other });
+    expect(res.status).toBe(200);
+    expect(res.body.truncated).toBe(true);
+    expect(res.body.entries.map((e: { name: string }) => e.name)).toEqual(['src', 'README.md']);
   });
 });

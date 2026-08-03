@@ -190,39 +190,59 @@ export function createFsRouter(deps: FsRouterDeps): Router {
       return;
     }
 
-    let names: string[];
+    let dirents: fs.Dirent[];
     try {
-      names = fs.readdirSync(target);
+      dirents = fs.readdirSync(target, { withFileTypes: true });
     } catch {
       res.status(400).json({ error: `directory is not readable: ${target}` });
       return;
     }
-    const truncated = names.length > maxEntriesPerDir;
-    if (truncated) {
-      names = names.slice(0, maxEntriesPerDir);
+    // Partition into dirs / files / links, sort with the same comparator as
+    // /tree (dirs first, then alphabetical), and only then apply the entry
+    // cap — so the kept entries are the alphabetically-first ones, not
+    // whatever order readdir happened to return (ext4/APFS order is
+    // arbitrary). Sockets/devices are omitted, same as /tree. Links are
+    // kept (marked `link`) — the picker must show them; it never follows.
+    const dirs: fs.Dirent[] = [];
+    const files: fs.Dirent[] = [];
+    const links: fs.Dirent[] = [];
+    for (const entry of dirents) {
+      if (entry.isSymbolicLink()) {
+        links.push(entry);
+      } else if (entry.isDirectory()) {
+        dirs.push(entry);
+      } else if (entry.isFile()) {
+        files.push(entry);
+      }
     }
+    dirs.sort(byName);
+    files.sort(byName);
+    links.sort(byName);
 
+    const all = [...dirs, ...files, ...links];
+    const truncated = all.length > maxEntriesPerDir;
+    const kept = truncated ? all.slice(0, maxEntriesPerDir) : all;
+
+    // Only kept entries are stat'd — no lstat for sliced-away entries.
     const entries: Array<{ path: string; name: string; type: 'dir' | 'file' | 'link'; size?: number }> = [];
-    for (const name of names) {
-      const full = path.join(target, name);
-      let st: fs.Stats;
-      try {
-        st = fs.lstatSync(full);
-      } catch {
+    for (const entry of kept) {
+      const full = path.join(target, entry.name);
+      if (entry.isDirectory() || entry.isSymbolicLink()) {
+        entries.push({
+          path: full,
+          name: entry.name,
+          type: entry.isSymbolicLink() ? 'link' : 'dir',
+        });
         continue;
       }
-      const type: 'dir' | 'file' | 'link' = st.isSymbolicLink()
-        ? 'link'
-        : st.isDirectory()
-          ? 'dir'
-          : 'file';
-      entries.push({ path: full, name, type, ...(type === 'file' ? { size: st.size } : {}) });
+      let size: number | undefined;
+      try {
+        size = fs.statSync(full).size;
+      } catch {
+        size = undefined; // unreadable file — report it without a size
+      }
+      entries.push({ path: full, name: entry.name, type: 'file', size });
     }
-    // Directories first, then alphabetical (same contract as /tree).
-    entries.sort(
-      (a, b) =>
-        (a.type === 'dir' ? -1 : 0) - (b.type === 'dir' ? -1 : 0) || a.name.localeCompare(b.name),
-    );
 
     res.json({ path: target, parent: path.dirname(target), entries, truncated });
   });
