@@ -165,6 +165,33 @@ export async function fetchConfig(): Promise<ConfigValue> {
   return request<ConfigValue>('/api/config');
 }
 
+// ─── fs browsing (Task 23: directory picker + session file tree) ────────────
+
+/** A node in the directory tree served by GET /api/fs/tree. */
+export interface FsTreeNode {
+  /** Absolute path of this node. */
+  path: string;
+  /** Basename of this node. */
+  name: string;
+  type: 'dir' | 'file';
+  /** File size in bytes (files only). */
+  size?: number;
+  /** Direct children (dirs only, within the server depth cap). */
+  children?: FsTreeNode[];
+  /** True when this directory held more entries than the server cap. */
+  truncated?: boolean;
+}
+
+/**
+ * Fetch the directory tree below `path` (must sit under an authorized
+ * workspace root — the config root or a session workspaceRoot). Omit the
+ * path to browse the default workspace root.
+ */
+export async function fetchFsTree(path?: string): Promise<FsTreeNode> {
+  const query = path !== undefined && path !== '' ? `?path=${encodeURIComponent(path)}` : '';
+  return request<FsTreeNode>(`/api/fs/tree${query}`);
+}
+
 export async function saveConfig(patch: ConfigValue): Promise<ConfigValue> {
   return request<ConfigValue>('/api/config', jsonInit('PUT', patch));
 }

@@ -16,6 +16,7 @@ import { createSessionsRouter } from './api/sessions.js';
 import { createApprovalsRouter } from './api/approvals.js';
 import { createKeysRouter } from './api/keys.js';
 import { createConfigRouter } from './api/config.js';
+import { createFsRouter } from './api/fs.js';
 
 /**
  * WebUI backend (PLAN Task 17, SPEC §5.1): an Express HTTP server with a
@@ -133,6 +134,18 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
   app.use(
     '/api/config',
     createConfigRouter({ config: deps.config, persistConfig: deps.persistConfig }),
+  );
+  // Task 23: fs browsing (directory picker / file tree). Allowed roots = the
+  // config workspace root plus every known session workspaceRoot, queried
+  // live so sessions created after mount stay browseable.
+  app.use(
+    '/api/fs',
+    createFsRouter({
+      getAllowedRoots: () => [
+        deps.config.agent.workspaceRoot,
+        ...deps.sessionStore.list().map((session) => session.workspaceRoot),
+      ],
+    }),
   );
 
   // Unknown API paths → JSON 404 (never the HTML default)

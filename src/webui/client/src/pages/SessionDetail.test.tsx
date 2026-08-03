@@ -14,6 +14,7 @@ vi.mock('../lib/api', () => ({
   sessionControl: vi.fn(),
   resolveApproval: vi.fn(),
   fetchConfig: vi.fn().mockResolvedValue({ model: 'deepseek-v4-pro', guardrails: { requireApproval: ['prod'], blockOutbound: true } }),
+  fetchFsTree: vi.fn(),
 }));
 
 vi.mock('../lib/ws-source', () => ({
@@ -27,6 +28,7 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 import {
+  fetchFsTree,
   fetchSession,
   postMessage,
   resolveApproval,
@@ -38,6 +40,7 @@ const fetchSessionMock = vi.mocked(fetchSession);
 const postMessageMock = vi.mocked(postMessage);
 const sessionControlMock = vi.mocked(sessionControl);
 const resolveApprovalMock = vi.mocked(resolveApproval);
+const fetchFsTreeMock = vi.mocked(fetchFsTree);
 const createSourceMock = vi.mocked(createWebSocketEventSource);
 
 class FakeSource implements SessionEventSource {
@@ -88,6 +91,32 @@ const SESSION: SessionDetailData = {
   ],
 };
 
+/** Workspace tree served by fetchFsTree for SESSION.workspaceRoot. */
+const FS_TREE = {
+  path: '/repo/auth-app',
+  name: 'auth-app',
+  type: 'dir' as const,
+  children: [
+    {
+      path: '/repo/auth-app/src',
+      name: 'src',
+      type: 'dir' as const,
+      children: [
+        {
+          path: '/repo/auth-app/src/auth',
+          name: 'auth',
+          type: 'dir' as const,
+          children: [
+            { path: '/repo/auth-app/src/auth/token.ts', name: 'token.ts', type: 'file' as const, size: 204 },
+          ],
+        },
+        { path: '/repo/auth-app/src/index.ts', name: 'index.ts', type: 'file' as const, size: 60 },
+      ],
+    },
+    { path: '/repo/auth-app/package.json', name: 'package.json', type: 'file' as const, size: 300 },
+  ],
+};
+
 function renderDetail(session = SESSION) {
   fetchSessionMock.mockResolvedValue(session);
   return render(
@@ -108,6 +137,10 @@ describe('SessionDetail', () => {
     postMessageMock.mockReset();
     sessionControlMock.mockReset();
     resolveApprovalMock.mockReset();
+    fetchFsTreeMock.mockReset();
+    // The left column always fetches the workspace tree; default to the
+    // standard fixture so every test renders without stubbing.
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
     createSourceMock.mockReset();
     createSourceMock.mockImplementation(() => {
       source = new FakeSource();
@@ -148,17 +181,47 @@ describe('SessionDetail', () => {
     expect(screen.getByText('/repo/auth-app')).toBeInTheDocument();
   });
 
-  it('aggregates the file list in the left column and opens a Monaco diff for the selected file', async () => {
+  it('renders the workspace file tree, marks changed files and opens the diff preview (Task 23)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
     renderDetail();
 
-    const fileItem = await screen.findByText('src/auth/token.ts');
-    expect(fileItem).toBeInTheDocument();
+    // The tree is fetched for the session workspaceRoot; the root is
+    // auto-expanded so the first level is visible immediately.
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledWith('/repo/auth-app');
+    });
+    expect(await screen.findByText('src')).toBeInTheDocument();
+    expect(screen.getByText('package.json')).toBeInTheDocument();
+
+    // Expanding directories reveals deeper levels.
+    await userEvent.click(screen.getByRole('button', { name: '展开 src' }));
+    expect(await screen.findByText('auth')).toBeInTheDocument();
+    expect(screen.getByText('index.ts')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '展开 auth' }));
+    const changed = await screen.findByText('token.ts');
+    expect(changed).toBeInTheDocument();
+
+    // The touched file carries the A mark + line counts; only one mark exists.
     expect(screen.getByText('A')).toBeInTheDocument();
     expect(screen.getByText('+84')).toBeInTheDocument();
     expect(screen.getByText('−32')).toBeInTheDocument();
 
-    await userEvent.click(fileItem);
+    // Selecting the file still opens the Monaco diff preview with its output.
+    await userEvent.click(changed);
     expect(await screen.findByLabelText('diff-editor')).toHaveValue('applied 2 edits · +84 −32');
+  });
+
+  it('collapses expanded directories in the file tree (Task 23)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    expect(await screen.findByText('src')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '展开 src' }));
+    expect(await screen.findByText('auth')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '折叠 src' }));
+    expect(screen.queryByText('auth')).not.toBeInTheDocument();
+    expect(screen.getByText('package.json')).toBeInTheDocument();
   });
 
   it('sends a composer message, appends it locally and dedupes the WS broadcast', async () => {

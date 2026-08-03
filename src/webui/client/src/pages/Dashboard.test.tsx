@@ -9,13 +9,15 @@ vi.mock('../lib/api', () => ({
   fetchSessions: vi.fn(),
   createSession: vi.fn(),
   fetchConfig: vi.fn(),
+  fetchFsTree: vi.fn(),
 }));
 
-import { createSession, fetchConfig, fetchSessions } from '../lib/api';
+import { createSession, fetchConfig, fetchFsTree, fetchSessions } from '../lib/api';
 
 const fetchSessionsMock = vi.mocked(fetchSessions);
 const createSessionMock = vi.mocked(createSession);
 const fetchConfigMock = vi.mocked(fetchConfig);
+const fetchFsTreeMock = vi.mocked(fetchFsTree);
 
 const RUNNING = {
   id: 's_8f3a21',
@@ -57,7 +59,56 @@ describe('Dashboard', () => {
     fetchSessionsMock.mockReset();
     createSessionMock.mockReset();
     fetchConfigMock.mockReset();
+    fetchFsTreeMock.mockReset();
     fetchConfigMock.mockResolvedValue({}); // no agent.workspaceRoot by default
+  });
+
+  it('browses the workspace tree in the directory picker and fills 工作目录 (Task 23)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    const rootTree = {
+      path: '/repo',
+      name: 'repo',
+      type: 'dir' as const,
+      children: [
+        { path: '/repo/src', name: 'src', type: 'dir' as const, children: [] },
+        { path: '/repo/README.md', name: 'README.md', type: 'file' as const, size: 8 },
+      ],
+    };
+    const srcTree = {
+      path: '/repo/src',
+      name: 'src',
+      type: 'dir' as const,
+      children: [{ path: '/repo/src/auth', name: 'auth', type: 'dir' as const, children: [] }],
+    };
+    fetchFsTreeMock.mockResolvedValueOnce(rootTree).mockResolvedValueOnce(srcTree);
+    renderDashboard();
+    await screen.findByText(/还没有会话/);
+
+    await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: '浏览…' }));
+
+    // Picker opens on the server default root (no path arg) and renders the tree.
+    const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
+    expect(fetchFsTreeMock.mock.calls[0]).toEqual([]);
+    expect(await within(picker).findByText('src')).toBeInTheDocument();
+    expect(within(picker).getByText('README.md')).toBeInTheDocument();
+
+    // Expanding a directory lazily fetches its children.
+    await userEvent.click(within(picker).getByRole('button', { name: '展开 src' }));
+    expect(fetchFsTreeMock).toHaveBeenCalledWith('/repo/src');
+    expect(await within(picker).findByText('auth')).toBeInTheDocument();
+
+    // Selecting a directory fills the input and closes the picker.
+    await userEvent.click(within(picker).getByText('src'));
+    expect(screen.getByLabelText('工作目录')).toHaveValue('/repo/src');
+    expect(screen.queryByRole('dialog', { name: '选择工作目录' })).not.toBeInTheDocument();
+
+    // Manual editing still works after picking.
+    const rootInput = screen.getByLabelText('工作目录');
+    await userEvent.clear(rootInput);
+    await userEvent.type(rootInput, '/repo/manual');
+    expect(rootInput).toHaveValue('/repo/manual');
   });
 
   it('renders the session list with id, task, badge, rounds, duration and tokens', async () => {

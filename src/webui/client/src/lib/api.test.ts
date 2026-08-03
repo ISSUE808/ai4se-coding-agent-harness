@@ -3,6 +3,7 @@ import {
   createSession,
   deleteKey,
   fetchConfig,
+  fetchFsTree,
   fetchSession,
   fetchSessions,
   getKeyStatus,
@@ -186,5 +187,22 @@ describe('api client', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(new URL(url).pathname).toBe('/api/approvals/s_1');
     expect(JSON.parse(init.body)).toEqual({ decision: 'modify', modifiedCommand: 'npm run migrate -- --dry-run' });
+  });
+
+  it('fetchFsTree GETs /api/fs/tree with the query path and returns the node', async () => {
+    const tree = { path: '/repo/src', name: 'src', type: 'dir', children: [] };
+    fetchMock.mockResolvedValue(jsonResponse(tree));
+    const result = await fetchFsTree('/repo/src');
+    expect(result).toEqual(tree);
+    const [url] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/fs/tree');
+    expect(new URL(url).searchParams.get('path')).toBe('/repo/src');
+  });
+
+  it('fetchFsTree omits the query when path is undefined (server default root)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ path: '/repo', name: 'repo', type: 'dir' }));
+    await fetchFsTree();
+    expect(lastPath()).toBe('/api/fs/tree');
+    expect(new URL(fetchMock.mock.calls[0][0]).search).toBe('');
   });
 });

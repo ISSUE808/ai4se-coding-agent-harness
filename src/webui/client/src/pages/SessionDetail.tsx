@@ -13,6 +13,10 @@ import { Link, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
+  ChevronRight,
+  File,
+  Folder,
+  FolderOpen,
   Loader2,
   Pause,
   Play,
@@ -31,17 +35,24 @@ import FileDiff from '../components/FileDiff';
 import { useSessionEvents } from '../hooks/useSessionEvents';
 import {
   fetchConfig,
+  fetchFsTree,
   fetchSession,
   postMessage,
   resolveApproval,
   sessionControl,
   type ApprovalDecision,
   type ConfigValue,
+  type FsTreeNode,
   type SessionControlAction,
   type SessionDetail,
 } from '../lib/api';
 import { formatTokens, type SessionStatus } from '../lib/format';
-import { aggregateFiles, contentForFile, formatDateTime } from '../lib/session-messages';
+import {
+  aggregateFiles,
+  contentForFile,
+  formatDateTime,
+  type FileEntry,
+} from '../lib/session-messages';
 
 type Phase = 'loading' | 'ready' | 'error';
 
@@ -185,7 +196,57 @@ export default function SessionDetail() {
   // ─── Files column ──────────────────────────────────────────────────────────
 
   const files = aggregateFiles(events.messages);
+  // Changed-file marks (A/M) overlaid on the workspace tree (Task 23).
+  // Tool metadata reports paths relative to the workspace root while fs tree
+  // nodes carry absolute paths — join against the root and normalize
+  // separators so the overlay matches on every platform.
+  const fileMarks = new Map(
+    files.map((f) => [normalizePath(absoluteWithin(session?.workspaceRoot ?? '', f.path)), f] as const),
+  );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  // Task 23: workspace file tree in the left column, fetched once per session
+  // from the fs endpoint (bounded to the session workspaceRoot).
+  const [tree, setTree] = useState<FsTreeNode | null>(null);
+  const [treeError, setTreeError] = useState<string | null>(null);
+  const [treeExpanded, setTreeExpanded] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+    let cancelled = false;
+    fetchFsTree(session.workspaceRoot)
+      .then((node) => {
+        if (cancelled) {
+          return;
+        }
+        setTree(node);
+        setTreeError(null);
+        // Root starts expanded so the first level is visible immediately.
+        setTreeExpanded((prev) => new Set(prev).add(node.path));
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setTreeError(err instanceof Error ? err.message : '无法加载文件树');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  function toggleTreeDir(dirPath: string): void {
+    setTreeExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) {
+        next.delete(dirPath);
+      } else {
+        next.add(dirPath);
+      }
+      return next;
+    });
+  }
 
   const toolCallCount = events.messages.filter((m) => m.role === 'tool').length;
 
@@ -408,85 +469,45 @@ export default function SessionDetail() {
           <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
             {leftTab === 'files' ? (
               <>
-                {files.length === 0 && (
-                  <div style={{ padding: designTokens.spacing[6], textAlign: 'center', color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
-                    暂无文件变更
-                  </div>
-                )}
-                {files.map((file) => (
-                  <button
-                    key={file.path}
-                    type="button"
-                    onClick={() => setSelectedPath(file.path)}
+                {treeError !== null && (
+                  <div
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      width: '100%',
-                      padding: `${designTokens.spacing[2]} ${designTokens.spacing[4]}`,
-                      border: 'none',
-                      borderBottomWidth: 1,
-                      borderBottomStyle: 'solid',
-                      borderBottomColor: designTokens.colors.border,
-                      background:
-                        selectedPath === file.path
-                          ? designTokens.colors.primarySoft
-                          : 'transparent',
-                      boxShadow:
-                        selectedPath === file.path
-                          ? `inset 2px 0 0 ${designTokens.colors.primary}`
-                          : 'none',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      fontFamily: designTokens.typography.fontFamily.sans,
+                      padding: designTokens.spacing[5],
+                      textAlign: 'center',
+                      color: designTokens.colors.danger,
+                      fontSize: designTokens.typography.fontSize.sm,
                     }}
                   >
-                    <span
-                      style={{
-                        display: 'grid',
-                        placeItems: 'center',
-                        width: 18,
-                        height: 18,
-                        borderRadius: designTokens.radius.sm,
-                        fontFamily: designTokens.typography.fontFamily.mono,
-                        fontSize: designTokens.typography.fontSize.xs,
-                        fontWeight: designTokens.typography.fontWeight.semibold,
-                        flexShrink: 0,
-                        color: markColor(file.mark).fg,
-                        background: markColor(file.mark).bg,
-                      }}
-                    >
-                      {file.mark}
-                    </span>
-                    <span
-                      style={{
-                        fontFamily: designTokens.typography.fontFamily.mono,
-                        fontSize: designTokens.typography.codeSize.md,
-                        color: designTokens.colors.text,
-                        flex: 1,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {file.path}
-                    </span>
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        gap: 6,
-                        fontFamily: designTokens.typography.fontFamily.mono,
-                        fontSize: designTokens.typography.fontSize.xs,
-                      }}
-                    >
-                      {file.addCount > 0 && <span style={{ color: designTokens.colors.success }}>+{file.addCount}</span>}
-                      {file.delCount > 0 && <span style={{ color: designTokens.colors.danger }}>−{file.delCount}</span>}
-                    </span>
-                  </button>
-                ))}
+                    无法加载文件树 — {treeError}
+                  </div>
+                )}
+                {treeError === null && tree === null && (
+                  <div style={{ padding: designTokens.spacing[6], textAlign: 'center', color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                    加载文件树…
+                  </div>
+                )}
+                {tree !== null && treeError === null && (
+                  <>
+                    {Array.isArray(tree.children) && tree.children.length === 0 && (
+                      <div style={{ padding: designTokens.spacing[6], textAlign: 'center', color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                        工作目录为空
+                      </div>
+                    )}
+                    {renderFileTreeNode(tree, 0, treeExpanded, fileMarks, selectedPath, setSelectedPath, toggleTreeDir)}
+                  </>
+                )}
                 {selectedPath !== null && (
-                  <div style={{ padding: designTokens.spacing[3] }}>
-                    <FileDiff path={selectedPath} content={contentForFile(events.messages, selectedPath)} />
+                  <div style={{ padding: designTokens.spacing[3], borderTopWidth: 1, borderTopStyle: 'solid', borderTopColor: designTokens.colors.border }}>
+                    {/* Tool metadata reports paths relative to the workspace
+                        root; strip the root prefix so the diff content (and
+                        the Monaco language hint) resolve correctly. */}
+                    <FileDiff
+                      path={selectedPath}
+                      content={contentForFile(
+                        events.messages,
+                        relativeToRoot(session?.workspaceRoot ?? '', selectedPath),
+                      )}
+                    />
                   </div>
                 )}
               </>
@@ -935,6 +956,222 @@ function markColor(mark: string): { fg: string; bg: string } {
     default:
       return { fg: designTokens.colors.warning, bg: designTokens.colors.warningSoft };
   }
+}
+
+/**
+ * Recursive workspace file tree (Task 23): directories expand/collapse via
+ * chevrons; files carry the A/M change badge + line counts when touched, and
+ * selecting one opens the diff preview. Indentation scales per depth.
+ */
+function renderFileTreeNode(
+  node: FsTreeNode,
+  depth: number,
+  treeExpanded: Set<string>,
+  fileMarks: Map<string, FileEntry>,
+  selectedPath: string | null,
+  onSelect: (path: string) => void,
+  onToggleDir: (path: string) => void,
+): ReactNode {
+  const isExpanded = treeExpanded.has(node.path);
+  const children =
+    node.type === 'dir' && Array.isArray(node.children) ? node.children : [];
+  const mark = node.type === 'file' ? fileMarks.get(normalizePath(node.path)) : undefined;
+  const markStyle = mark ? markColor(mark.mark) : undefined;
+
+  return (
+    <div key={node.path}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: designTokens.spacing[1],
+          paddingLeft: `calc(${depth} * ${designTokens.spacing[3]})`,
+          paddingRight: designTokens.spacing[2],
+          paddingBlock: designTokens.spacing[0],
+          minHeight: 26,
+          borderRadius: designTokens.radius.sm,
+          background:
+            node.type === 'file' && selectedPath === node.path
+              ? designTokens.colors.primarySoft
+              : 'transparent',
+          boxShadow:
+            node.type === 'file' && selectedPath === node.path
+              ? `inset 2px 0 0 ${designTokens.colors.primary}`
+              : 'none',
+        }}
+      >
+        {node.type === 'dir' ? (
+          children.length > 0 ? (
+            <button
+              type="button"
+              aria-label={isExpanded ? `折叠 ${node.name}` : `展开 ${node.name}`}
+              onClick={() => onToggleDir(node.path)}
+              style={treeChevronStyle}
+            >
+              <ChevronRight
+                size={12}
+                style={{ transform: isExpanded ? 'rotate(90deg)' : undefined, transition: 'transform 0.12s' }}
+              />
+            </button>
+          ) : (
+            <span style={treeSpacerStyle} />
+          )
+        ) : (
+          <span style={treeSpacerStyle} />
+        )}
+        {node.type === 'dir' ? (
+          isExpanded ? (
+            <FolderOpen size={13} style={{ color: designTokens.colors.textMuted, flexShrink: 0 }} />
+          ) : (
+            <Folder size={13} style={{ color: designTokens.colors.textMuted, flexShrink: 0 }} />
+          )
+        ) : (
+          <File size={13} style={{ color: designTokens.colors.textSubtle, flexShrink: 0 }} />
+        )}
+        {node.type === 'file' ? (
+          <button
+            type="button"
+            onClick={() => onSelect(node.path)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: designTokens.spacing[1],
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontFamily: designTokens.typography.fontFamily.sans,
+              padding: `${designTokens.spacing[0]} ${designTokens.spacing[1]}`,
+              borderRadius: designTokens.radius.sm,
+              overflow: 'hidden',
+            }}
+          >
+            {mark !== undefined && markStyle !== undefined && (
+              <span
+                style={{
+                  display: 'grid',
+                  placeItems: 'center',
+                  width: 16,
+                  height: 16,
+                  borderRadius: designTokens.radius.sm,
+                  fontFamily: designTokens.typography.fontFamily.mono,
+                  fontSize: designTokens.typography.fontSize.xs,
+                  fontWeight: designTokens.typography.fontWeight.semibold,
+                  flexShrink: 0,
+                  color: markStyle.fg,
+                  background: markStyle.bg,
+                }}
+              >
+                {mark.mark}
+              </span>
+            )}
+            <span
+              style={{
+                fontFamily: designTokens.typography.fontFamily.mono,
+                fontSize: designTokens.typography.codeSize.md,
+                color: designTokens.colors.text,
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {node.name}
+            </span>
+            <span
+              style={{
+                display: 'inline-flex',
+                gap: designTokens.spacing[1],
+                fontFamily: designTokens.typography.fontFamily.mono,
+                fontSize: designTokens.typography.fontSize.xs,
+                flexShrink: 0,
+              }}
+            >
+              {mark !== undefined && mark.addCount > 0 && (
+                <span style={{ color: designTokens.colors.success }}>+{mark.addCount}</span>
+              )}
+              {mark !== undefined && mark.delCount > 0 && (
+                <span style={{ color: designTokens.colors.danger }}>−{mark.delCount}</span>
+              )}
+            </span>
+          </button>
+        ) : (
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontFamily: designTokens.typography.fontFamily.mono,
+              fontSize: designTokens.typography.codeSize.md,
+              color: designTokens.colors.text,
+            }}
+          >
+            {node.name}
+          </span>
+        )}
+        {node.truncated === true && (
+          <span style={{ flexShrink: 0, fontSize: designTokens.typography.fontSize.xs, color: designTokens.colors.warning }}>
+            …截断
+          </span>
+        )}
+      </div>
+      {node.type === 'dir' && isExpanded && children.length > 0 && (
+        <div>
+          {children.map((child) =>
+            renderFileTreeNode(child, depth + 1, treeExpanded, fileMarks, selectedPath, onSelect, onToggleDir),
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const treeChevronStyle: CSSProperties = {
+  display: 'grid',
+  placeItems: 'center',
+  width: 16,
+  height: 20,
+  border: 'none',
+  background: 'transparent',
+  color: designTokens.colors.textMuted,
+  cursor: 'pointer',
+  flexShrink: 0,
+  padding: 0,
+};
+
+const treeSpacerStyle: CSSProperties = {
+  width: 16,
+  flexShrink: 0,
+};
+
+/** Unify path separators (fs tree paths come from the server OS). */
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/** Absolute form of a tool-reported path (relative → joined to the root). */
+function absoluteWithin(root: string, rel: string): string {
+  if (rel.startsWith('/') || /^[A-Za-z]:[\\/]/.test(rel)) {
+    return rel;
+  }
+  return `${root.replace(/[\\/]+$/, '')}/${rel}`;
+}
+
+/** Relative form of a tree path (under the root), else unchanged. */
+function relativeToRoot(root: string, abs: string): string {
+  const nRoot = normalizePath(root);
+  const nAbs = normalizePath(abs);
+  if (nAbs === nRoot) {
+    return '';
+  }
+  if (nAbs.startsWith(`${nRoot}/`)) {
+    return nAbs.slice(nRoot.length + 1);
+  }
+  return nAbs;
 }
 
 function formatDurationBetween(fromIso: string, toIso: string): string {

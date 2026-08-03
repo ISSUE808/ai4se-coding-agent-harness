@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, Loader2, Pause, Play, Plus, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, ChevronRight, FolderOpen, Loader2, Pause, Play, Plus, RefreshCw, X } from 'lucide-react';
 import designTokens from '../design-tokens';
 import { createSession, fetchConfig, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
 import { formatDuration, formatTokens } from '../lib/format';
 import StatusBadge from '../components/StatusBadge';
+import DirectoryPicker from '../components/DirectoryPicker';
 
 type Phase = 'loading' | 'ready' | 'error';
 
@@ -591,6 +592,8 @@ function NewSessionModal({
   const [roundsText, setRoundsText] = useState('40');
   // 工作目录 (Task 19): defaults to the current config workspaceRoot, editable.
   const [workspaceRoot, setWorkspaceRoot] = useState('');
+  // Task 23: graphical directory picker over GET /api/fs/tree.
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -725,13 +728,25 @@ function NewSessionModal({
           >
             工作目录
           </label>
-          <input
-            id="new-session-workspace-root"
-            value={workspaceRoot}
-            onChange={(e) => setWorkspaceRoot(e.target.value)}
-            placeholder="agent 在此目录中执行工具（默认：当前工作区）"
-            style={{ ...inputStyle, fontFamily: designTokens.typography.fontFamily.mono }}
-          />
+          <div style={{ display: 'flex', gap: designTokens.spacing[2], alignItems: 'flex-start' }}>
+            <input
+              id="new-session-workspace-root"
+              value={workspaceRoot}
+              onChange={(e) => setWorkspaceRoot(e.target.value)}
+              placeholder="agent 在此目录中执行工具（默认：当前工作区）"
+              style={{ ...inputStyle, fontFamily: designTokens.typography.fontFamily.mono, flex: 1 }}
+            />
+            {/* Task 23: graphical directory browsing (picker fetches the fs tree). */}
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              title="浏览目录"
+              aria-label="浏览…"
+              style={browseButtonStyle}
+            >
+              <FolderOpen size={14} />
+            </button>
+          </div>
           <span
             style={{
               display: 'block',
@@ -740,7 +755,7 @@ function NewSessionModal({
               color: designTokens.colors.textMuted,
             }}
           >
-            文件读写、命令与护栏越界检查均以此目录为边界。
+            文件读写、命令与护栏越界检查均以此目录为边界。可直接输入，或用浏览选择。
           </span>
 
           <label
@@ -822,6 +837,16 @@ function NewSessionModal({
             创建并启动
           </button>
         </div>
+
+        {pickerOpen && (
+          <DirectoryPicker
+            onSelect={(picked) => {
+              setWorkspaceRoot(picked);
+              setPickerOpen(false);
+            }}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
       </div>
     </div>
   );
@@ -999,4 +1024,20 @@ const inputStyle: CSSProperties = {
   fontSize: designTokens.typography.fontSize.base,
   fontFamily: designTokens.typography.fontFamily.sans,
   resize: 'vertical',
+};
+
+/** Task 23: folder button that opens the directory picker. */
+const browseButtonStyle: CSSProperties = {
+  display: 'grid',
+  placeItems: 'center',
+  width: 34,
+  height: 34,
+  flexShrink: 0,
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.borderStrong,
+  background: designTokens.colors.surface,
+  color: designTokens.colors.textMuted,
+  cursor: 'pointer',
 };
