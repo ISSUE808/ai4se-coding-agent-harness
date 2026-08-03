@@ -33,6 +33,11 @@ export interface KeyProviderStatus {
 export interface KeyListResponse {
   /** Every provider that has a credential in the store (Task 25). */
   providers: KeyProviderStatus[];
+  /**
+   * Active credential backend name (keytar | encrypted-file | env | memory).
+   * 'env' is read-only — the UI shows a hint when it is active (reviewer M4).
+   */
+  backend?: string;
 }
 
 export interface KeySaveResponse {
@@ -168,15 +173,21 @@ export async function fetchKeys(): Promise<KeyListResponse> {
 }
 
 export async function getKeyStatus(provider: string): Promise<KeyStatus> {
-  return request<KeyStatus>(`/api/keys/${provider}`);
+  return request<KeyStatus>(`/api/keys/${encodeURIComponent(provider)}`);
 }
 
 export async function saveKey(provider: string, apiKey: string): Promise<KeySaveResponse> {
-  return request<KeySaveResponse>(`/api/keys/${provider}`, jsonInit('POST', { apiKey }));
+  return request<KeySaveResponse>(
+    `/api/keys/${encodeURIComponent(provider)}`,
+    jsonInit('POST', { apiKey }),
+  );
 }
 
 export async function deleteKey(provider: string): Promise<KeyDeleteResponse> {
-  return request<KeyDeleteResponse>(`/api/keys/${provider}`, { method: 'DELETE' });
+  return request<KeyDeleteResponse>(
+    `/api/keys/${encodeURIComponent(provider)}`,
+    { method: 'DELETE' },
+  );
 }
 
 // ─── Config (masked merged config in every response) ────────────────────────

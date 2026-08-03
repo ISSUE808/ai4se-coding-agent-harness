@@ -126,6 +126,16 @@ function shellWritesOutside(command: string, workspaceRoot: string): string | nu
   return null;
 }
 
+/**
+ * Network-outbound shell commands matched by config.guardrails.blockOutbound
+ * (Task 25). Reuses the idea behind PatternGuard's `outbound_network` /
+ * `remote_access` warn rules (curl/wget/ssh/scp) and extends it to common
+ * outbound tools PatternGuard does NOT warn on (git remote ops, rsync, …) —
+ * the config switch must be meaningful ON TOP of PatternGuard, not a
+ * duplicate of it.
+ */
+const NETWORK_OUTBOUND_RE = /\b(?:curl|wget|ssh|scp|rsync|telnet|ftp|ping|git\s+(?:fetch|pull|push|clone))\s+/;
+
 interface GuardSet {
   patternGuard: PatternGuard;
   scopeFence: ScopeFence;
@@ -601,6 +611,14 @@ export class AgentLoop {
         });
         return { blocked: true, needsApproval: false, reason: guardResult.rule ?? 'unknown' };
       }
+      // Task 25 config guardrails overlay — an ADDITIVE layer ON TOP of
+      // PatternGuard. BLOCK rules still win; the overlay runs before the WARN
+      // path so blockOutbound/requireApproval can demand a fresh human
+      // decision even for a command PatternGuard already approved.
+      const configReason = this.matchConfigGuardrails(command);
+      if (configReason !== null) {
+        return this.requestApprovalFromConfig(action, configReason, command);
+      }
       if (guardResult.level === 'warn') {
         // The LLM may re-issue an already-approved command (it does not always
         // realize the harness executed it) — pass it without a second prompt.
@@ -698,6 +716,56 @@ export class AgentLoop {
     }
 
     return { blocked: false, needsApproval: false };
+  }
+
+  /**
+   * Match a shell command against config.guardrails (Task 25). Returns the
+   * approval reason, or null when the config does not flag the command.
+   * Matching semantics (documented in src/types.ts Config.guardrails):
+   * `blockOutbound` matches known network-outbound tools via
+   * NETWORK_OUTBOUND_RE; each `requireApproval` rule is a case-sensitive
+   * substring of the command.
+   */
+  private matchConfigGuardrails(command: string): string | null {
+    const guardrails = this.config.guardrails;
+    if (guardrails?.blockOutbound === true && NETWORK_OUTBOUND_RE.test(command)) {
+      return 'Network outbound blocked by guardrails config (blockOutbound)';
+    }
+    if (Array.isArray(guardrails?.requireApproval)) {
+      for (const rule of guardrails.requireApproval) {
+        if (typeof rule === 'string' && rule.length > 0 && command.includes(rule)) {
+          return `Command matches guardrail rule "${rule}" (requireApproval)`;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Request approval for a config-guardrails hit. Unlike requestApprovalFor,
+   * this deliberately SKIPS the session approval cache: the config switch
+   * (blockOutbound/requireApproval) demands a fresh human decision per
+   * matching command — stricter than PatternGuard warn, which passes an
+   * already-approved command through.
+   */
+  private requestApprovalFromConfig(
+    action: Action,
+    reason: string,
+    command: string,
+  ): { blocked: boolean; needsApproval: boolean; reason: string } {
+    this.events.emit('guardrail:triggered', { rule: reason, command, level: 'warn' });
+    try {
+      this.guard.hitl.requestApproval(command, {
+        tool: action.tool,
+        params: action.params,
+        id: action.id,
+      });
+    } catch {
+      // HITL already in another state — treat as blocked so the stale
+      // pendingCommand is not silently overwritten.
+      return { blocked: true, needsApproval: false, reason: `HITL busy: ${reason}` };
+    }
+    return { blocked: true, needsApproval: true, reason: `HITL required: ${reason}` };
   }
 
   /** Request approval for an operation, emitting the guardrail event. */

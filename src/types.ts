@@ -119,6 +119,20 @@ export interface Config {
     warnlist: string[];
     downgrade: Record<string, 'allow'>;
   };
+  /**
+   * WebUI-editable guardrail switches (PLAN Task 25, edited in Settings →
+   * 模型与护栏). Optional — when absent the guardrail pipeline runs purely
+   * on PatternGuard/ScopeFence/HITL rules. When present it is an ADDITIVE
+   * overlay (main-loop runGuardrails): `blockOutbound` flags network-outbound
+   * shell commands (curl/wget/ssh/scp/git push …) for a human decision, and
+   * each `requireApproval` rule is matched as a case-sensitive substring of a
+   * shell command. Matched commands pause for approval even when PatternGuard
+   * allows or has previously approved them.
+   */
+  guardrails?: {
+    requireApproval?: string[];
+    blockOutbound?: boolean;
+  };
   shell: {
     timeoutSeconds: number;
   };

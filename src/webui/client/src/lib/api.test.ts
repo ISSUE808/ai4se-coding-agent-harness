@@ -99,6 +99,19 @@ describe('api client', () => {
     expect(init.method).toBe('DELETE');
   });
 
+  it('URL-encodes provider names in every key endpoint (reviewer M1)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ provider: 'x', status: 'not set' }));
+    const provider = 'groq/api key';
+    await getKeyStatus(provider);
+    await saveKey(provider, 'sk-plain');
+    await deleteKey(provider);
+    const paths = fetchMock.mock.calls.map((call) => new URL(call[0]).pathname);
+    const expected = '/api/keys/groq%2Fapi%20key';
+    expect(paths).toEqual([expected, expected, expected]);
+    // The raw provider name must never appear unencoded in a request path.
+    expect(paths.join('')).not.toContain('groq/api');
+  });
+
   it('fetchConfig GETs /api/config', async () => {
     const config = { llm: { provider: 'deepseek' } };
     fetchMock.mockResolvedValue(jsonResponse(config));

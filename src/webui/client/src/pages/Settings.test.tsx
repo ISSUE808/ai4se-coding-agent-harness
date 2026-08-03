@@ -132,7 +132,7 @@ describe('Settings', () => {
     expect(screen.queryByText('sk-secret-new')).not.toBeInTheDocument();
   });
 
-  it('deletes a key after confirmation', async () => {
+  it('deletes a key after confirmation and removes the row from the list (reviewer M2)', async () => {
     const user = userEvent.setup();
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     deleteKeyMock.mockResolvedValue({ provider: 'deepseek', removed: true });
@@ -145,7 +145,10 @@ describe('Settings', () => {
       expect(deleteKeyMock).toHaveBeenCalledWith('deepseek');
     });
     expect(confirmSpy).toHaveBeenCalled();
-    expect(await within(row('deepseek')).findByText('未设置密钥')).toBeInTheDocument();
+    // The row is removed from the dynamic list (matches GET /api/keys).
+    await waitFor(() => {
+      expect(screen.queryByTestId('key-row-deepseek')).not.toBeInTheDocument();
+    });
     confirmSpy.mockRestore();
   });
 
@@ -292,5 +295,30 @@ describe('Settings', () => {
 
     expect(await screen.findByText(/最大轮次必须为/)).toBeInTheDocument();
     expect(saveConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('模型与护栏 treats an EMPTY 最大轮次 as invalid — Number("") === 0 trap (reviewer M3)', async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    const rounds = await screen.findByLabelText('最大轮次');
+    await user.clear(rounds);
+    await user.click(screen.getByRole('button', { name: '保存设置' }));
+
+    expect(await screen.findByText(/最大轮次不能为空/)).toBeInTheDocument();
+    expect(saveConfigMock).not.toHaveBeenCalled();
+  });
+
+  it('shows a read-only hint when the credential backend is env (reviewer M4)', async () => {
+    fetchKeysMock.mockResolvedValue({ providers: [], backend: 'env' });
+    render(<Settings />);
+
+    expect(await screen.findByText(/当前为环境变量后端（只读）/)).toBeInTheDocument();
+  });
+
+  it('shows no env hint for the default keytar/file backends', async () => {
+    render(<Settings />);
+    await screen.findByText('****-9f2c');
+
+    expect(screen.queryByText(/环境变量后端/)).not.toBeInTheDocument();
   });
 });

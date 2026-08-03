@@ -447,6 +447,107 @@ describe('full integration — start --web wiring (Task 19)', () => {
     expect(executed.length).toBeGreaterThanOrEqual(1);
   });
 
+  describe('Task 25 guardrails config overlay (config.guardrails)', () => {
+    it('blockOutbound=true pauses a network-outbound command for approval, then resumes to completion', async () => {
+      // `git push origin main` is NOT flagged by PatternGuard (only
+      // `--force` is a warn rule) — the config switch must be the reason.
+      const cfg = makeConfig(configRoot, { maxRounds: 10 });
+      cfg.guardrails = { blockOutbound: true };
+      const mock = new MockProvider([
+        { toolCalls: [{ id: 'call_net', name: 'run_shell', arguments: { command: 'git push origin main' } }] },
+        { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+        { content: '任务完成。' },
+      ]);
+      const { sessionStore, web } = await makeHarness(cfg, mock);
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '推送' });
+      expect(created.status).toBe(201);
+      const id = created.body.id as string;
+
+      const paused = await waitForStatus(sessionStore, id, 'paused');
+      const guardMsg = paused.messages.find((m) => m.metadata?.approvalRequired === true);
+      expect(guardMsg).toBeDefined();
+      expect(guardMsg?.metadata?.guardrailRule).toContain('blockOutbound');
+
+      const approve = await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+      expect(approve.status).toBe(200);
+
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(
+        done.messages.some(
+          (m) => m.metadata?.toolName === 'read_file' && m.metadata?.toolResult?.success,
+        ),
+      ).toBe(true);
+    });
+
+    it('blockOutbound=true demands a FRESH decision even for a previously approved network command', async () => {
+      const cfg = makeConfig(configRoot, { maxRounds: 10 });
+      cfg.guardrails = { blockOutbound: true };
+      const mock = new MockProvider([
+        { toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'git push origin main' } }] },
+        { toolCalls: [{ id: 'c2', name: 'run_shell', arguments: { command: 'git push origin main' } }] },
+        { content: '任务完成。' },
+      ]);
+      const { sessionStore, web } = await makeHarness(cfg, mock);
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '推送两次' });
+      const id = created.body.id as string;
+
+      // First occurrence pauses.
+      await waitForStatus(sessionStore, id, 'paused');
+      await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+
+      // The SAME command again must still pause — the config switch overrides
+      // the session approval cache (PatternGuard warn would pass it through).
+      const second = await waitForStatus(sessionStore, id, 'paused');
+      expect(
+        second.messages.filter((m) => m.metadata?.approvalRequired === true),
+      ).toHaveLength(2);
+      await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.status).toBe('completed');
+    });
+
+    it('requireApproval pauses a command matching a listed rule (substring); non-matching commands run freely', async () => {
+      const cfg = makeConfig(configRoot, { maxRounds: 10 });
+      cfg.guardrails = { requireApproval: ['prod'] };
+      const mock = new MockProvider([
+        { toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'kubectl apply -f prod-deploy.yaml' } }] },
+        { toolCalls: [{ id: 'c2', name: 'run_shell', arguments: { command: 'kubectl apply -f dev-deploy.yaml' } }] },
+        { content: '任务完成。' },
+      ]);
+      const { sessionStore, web } = await makeHarness(cfg, mock);
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '部署' });
+      const id = created.body.id as string;
+
+      const paused = await waitForStatus(sessionStore, id, 'paused');
+      const guardMsg = paused.messages.find((m) => m.metadata?.approvalRequired === true);
+      expect(guardMsg?.metadata?.guardrailRule).toContain('requireApproval');
+      expect(guardMsg?.metadata?.guardrailRule).toContain('prod');
+      await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+
+      // The dev command does NOT contain 'prod' — it must execute unpaused.
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.messages.filter((m) => m.metadata?.approvalRequired === true)).toHaveLength(1);
+    });
+
+    it('no guardrails config → the same commands behave exactly as before (no config interception)', async () => {
+      const mock = new MockProvider([
+        { toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'git push origin main' } }] },
+        { content: '任务完成。' },
+      ]);
+      const { sessionStore, web } = await makeHarness(makeConfig(configRoot, { maxRounds: 10 }), mock);
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '推送' });
+      const id = created.body.id as string;
+
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.messages.filter((m) => m.metadata?.approvalRequired === true)).toHaveLength(0);
+    });
+  });
+
   it('a user message resumes a completed session — the agent continues (user feedback)', async () => {
     const mock = new MockProvider([
       // First run: text-only → completed immediately.

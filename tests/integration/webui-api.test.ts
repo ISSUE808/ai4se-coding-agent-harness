@@ -451,6 +451,20 @@ describe('REST /api/keys', () => {
     expect(empty.status).toBe(400);
   });
 
+  it('POST rejects a provider name outside [a-zA-Z0-9_-] with 400 (reviewer M1)', async () => {
+    const { web, credentialStore } = await makeFixture();
+    const dot = await request(web.app).post('/api/keys/invalid.name').send({ apiKey: 'sk-x' });
+    expect(dot.status).toBe(400);
+    expect(dot.body.error).toContain('Invalid provider name');
+    // %2F decodes to a slash; %20 to a space — both must be rejected.
+    const slash = await request(web.app).post('/api/keys/bad%2Fname').send({ apiKey: 'sk-x' });
+    expect(slash.status).toBe(400);
+    const space = await request(web.app).post('/api/keys/bad%20name').send({ apiKey: 'sk-x' });
+    expect(space.status).toBe(400);
+    // Nothing was stored.
+    expect(await credentialStore.status('codeharness/deepseek', 'invalid.name')).toBe('not set');
+  });
+
   it('DELETE removes the key; second DELETE is 404', async () => {
     const { web } = await makeFixture();
     await request(web.app).post('/api/keys/deepseek').send({ apiKey: 'sk-secret-abcd1' });
@@ -504,6 +518,36 @@ describe('REST /api/keys enumeration (Task 25: custom providers)', () => {
     await request(web.app).post('/api/keys/groq').send({ apiKey: 'sk-groq-5678' });
     await request(web.app).delete('/api/keys/groq');
     const res = await request(web.app).get('/api/keys');
+    expect(res.body.providers).toEqual([]);
+  });
+
+  it('GET /api/keys reports the active credential backend (env → read-only hint, reviewer M4)', async () => {
+    // A read-only backend that mirrors the EnvBackend semantics.
+    const envBackend: CredentialBackend = {
+      name: 'env',
+      async isAvailable() {
+        return true;
+      },
+      async save() {
+        throw new Error('read-only');
+      },
+      async read() {
+        return null;
+      },
+      async delete() {
+        throw new Error('read-only');
+      },
+      async exists() {
+        return false;
+      },
+      async list() {
+        return [];
+      },
+    };
+    const { web } = await makeFixture(undefined, envBackend);
+    const res = await request(web.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    expect(res.body.backend).toBe('env');
     expect(res.body.providers).toEqual([]);
   });
 });

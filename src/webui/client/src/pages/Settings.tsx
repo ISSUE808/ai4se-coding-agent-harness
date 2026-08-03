@@ -147,6 +147,7 @@ export default function Settings() {
 function KeyManagementCard() {
   const [providers, setProviders] = useState<string[] | null>(null);
   const [statuses, setStatuses] = useState<Record<string, string>>({});
+  const [backend, setBackend] = useState<string | undefined>(undefined);
   const [newProvider, setNewProvider] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
 
@@ -155,12 +156,24 @@ function KeyManagementCard() {
       const list = await fetchKeys();
       setStatuses(Object.fromEntries(list.providers.map((p) => [p.provider, p.status])));
       setProviders(list.providers.map((p) => p.provider));
+      setBackend(list.backend);
     } catch {
       // Backend unreachable — fall back to the well-known set (rows fetch
       // their own status via getKeyStatus).
       setProviders(DEFAULT_PROVIDERS);
+      setBackend(undefined);
     }
   }, []);
+
+  /** Remove a deleted provider from the dynamic list (reviewer M2). */
+  function removeProvider(provider: string): void {
+    setProviders((prev) => (prev === null ? prev : prev.filter((p) => p !== provider)));
+    setStatuses((prev) => {
+      const next = { ...prev };
+      delete next[provider];
+      return next;
+    });
+  }
 
   useEffect(() => {
     void load();
@@ -225,6 +238,18 @@ function KeyManagementCard() {
           单向写入，前端不保存明文。
         </p>
       </div>
+      {backend === 'env' && (
+        <div
+          style={{
+            padding: `${designTokens.spacing[3]} ${designTokens.spacing[5]}`,
+            background: designTokens.colors.warningSoft,
+            color: designTokens.colors.warning,
+            fontSize: designTokens.typography.fontSize.sm,
+          }}
+        >
+          当前为环境变量后端（只读）——密钥来自 CODEHARNESS_API_KEY，此处无法保存或删除。
+        </div>
+      )}
       <div>
         {providers === null ? (
           <div style={{ padding: designTokens.spacing[5], color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
@@ -236,6 +261,7 @@ function KeyManagementCard() {
               key={provider}
               provider={provider}
               initialStatus={statuses[provider]}
+              onDeleted={() => removeProvider(provider)}
             />
           ))
         )}
@@ -294,7 +320,16 @@ function logoColors(provider: string): { fg: string; bg: string } {
   }
 }
 
-function KeyRow({ provider, initialStatus }: { provider: string; initialStatus?: string }) {
+function KeyRow({
+  provider,
+  initialStatus,
+  onDeleted,
+}: {
+  provider: string;
+  initialStatus?: string;
+  /** Called after a successful delete so the parent drops the row (M2). */
+  onDeleted?: () => void;
+}) {
   const [status, setStatus] = useState<string | null>(initialStatus ?? null);
   const [editing, setEditing] = useState(false);
   const [keyText, setKeyText] = useState('');
@@ -346,8 +381,12 @@ function KeyRow({ provider, initialStatus }: { provider: string; initialStatus?:
     setBusy(true);
     try {
       await deleteKey(provider);
-      setStatus(NOT_SET);
+      // The credential is gone — the row no longer exists in GET /api/keys,
+      // so the parent removes it from the dynamic list (reviewer M2).
+      onDeleted?.();
     } catch {
+      // Delete failed (e.g. backend unreachable) — keep the row, refresh the
+      // status to what the store actually has.
       setStatus(NOT_SET);
     } finally {
       setBusy(false);
@@ -812,10 +851,15 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
   const [ruleError, setRuleError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'ok' | 'error' | 'saved'; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // The form must never render with unseeded (empty) values — the parent
+  // fetches the config asynchronously, so the form stays in the loading
+  // state until the seeding effect below has populated every field.
+  const [seeded, setSeeded] = useState(false);
 
-  // Seed the form once from GET /api/config (the parent fetches it on mount).
+  // Seed the form from GET /api/config (the parent fetches it on mount).
   useEffect(() => {
     if (config === null) {
+      setSeeded(false);
       return;
     }
     const seedLlm = asRecord(config.llm);
@@ -833,11 +877,18 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
         : [],
     );
     setBlockOutbound(seedGuardrails?.blockOutbound === true);
+    setSeeded(true);
   }, [config]);
 
   function validate(): FormValidation {
     if (model.trim() === '') {
       return { patch: {}, error: '模型名称不能为空' };
+    }
+    // Guard against the Number('') === 0 trap: an empty numeric field is a
+    // missing value, not "0" (reviewer M3 — 0 means unlimited for maxRounds,
+    // so the trap would silently turn a cleared field into "无上限").
+    if (maxRounds.trim() === '') {
+      return { patch: {}, error: '最大轮次不能为空' };
     }
     const tokens = Number(maxTokens);
     const rounds = Number(maxRounds);
@@ -933,7 +984,7 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
         </p>
       </div>
 
-      {config === null ? (
+      {config === null || !seeded ? (
         <div style={{ padding: designTokens.spacing[5], color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
           加载配置中…（请确认后端已启动）
         </div>
