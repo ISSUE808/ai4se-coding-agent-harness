@@ -90,6 +90,17 @@
 | PUT /api/config 接受明文密钥字段 | 400 拒绝 + 引导 /api/keys/:provider（SPEC §3.6） | Task 17 CR `6fe864d` |
 | TopBar `isActive` 作用域白屏 + 无壳级测试 | render prop 修复 + App.test.tsx（120 client 测试） | `ab7a932` |
 | CI 不跑 client 测试 | 新增 `webui-client` job（tests + build） | `ae024ca` |
+| 真实 API 协议 400（schema/tool_call_id/feedback 角色/配对顺序，4 个） | schema 转换 + id 贯穿 + feedback→system + 连续化稳定 | `be7c51a` `e584e27` `1598dc1` `c5fbaae` |
+| Windows shell 不兼容（cmd 不认 POSIX 命令/路径） | run_shell 用 Git Bash（存在时） | `f1ee861` |
+| eslint/tsc 环境前提（无配置时 npx 下载废弃包） | 无配置 → 跳过 | `1598dc1` `b1795eb` |
+| WS 广播截断（content substring 200，长消息实时截断） | 广播完整内容 | `3295dbb` |
+| 消息流卡片刷新后塌陷成线（flex-shrink + overflow hidden） | 子项 flexShrink: 0 | `07464ec` |
+| 行重叠（body 缺 line-height）+ 长 system 消息显示 | body 1.5 + SystemCard 折叠卡 | `ecdebb3` `e38bb6d` |
+| 批准卡刷新消失 / completed 后僵尸卡 | 快照重建（仅 paused）+ 后端存 command/rule | `ecdebb3` `f1ee861` |
+| completed 会话发消息无反应 | onMessageAdded → 恢复/中断注入 | `d320db5` |
+| **用户在场监督模式（Claude Code 式）**：工作区外读写确认、批准后工具结果原地替换、CLI stdin 交互、已批准命令记忆 | 监督模式全链路 | `5acf8bd` `d934b08` `0e3c972` 等 |
+| maxRounds 默认 3 太小 | 默认 0（无上限，参照 Claude Code --max-turns） | `553aa4d` |
+| config PUT 只查固定路径 + 报错路径误导 + 编辑器 token 残留 | 深度密钥字段拒绝 + 精确报错 + 编辑器剥离 token | `6190334` |
 
 ---
 

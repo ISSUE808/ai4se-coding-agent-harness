@@ -1094,8 +1094,14 @@ describe('Agent Main Loop (integration)', () => {
 - [x] **步骤 2：使用 MockProvider 进行完整集成测试**——`tests/integration/full-loop.test.ts`（真实 Express + WS + AgentLoop，仅 LLM MockProvider）：① 完成闭环；② HITL warn → API 批准 → 继续 → completed（+ 修复后新增：同进程第二次 warn 批准）；③ 反馈失败 3 次 → 升级暂停 → 批准后提高上限恢复（maxRounds = currentRound + maxRounds）→ completed；④ pause/resume/stop 真实控制（AbortSignal 轮级取消）
 - [x] **步骤 3：运行全部测试**——主项目 436/436 + client 123/123 + tsc + 双 build 通过（commit `d411349` 为两阶段评审修复：C1 HITL 回 IDLE / I1 升级恢复 / I2 控制端点真实化 / M1 --help 退出码）
 - [x] **步骤 4：提交**
+- [x] **步骤 5：真实 LLM 全流程测试 + 用户在场监督模式**（2026-08-02~03，用户主导测试 32 commits `be7c51a`~`c31bddc`）：
+  1. 真实 API 协议修复 4 个（schema 转换 / tool_call_id 链路 / feedback 角色 / 配对顺序稳定化）
+  2. Windows 环境适配（run_shell 用 Git Bash；eslint/tsc 前提跳过）；WS 广播截断；前端 flex/line-height/批准卡持久化/SystemCard
+  3. **用户在场监督模式（用户决策，Claude Code 式）**：工作区外读写 + 敏感路径 → 确认卡（WebUI）/ stdin 交互（CLI）；批准后**工具消息原地替换为真实执行结果**（LLM 只见正常工具结果，零中间态噪音）；已批准命令记忆防重复确认
+  4. completed 会话消息注入恢复；maxRounds 默认无上限（参照 Claude Code --max-turns 默认 Unlimited）；config PUT 深度密钥拒绝 + 精确报错
+  5. 验证：主项目 449/449 + client 123/123 + 双 build；CLI 2.1-2.4 / WebUI 3.1-3.6 / 会话级工作目录 / 安全验证全部通过
 
-提交：`feat: full integration — CLI --web mode, agent loop + WebUI in single process`（`860336b` + 评审修复 `d411349`）
+提交：`feat: full integration — CLI --web mode, agent loop + WebUI in single process`（`860336b` + 评审修复 `d411349` + 真实测试 32 commits）
 
 ---
 
