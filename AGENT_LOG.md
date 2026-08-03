@@ -451,3 +451,22 @@
   - **测试 fixture 与真实格式一致**：Mock fixture 没给 tool_call id 导致批准替换链路测试假失败——**fixture 必须反映真实协议结构**
   - **Windows shell 是系统性差异**：LLM 生成 POSIX 命令、cmd.exe 不兼容——run_shell 必须跑在 Git Bash（`'cat' is not recognized` 系列报错的根因）
   - **用户测试流程的价值**：20+ 修复全部由真实场景驱动（Console 脚本对比 DOM/API 内容定位广播截断、curl 手动批准区分前后端问题）——**系统化测试流程 + 数据定位是高效调试的组合**
+
+---
+
+## 2026-08-03 15:35 Task 23：fs 浏览端点 + 目录选择器 + 会话详情文件树（阶段 15 第一个任务）
+
+- **触发技能**：`test-driven-development`（subagent）、`requesting-code-review`（两阶段评审）
+- **Subagent**：`abf1da09`（实现 `9bba87c` + 评审修复 `3f0ee53`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：`GET /api/fs/tree` 目录树枚举（嵌套/类型/大小、授权边界、深度/数量/节点截断）；新建会话目录选择器弹窗；会话详情左栏工作目录文件树 + A/M 标记 + diff 预览保留；授权根集合设计（config 根 + 会话根并集，实时求值）
+- **产出**：
+  - Commit: `9bba87c`（+10 主项目测试、+4 client）+ `3f0ee53`（评审修复 +4/+4）
+  - 涉及文件: webui/api/fs.ts（新建）、components/DirectoryPicker.tsx（新建）、server.ts、api.ts、Dashboard.tsx、SessionDetail.tsx + 测试
+  - 测试: 主项目 449→463 + client 123→131；tsc 双 build + oxlint 干净
+- **评审**：0 CRITICAL；2 IMPORTANT + 4 Minor —— I1（中间 symlink/junction 越界，评审实测确认逃逸）→ realpath 规范化边界检查（RED 先复现漏洞）；I2（截断外变更文件不可达）→「变更文件 fallback 列表」；M4-M8 顺手修（StrictMode 重复请求/树重取依赖/Windows 大小写/全局节点预算/Escape 关闭）→ 复验 463+131 全绿 + 代码抽查
+- **人工干预**：无（评审结论与修复决策由主 agent 给出）
+- **教训**：
+  - **新网络面必须做真实边界验证**：词法 `isInside` + 末段 lstat 只防"直接 symlink"——junction/symlink **中间组件**逃逸需要 realpath 规范化才能封死。评审用实际 junction 复现了逃逸（200 枚举外部目录）——**安全边界检查不能只靠静态推理，要实证**
+  - **UI 功能回归的隐性代价**：文件树取代平铺变更列表后，截断/深度外的变更文件不可达——**替换 UI 时必须保留旧行为的可达性**（fallback 列表方案）
+  - **测试 fixture 必须贴近真实路径形态**：`filesChanged`（相对）vs 树节点（绝对）直接比对永不命中——subagent 自己抓到并修（absoluteWithin + 归一化）
+  - **全局节点预算**（maxNodes 5000）配合深度/每层上限才真正封死响应爆炸半径——三层防线
