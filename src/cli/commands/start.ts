@@ -40,6 +40,11 @@ import { defaultConfigOptions } from '../options.js';
 import { buildCredentialStore } from '../store.js';
 import { promptHidden, readKeyWithConfirm } from '../prompt.js';
 import { adviceFor } from '../errors.js';
+// Task 27: the REPL module reuses the CLI run semantics (streaming, HITL
+// approval, approved-action execution) — the module cycle with repl.ts is
+// safe: both sides only use the other's bindings inside function bodies.
+import { createTerminalReplIO, runRepl } from '../repl.js';
+import type { ReplIO } from '../repl.js';
 import { createWebUIServer } from '../../webui/server.js';
 import type { WebUIServer } from '../../webui/server.js';
 import { InMemorySessionStore } from '../../webui/session-store.js';
@@ -101,6 +106,10 @@ export interface StartCommandDeps {
    * natively via process.exit(0).
    */
   exitOverride?: boolean;
+  /** Task 27 REPL: injectable terminal I/O (tests drive stdin as a queue). */
+  io?: ReplIO;
+  /** Task 27 REPL: called when the REPL exits (tests assert the exit code). */
+  onExit?: (code: number) => void;
 }
 
 export interface RunStartTaskOptions {
@@ -117,7 +126,7 @@ export interface RunStartTaskOptions {
 }
 
 /** Read a y/n decision from stdin (CLI human-in-the-loop default). */
-function promptApproval(question: string): Promise<boolean> {
+export function cliPromptApproval(question: string): Promise<boolean> {
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(`${question}\n> `, (answer) => {
@@ -127,7 +136,7 @@ function promptApproval(question: string): Promise<boolean> {
   });
 }
 
-function formatMessageLine(data: HarnessEventMap['message:added']): string {
+export function formatMessageLine(data: HarnessEventMap['message:added']): string {
   const toolName =
     typeof data.metadata?.toolName === 'string' ? `:${data.metadata.toolName}` : '';
   return `[${data.role}${toolName}] ${data.content}`;
@@ -278,7 +287,7 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
     // Human-in-the-loop (CLI): a warn/out-of-workspace pause asks on stdin
     // (y/n) and resumes the SAME stored session — approve executes the
     // authorized operation first, deny records the decision and continues.
-    const ask = opts.promptApproval ?? promptApproval;
+    const ask = opts.promptApproval ?? cliPromptApproval;
     while (session.status === 'paused' && hitl.getPendingCommand() !== null) {
       const pending = hitl.getPendingCommand() ?? 'unknown operation';
       const approved = await ask(
@@ -696,6 +705,56 @@ async function runWebAction(deps: StartCommandDeps): Promise<void> {
     await harness.close();
   } catch (err) {
     (deps.errPrint ?? console.error)(`codeharness start: ${adviceFor(err)}`);
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Task 27 REPL (SPEC §4.3, §5.1): `codeharness` with no arguments enters an
+ * interactive loop — a task input runs the agent with streaming output, later
+ * inputs are injected into the SAME session as new user instructions (context
+ * preserved), slash commands (/exit /help /model /clear /status) drive the
+ * session, and HITL confirmation happens inside the REPL. Ctrl+C during a run
+ * interrupts it (returns to the prompt); Ctrl+C at the prompt exits.
+ */
+export async function runReplAction(deps: StartCommandDeps = {}): Promise<void> {
+  try {
+    const config = loadStartConfig(deps);
+    // Task 27: first-run key bootstrap stays OUTSIDE the REPL — the REPL's
+    // persistent readline shares stdin with promptHidden's raw-mode key
+    // entry, which would also feed the key into the REPL input queue (a
+    // credential leak into the next LLM context). Instead the missing-key
+    // error surfaces with actionable advice (§4.3) and the user runs
+    // `codeharness key update`.
+    const buildAgentLoop =
+      deps.buildAgentLoop ??
+      buildDefaultAgentLoop({
+        ...deps,
+        readHidden: () => {
+          throw new Error('No API key found. Run `codeharness key update` to add one.');
+        },
+      });
+    const print = deps.print ?? console.log;
+    // Ctrl+C during a run: the terminal readline (raw mode for the whole
+    // REPL) consumes the key and calls this — the run aborts at its next
+    // round boundary and the prompt returns. At the prompt, Ctrl+C resolves
+    // the pending read as null and the REPL exits instead.
+    let interruptRun: (() => void) | undefined;
+    const io = deps.io ?? createTerminalReplIO(print, () => interruptRun?.());
+    await runRepl({
+      config,
+      buildAgentLoop,
+      io,
+      hitl: deps.hitl,
+      events: createEventBus(),
+      promptApproval: deps.promptApproval,
+      onRunInterrupt: (handler) => {
+        interruptRun = handler;
+      },
+      onExit: deps.onExit,
+    });
+  } catch (err) {
+    (deps.errPrint ?? console.error)(`codeharness: ${adviceFor(err)}`);
     process.exitCode = 1;
   }
 }
