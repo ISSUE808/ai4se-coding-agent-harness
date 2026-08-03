@@ -13,7 +13,10 @@ vi.mock('../lib/api', () => ({
   postMessage: vi.fn(),
   sessionControl: vi.fn(),
   resolveApproval: vi.fn(),
-  fetchConfig: vi.fn().mockResolvedValue({ model: 'deepseek-v4-pro', guardrails: { requireApproval: ['prod'], blockOutbound: true } }),
+  // The mock must mirror the REAL config shape (src/types.ts Config): the
+  // model lives at `llm.model`, never at the top level. A top-level `model`
+  // here would silently hide the selector (4.1 real test regression).
+  fetchConfig: vi.fn().mockResolvedValue({ llm: { model: 'deepseek-v4-pro' }, guardrails: { requireApproval: ['prod'], blockOutbound: true } }),
   fetchFsFile: vi.fn(),
   fetchFsTree: vi.fn(),
   fetchSessions: vi.fn(),

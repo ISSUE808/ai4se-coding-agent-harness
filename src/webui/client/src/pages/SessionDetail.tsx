@@ -495,7 +495,17 @@ export default function SessionDetail() {
   // Task 26: effective model = session override (WS/PATCH state) → REST
   // snapshot → config default. The selector options are the config default,
   // distinct models from other sessions, and a custom entry.
-  const configModel = typeof config?.model === 'string' ? config.model : null;
+  // Task 26 real-test fix (4.1): the config model lives at `config.llm.model`
+  // (src/types.ts Config) — a top-level `model` never exists in the masked
+  // config response, so reading it made configModel always null and the
+  // selector never rendered. The test mock's wrong shape (top-level model)
+  // is what hid this; narrowed like `guardrails` below.
+  const llmRaw = config?.llm;
+  const llm =
+    typeof llmRaw === 'object' && llmRaw !== null
+      ? (llmRaw as Record<string, unknown>)
+      : undefined;
+  const configModel = typeof llm?.model === 'string' ? llm.model : null;
   const effectiveModel = events.model ?? session?.model ?? configModel;
   const sessionModel = typeof session?.model === 'string' ? session.model : null;
   const otherModels = Array.from(
