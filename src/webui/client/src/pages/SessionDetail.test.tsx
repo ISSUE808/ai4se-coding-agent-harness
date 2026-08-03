@@ -527,4 +527,31 @@ describe('SessionDetail', () => {
     );
     expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-r1');
   });
+
+  it('keeps a switched model in the dropdown after returning to default (review M4)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    updateSessionModelMock
+      .mockResolvedValueOnce({ ...SESSION, model: 'my-custom-llm' })
+      .mockResolvedValueOnce({ ...SESSION, model: undefined as unknown as string });
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    // Apply a custom model.
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), '__custom__');
+    await userEvent.type(screen.getByLabelText('自定义模型输入'), 'my-custom-llm');
+    await userEvent.click(screen.getByRole('button', { name: '应用' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('my-custom-llm');
+    });
+
+    // Switch back to the config default (clears the override).
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-v4-pro');
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-v4-pro');
+    });
+
+    // The custom model must remain selectable — it was folded into the
+    // "recently used" list instead of disappearing with the override.
+    expect(screen.getByRole('option', { name: 'my-custom-llm' })).toBeInTheDocument();
+  });
 });

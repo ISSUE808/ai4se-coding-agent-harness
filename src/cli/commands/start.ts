@@ -477,6 +477,13 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
   const pendingInjection = new Map<string, boolean>();
 
   const runSession = async (session: Session): Promise<void> => {
+    // M1: an injection latch that landed BEFORE this run started (set during
+    // a window with no live run, e.g. a switch racing an approval execution)
+    // must not trigger a bogus restart in the finally — this fresh run
+    // already satisfies it: the provider build reads the session model and
+    // memory re-seeds from the store. A switch DURING the run re-sets the
+    // latch after this delete, so the finally still restarts when needed.
+    pendingInjection.delete(session.id);
     // C1: restore HITL to IDLE before each run so a NEW warn-level command can
     // request approval again — otherwise the post-decision state (EXECUTING /
     // EXECUTING_MODIFIED / BLOCKED) silently swallows every later warn as
@@ -509,14 +516,31 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
       if (activeRuns.get(session.id) === controller) {
         activeRuns.delete(session.id);
       }
-      // A user message arrived while this run was live — restart the loop so
-      // the new instruction lands in the next LLM context (the run re-seeds
-      // memory from the store, which already holds the message).
-      if (pendingInjection.get(session.id) === true) {
+      // A user message or model switch arrived while this run was live —
+      // restart the loop so the change lands in the next run (memory
+      // re-seeds from the store; the provider build reads the session
+      // model). I1: ONLY when the session is still running — a pause/stop
+      // that landed during the abort wins, and restarting a paused session
+      // would double-run and stream messages behind the UI's pause. The
+      // latch stays set for the next runSession, which clears it on entry
+      // (M1), so a later resume restarts exactly once.
+      if (pendingInjection.get(session.id) === true && session.status === 'running') {
         pendingInjection.delete(session.id);
         continueSession(session);
       }
     }
+  };
+
+  /**
+   * Interrupt a live run so the NEXT run picks up a change (a user message
+   * or a model switch — review M5). Shared by onMessageAdded and
+   * onModelChanged: sets the injection latch and aborts the current
+   * controller; runSession's finally restarts via continueSession unless a
+   * pause/stop landed in between (I1).
+   */
+  const restartLiveRun = (session: Session): void => {
+    pendingInjection.set(session.id, true);
+    activeRuns.get(session.id)?.abort();
   };
 
   /**
@@ -584,22 +608,20 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
       // re-seeds memory from the store on every run, so the new message is
       // picked up by the restarted run.
       if (session.status === 'running') {
-        pendingInjection.set(session.id, true);
-        activeRuns.get(session.id)?.abort();
+        restartLiveRun(session);
       } else {
         continueSession(session);
       }
     },
     onModelChanged: (session) => {
-      // Task 26 model switch: REUSE the message-injection abort+restart path
-      // (pendingInjection → runSession finally → continueSession). The
+      // Task 26 model switch: shares the message-injection abort+restart
+      // path (restartLiveRun → runSession finally → continueSession). The
       // restarted run rebuilds the provider with the session's NEW model and
       // re-seeds memory from the store, so the agent continues seamlessly.
       // Paused/completed sessions only record the override — the next run
       // picks it up (restarting a paused approval would be wrong).
       if (session.status === 'running') {
-        pendingInjection.set(session.id, true);
-        activeRuns.get(session.id)?.abort();
+        restartLiveRun(session);
       }
     },
     onSessionControl: (session, action) => {

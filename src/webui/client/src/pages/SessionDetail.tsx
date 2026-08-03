@@ -156,6 +156,7 @@ export default function SessionDetail() {
       const updated = await updateSessionModel(sessionId, next);
       events.updateModel(updated.model ?? null);
       setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
+      rememberRecentModel(updated.model);
     } catch (err) {
       setModelError(err instanceof Error ? err.message : '切换模型失败');
     } finally {
@@ -174,6 +175,7 @@ export default function SessionDetail() {
       const updated = await updateSessionModel(sessionId, trimmed);
       events.updateModel(updated.model ?? null);
       setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
+      rememberRecentModel(updated.model);
       setCustomMode(false);
       setCustomModel('');
     } catch (err) {
@@ -181,6 +183,18 @@ export default function SessionDetail() {
     } finally {
       setModelBusy(false);
     }
+  }
+
+  /**
+   * Review M4: fold a successfully applied model into the "recently used"
+   * list — switching AWAY from it (back to the default) must not make the
+   * option vanish from the dropdown.
+   */
+  function rememberRecentModel(model: string | undefined): void {
+    if (typeof model !== 'string' || model === '') {
+      return;
+    }
+    setRecentModels((prev) => (prev.includes(model) ? prev : [...prev, model]));
   }
 
   // ─── Header controls ───────────────────────────────────────────────────────

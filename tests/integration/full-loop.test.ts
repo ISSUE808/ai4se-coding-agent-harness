@@ -876,5 +876,97 @@ describe('full integration — start --web wiring (Task 19)', () => {
       const frame = await nextEvent(ws, (f) => f.type === 'session:updated' && f.data.sessionId === id);
       expect(frame.data.model).toBe('deepseek-v3');
     });
+
+    it('pause racing a model switch wins — no restart flow behind the pause (review I1)', async () => {
+      const builtModels: Array<string | undefined> = [];
+      const provider = slowMockProvider(
+        [
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { content: '完成。' },
+          { content: '完成。' },
+        ],
+        400,
+      );
+      const { sessionStore, web } = await makeHarness(
+        makeConfig(configRoot),
+        provider,
+        undefined,
+        undefined,
+        (opts) => {
+          builtModels.push(opts.session?.model);
+        },
+      );
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '竞态测试' });
+      const id = created.body.id as string;
+
+      // Model switch while running, then pause IMMEDIATELY — the pause lands
+      // while the aborted run is still finishing (abort is honored only at
+      // the round boundary).
+      await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+      const paused = await request(web.app).post(`/api/sessions/${id}/pause`);
+      expect(paused.status).toBe(200);
+      expect(paused.body.status).toBe('paused');
+
+      // Give the in-flight round time to finish — then verify NOTHING
+      // restarted behind the pause (a buggy finally would re-run the loop:
+      // status flips to completed / tool messages keep flowing / a second
+      // provider is built).
+      await silence(1000);
+      const session = sessionStore.get(id);
+      expect(session?.status).toBe('paused');
+      // The switch itself is still recorded — the NEXT run honors it.
+      expect(session?.model).toBe('deepseek-v3');
+      // Exactly the in-flight tool round executed — no restart flow.
+      expect(toolCount(sessionStore, id)).toBe(1);
+      expect(builtModels).toEqual([undefined]);
+    });
+
+    it('resume after the paused race does not re-restart on a leftover latch (review M1)', async () => {
+      const builtModels: Array<string | undefined> = [];
+      const provider = slowMockProvider(
+        [
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { content: '完成。' },
+          { content: '完成。' },
+        ],
+        400,
+      );
+      const { sessionStore, web } = await makeHarness(
+        makeConfig(configRoot),
+        provider,
+        undefined,
+        undefined,
+        (opts) => {
+          builtModels.push(opts.session?.model);
+        },
+      );
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '竞态恢复' });
+      const id = created.body.id as string;
+
+      // Same I1 race: the model switch's latch is left behind by the paused
+      // run (its finally must NOT consume-and-restart it).
+      await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+      await request(web.app).post(`/api/sessions/${id}/pause`);
+      await silence(1000);
+      expect(sessionStore.get(id)?.status).toBe('paused');
+
+      // Resume: the new run honors the model switch, completes, and the
+      // leftover latch must NOT trigger an extra rebuild afterwards.
+      const resumed = await request(web.app).post(`/api/sessions/${id}/resume`);
+      expect(resumed.status).toBe(200);
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.model).toBe('deepseek-v3');
+
+      // Exactly TWO provider builds: the original run and the resumed one.
+      expect(builtModels).toEqual([undefined, 'deepseek-v3']);
+
+      // Nothing keeps flowing after completion.
+      await silence(900);
+      expect(builtModels).toEqual([undefined, 'deepseek-v3']);
+      expect(toolCount(sessionStore, id)).toBe(1);
+    });
   });
 }, 15000);

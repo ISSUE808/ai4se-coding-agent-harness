@@ -91,8 +91,15 @@ const TRANSITIONS: Record<string, { from: Session['status'][]; to: Session['stat
  * Task 26 model validation. POST requires a non-empty string; PATCH also
  * accepts `''` (or whitespace) to CLEAR the override back to the config
  * default. Returns the trimmed model or `null` (clear) when valid.
+ * Review M3: overloads — with `allowClear: false` the value can never be
+ * `null`, so callers do not need a `?? undefined` fallback.
  */
-function normalizeModel(value: unknown, allowClear: boolean): { ok: true; value: string | null } | { ok: false; error: string } {
+function normalizeModel(value: unknown, allowClear: false): { ok: true; value: string } | { ok: false; error: string };
+function normalizeModel(value: unknown, allowClear: true): { ok: true; value: string | null } | { ok: false; error: string };
+function normalizeModel(
+  value: unknown,
+  allowClear: boolean,
+): { ok: true; value: string | null } | { ok: false; error: string } {
   if (typeof value !== 'string') {
     return { ok: false, error: 'model must be a string' };
   }
@@ -133,6 +140,8 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
       return;
     }
     // Optional session-level model override (Task 26): non-empty string.
+    // M3: allowClear=false narrows the return type — `parsed.value` is a
+    // plain string here, never null.
     let sessionModel: string | undefined;
     if (model !== undefined) {
       const parsed = normalizeModel(model, false);
@@ -140,7 +149,7 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
         res.status(400).json({ error: parsed.error });
         return;
       }
-      sessionModel = parsed.value ?? undefined;
+      sessionModel = parsed.value;
     }
     const session = sessionStore.create(task, rounds, root.value || undefined, sessionModel);
     const message = sessionStore.appendMessage(session.id, { role: 'user', content: task });

@@ -63,6 +63,10 @@ export function useSessionEvents(
 
   // Merge a late-arriving REST snapshot exactly once (WS frames are newer).
   const initialMergedRef = useRef(false);
+  // Review M2: once a `session:updated` frame was delivered, the WS model
+  // (including a null "cleared" frame) is authoritative — a late REST
+  // snapshot must not resurrect an override the WS already cleared.
+  const modelFrameSeenRef = useRef(false);
   useEffect(() => {
     if (!initial || initialMergedRef.current) {
       return;
@@ -95,7 +99,10 @@ export function useSessionEvents(
         status: prev.status ?? initial.status,
         currentRound: prev.currentRound ?? initial.currentRound ?? null,
         maxRounds: prev.maxRounds ?? initial.maxRounds ?? null,
-        model: prev.model ?? initial.model ?? null,
+        // M2: explicit — only seed from the snapshot when no WS
+        // `session:updated` frame has been seen yet; a WS-set null (override
+        // cleared) must win over the stale snapshot value.
+        model: modelFrameSeenRef.current ? prev.model : (prev.model ?? initial.model ?? null),
         pendingApproval,
       };
     });
@@ -105,6 +112,9 @@ export function useSessionEvents(
     let disposed = false;
     const dispose = source.connect({
       onEvent: (frame) => {
+        if (frame.type === 'session:updated') {
+          modelFrameSeenRef.current = true;
+        }
         setState((prev) => reduceSessionEvent(prev, frame));
       },
       onConnectionChange: (connected) => {

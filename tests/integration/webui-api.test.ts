@@ -340,6 +340,15 @@ describe('REST /api/sessions', () => {
     expect(detail.body.model).toBe('deepseek-v3');
   });
 
+  it('POST /api/sessions trims the model before storing (review M3)', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app)
+      .post('/api/sessions')
+      .send({ task: 't', model: '  deepseek-v3  ' });
+    expect(res.status).toBe(201);
+    expect(res.body.model).toBe('deepseek-v3');
+  });
+
   it('POST /api/sessions rejects an invalid model with 400 JSON (Task 26)', async () => {
     const { web } = await makeFixture();
     for (const model of [42, null, '', '   ']) {
