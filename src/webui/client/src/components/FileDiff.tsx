@@ -1,9 +1,11 @@
 /**
- * FileDiff — Monaco diff viewer for the 文件变更 column (PLAN Task 18b).
+ * FileDiff — Monaco content preview for the 文件变更 column (PLAN Task 18b,
+ * 1.5 real-test follow-up).
  *
- * The backend has no diff endpoint, so the component shows the last tool
- * output that touched the selected file (or a placeholder) in a read-only
- * Monaco editor themed by design tokens.
+ * The backend has no diff endpoint, so the pane shows the file's CURRENT
+ * CONTENT (fetched by the caller from the workspace-bounded /api/fs/file) in
+ * a read-only Monaco editor themed by design tokens. `content: null` means
+ * the fetch is in flight; a non-null `error` shows the failure instead.
  */
 import Editor from '@monaco-editor/react';
 import { FileCode2 } from 'lucide-react';
@@ -14,13 +16,15 @@ import { languageForPath } from '../lib/session-messages';
 export interface FileDiffProps {
   /** Selected file path (also the Monaco language hint). */
   path: string;
-  /** Tool output for the file, or null to show the placeholder. */
+  /** Fetched file content, or null while the fetch is in flight. */
   content: string | null;
+  /** Content-fetch failure message; shown instead of the loading state. */
+  error?: string | null;
   /** Optional explicit Monaco language override. */
   language?: string;
 }
 
-export default function FileDiff({ path, content, language }: FileDiffProps) {
+export default function FileDiff({ path, content, error, language }: FileDiffProps) {
   return (
     <section
       aria-label={`文件 diff：${path}`}
@@ -66,7 +70,7 @@ export default function FileDiff({ path, content, language }: FileDiffProps) {
             color: designTokens.colors.textMuted,
           }}
         >
-          预览 diff
+          文件内容预览
         </span>
       </div>
 
@@ -81,10 +85,16 @@ export default function FileDiff({ path, content, language }: FileDiffProps) {
             textAlign: 'center',
           }}
         >
-          <p style={{ margin: 0 }}>无 diff 内容</p>
-          <p style={{ margin: `${designTokens.spacing[1]} 0 0`, fontSize: designTokens.typography.fontSize.sm }}>
-            后端未提供 diff 端点，仅展示该文件的工具输出摘要。
-          </p>
+          {error !== null && error !== undefined ? (
+            <>
+              <p style={{ margin: 0 }}>无法读取文件内容</p>
+              <p style={{ margin: `${designTokens.spacing[1]} 0 0`, fontSize: designTokens.typography.fontSize.sm }}>
+                {error}
+              </p>
+            </>
+          ) : (
+            <p style={{ margin: 0 }}>加载文件内容…</p>
+          )}
         </div>
       ) : (
         <Editor

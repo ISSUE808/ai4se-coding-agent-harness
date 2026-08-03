@@ -18,9 +18,16 @@ describe('FileDiff', () => {
     expect(editor).toHaveAttribute('data-lang', 'typescript');
   });
 
-  it('shows a placeholder when there is no diff content (backend has no diff endpoint)', () => {
+  it('shows the loading state while content is null (fetch in flight)', () => {
     render(<FileDiff path="src/auth/refresh.ts" content={null} />);
-    expect(screen.getByText(/无 diff 内容/)).toBeInTheDocument();
+    expect(screen.getByText('加载文件内容…')).toBeInTheDocument();
+    expect(screen.queryByLabelText('diff-editor')).not.toBeInTheDocument();
+  });
+
+  it('shows the fetch error instead of the loading state when content failed', () => {
+    render(<FileDiff path="src/auth/refresh.ts" content={null} error="file is too large for the preview limit (262144 bytes)" />);
+    expect(screen.getByText('无法读取文件内容')).toBeInTheDocument();
+    expect(screen.getByText(/preview limit/)).toBeInTheDocument();
     expect(screen.queryByLabelText('diff-editor')).not.toBeInTheDocument();
   });
 

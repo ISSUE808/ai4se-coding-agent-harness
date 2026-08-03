@@ -319,6 +319,96 @@ describe('GET /api/fs/tree', () => {
   });
 });
 
+describe('GET /api/fs/file（文件内容预览端点——授权根内，1.5 真实测试跟进）', () => {
+  it('returns the content of a file inside the allowed root', async () => {
+    const { app, root } = routerApp();
+    const res = await request(app).get('/api/fs/file').query({ path: path.join(root, 'package.json') });
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('{"name":"demo"}');
+    expect(res.body.size).toBe(15);
+    expect(res.body.path).toBe(path.join(root, 'package.json'));
+  });
+
+  it('rejects a missing path with 400 (a file endpoint needs an explicit path)', async () => {
+    const { app } = routerApp();
+    const res = await request(app).get('/api/fs/file');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/path/i);
+  });
+
+  it('rejects files outside the allowed roots with 400 (content access is workspace-bounded, unlike /browse metadata)', async () => {
+    const { app, other } = routerApp();
+    const res = await request(app).get('/api/fs/file').query({ path: path.join(other, 'package.json') });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/outside/i);
+  });
+
+  it('rejects a missing file with 400', async () => {
+    const { app, root } = routerApp();
+    const res = await request(app).get('/api/fs/file').query({ path: path.join(root, 'nope.ts') });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a directory path with 400 (content preview requires a file)', async () => {
+    const { app, root } = routerApp();
+    const res = await request(app).get('/api/fs/file').query({ path: path.join(root, 'src') });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a file reached through a symlink/junction escaping the root (I1)', async () => {
+    const { app, root, other } = routerApp();
+    const link = path.join(root, 'link-out');
+    if (!tryCreateLink(other, link)) {
+      return;
+    }
+    const res = await request(app).get('/api/fs/file').query({ path: path.join(link, 'package.json') });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/outside/i);
+  });
+
+  it('serves a file through a symlink/junction pointing INSIDE the root', async () => {
+    const { app, root } = routerApp();
+    const link = path.join(root, 'link-in');
+    if (!tryCreateLink(root, link)) {
+      return;
+    }
+    const res = await request(app).get('/api/fs/file').query({ path: path.join(link, 'package.json') });
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('{"name":"demo"}');
+  });
+
+  it('answers 413 when the file exceeds the preview size cap', async () => {
+    const root = makeTree();
+    fs.writeFileSync(path.join(root, 'big.txt'), 'x'.repeat(100));
+    const app = express();
+    app.use('/api/fs', createFsRouter({ getAllowedRoots: () => [root], maxFileBytes: 10 }));
+    const res = await request(app).get('/api/fs/file').query({ path: path.join(root, 'big.txt') });
+    expect(res.status).toBe(413);
+    expect(res.body.error).toMatch(/too large|limit/i);
+  });
+
+  it('serves session workspaceRoot files through the mounted server (same boundary set as /tree)', async () => {
+    const configRoot = makeTree();
+    const sessionRoot = makeTree();
+    fs.writeFileSync(path.join(sessionRoot, 'session.txt'), 'hello session');
+    const web = await serverFixture(configRoot);
+
+    const created = await request(web.app).post('/api/sessions').send({
+      task: 'work in a side repo',
+      workspaceRoot: sessionRoot,
+    });
+    expect(created.status).toBe(201);
+
+    const res = await request(web.app).get('/api/fs/file').query({ path: path.join(sessionRoot, 'session.txt') });
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('hello session');
+
+    // The config root file is readable as well.
+    const configFile = await request(web.app).get('/api/fs/file').query({ path: path.join(configRoot, 'package.json') });
+    expect(configFile.status).toBe(200);
+  });
+});
+
 describe('GET /api/fs/browse（目录选择器浏览端点——整机浏览，无授权限制）', () => {
   it('browses ANY directory outside the workspace roots (user decision: picker browses the whole machine)', async () => {
     const { app, other } = routerApp();

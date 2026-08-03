@@ -35,6 +35,7 @@ import FileDiff from '../components/FileDiff';
 import { useSessionEvents } from '../hooks/useSessionEvents';
 import {
   fetchConfig,
+  fetchFsFile,
   fetchFsTree,
   fetchSession,
   fetchSessions,
@@ -51,7 +52,6 @@ import {
 import { formatTokens, type SessionStatus } from '../lib/format';
 import {
   aggregateFiles,
-  contentForFile,
   formatDateTime,
   toolFiles,
   type FileEntry,
@@ -292,6 +292,34 @@ export default function SessionDetail() {
     files.map((f) => [normalizePath(absoluteWithin(session?.workspaceRoot ?? '', f.path)), f] as const),
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedContent, setSelectedContent] = useState<string | null>(null);
+  const [selectedError, setSelectedError] = useState<string | null>(null);
+  const fileRequestRef = useRef(0);
+
+  // 1.5 real-test follow-up: selecting a file fetches its CURRENT CONTENT
+  // from GET /api/fs/file (workspace-bounded) instead of showing tool-output
+  // summaries — write_file carries no output, so the old preview was always
+  // empty for freshly written files. A generation counter makes a stale
+  // response (quickly re-clicked files) a no-op.
+  function selectFile(absPath: string): void {
+    setSelectedPath(absPath);
+    setSelectedContent(null);
+    setSelectedError(null);
+    const requestId = ++fileRequestRef.current;
+    fetchFsFile(absPath)
+      .then((file) => {
+        if (requestId !== fileRequestRef.current) {
+          return;
+        }
+        setSelectedContent(file.content);
+      })
+      .catch((err) => {
+        if (requestId !== fileRequestRef.current) {
+          return;
+        }
+        setSelectedError(err instanceof Error ? err.message : '无法读取文件内容');
+      });
+  }
 
   // Task 23: workspace file tree in the left column, fetched from the fs
   // endpoint (bounded to the session workspaceRoot). The workspaceRoot
@@ -655,7 +683,7 @@ export default function SessionDetail() {
                         工作目录为空
                       </div>
                     )}
-                    {renderFileTreeNode(tree, 0, treeExpanded, fileMarks, selectedPath, setSelectedPath, toggleTreeDir)}
+                    {renderFileTreeNode(tree, 0, treeExpanded, fileMarks, selectedPath, selectFile, toggleTreeDir)}
                   </>
                 )}
                 {hiddenChangedFiles.length > 0 && (
@@ -675,7 +703,7 @@ export default function SessionDetail() {
                         <button
                           key={file.path}
                           type="button"
-                          onClick={() => setSelectedPath(absPath)}
+                          onClick={() => selectFile(absPath)}
                           style={fallbackRowStyle(selected)}
                         >
                           <MarkBadge mark={file.mark} />
@@ -691,16 +719,9 @@ export default function SessionDetail() {
                 )}
                 {selectedPath !== null && (
                   <div style={{ padding: designTokens.spacing[3], borderTopWidth: 1, borderTopStyle: 'solid', borderTopColor: designTokens.colors.border }}>
-                    {/* Tool metadata reports paths relative to the workspace
-                        root; strip the root prefix so the diff content (and
-                        the Monaco language hint) resolve correctly. */}
-                    <FileDiff
-                      path={selectedPath}
-                      content={contentForFile(
-                        events.messages,
-                        relativeToRoot(session?.workspaceRoot ?? '', selectedPath),
-                      )}
-                    />
+                    {/* 1.5: the preview shows the file's CURRENT CONTENT,
+                        fetched from the workspace-bounded /api/fs/file. */}
+                    <FileDiff path={selectedPath} content={selectedContent} error={selectedError} />
                   </div>
                 )}
               </>

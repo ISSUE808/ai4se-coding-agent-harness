@@ -240,6 +240,27 @@ export async function fetchFsTree(path?: string): Promise<FsTreeNode> {
   return request<FsTreeNode>(`/api/fs/tree${query}`);
 }
 
+/** Content of a workspace file served by GET /api/fs/file (1.5: preview). */
+export interface FsFileContent {
+  /** Canonical (realpath'd) path of the file. */
+  path: string;
+  /** Basename. */
+  name: string;
+  /** UTF-8 file content (preview cap enforced server-side, 413 beyond). */
+  content: string;
+  /** Byte size of the file. */
+  size: number;
+}
+
+/**
+ * Fetch a file's CONTENT for the diff-preview pane. Unlike /browse (metadata
+ * only, machine-wide), this endpoint is workspace-bounded — the file must
+ * sit under an authorized root, same boundary as /tree.
+ */
+export async function fetchFsFile(path: string): Promise<FsFileContent> {
+  return request<FsFileContent>(`/api/fs/file?path=${encodeURIComponent(path)}`);
+}
+
 /** One entry in a GET /api/fs/browse listing (metadata only, never contents). */
 export interface FsBrowseEntry {
   /** Absolute path of this entry. */

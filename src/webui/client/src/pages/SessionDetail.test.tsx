@@ -14,6 +14,7 @@ vi.mock('../lib/api', () => ({
   sessionControl: vi.fn(),
   resolveApproval: vi.fn(),
   fetchConfig: vi.fn().mockResolvedValue({ model: 'deepseek-v4-pro', guardrails: { requireApproval: ['prod'], blockOutbound: true } }),
+  fetchFsFile: vi.fn(),
   fetchFsTree: vi.fn(),
   fetchSessions: vi.fn(),
   updateSessionModel: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 import {
+  fetchFsFile,
   fetchFsTree,
   fetchSession,
   fetchSessions,
@@ -44,6 +46,7 @@ const fetchSessionMock = vi.mocked(fetchSession);
 const postMessageMock = vi.mocked(postMessage);
 const sessionControlMock = vi.mocked(sessionControl);
 const resolveApprovalMock = vi.mocked(resolveApproval);
+const fetchFsFileMock = vi.mocked(fetchFsFile);
 const fetchFsTreeMock = vi.mocked(fetchFsTree);
 const fetchSessionsMock = vi.mocked(fetchSessions);
 const updateSessionModelMock = vi.mocked(updateSessionModel);
@@ -155,10 +158,18 @@ describe('SessionDetail', () => {
     postMessageMock.mockReset();
     sessionControlMock.mockReset();
     resolveApprovalMock.mockReset();
+    fetchFsFileMock.mockReset();
     fetchFsTreeMock.mockReset();
     // The left column always fetches the workspace tree; default to the
     // standard fixture so every test renders without stubbing.
     fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    // Selecting a file fetches its content from /api/fs/file (1.5).
+    fetchFsFileMock.mockResolvedValue({
+      path: '/repo/auth-app/src/auth/token.ts',
+      name: 'token.ts',
+      content: 'export const token = "rotating";\n',
+      size: 33,
+    });
     // Task 26: the model selector lists models used by other sessions;
     // default to the current session (no model) so recent models are empty.
     fetchSessionsMock.mockReset();
@@ -230,9 +241,23 @@ describe('SessionDetail', () => {
     expect(screen.getByText('+84')).toBeInTheDocument();
     expect(screen.getByText('−32')).toBeInTheDocument();
 
-    // Selecting the file still opens the Monaco diff preview with its output.
+    // Selecting the file fetches its CURRENT content (1.5) into the preview.
     await userEvent.click(changed);
-    expect(await screen.findByLabelText('diff-editor')).toHaveValue('applied 2 edits · +84 −32');
+    expect(await screen.findByLabelText('diff-editor')).toHaveValue('export const token = "rotating";\n');
+    expect(fetchFsFileMock).toHaveBeenCalledWith('/repo/auth-app/src/auth/token.ts');
+  });
+
+  it('shows a content-preview error when the file fetch fails (1.5)', async () => {
+    fetchFsFileMock.mockRejectedValue(new Error('path is outside the allowed workspace roots'));
+    renderDetail();
+
+    await userEvent.click(await screen.findByRole('button', { name: '展开 src' }));
+    await userEvent.click(await screen.findByRole('button', { name: '展开 auth' }));
+    await userEvent.click(await screen.findByText('token.ts'));
+
+    expect(await screen.findByText('无法读取文件内容')).toBeInTheDocument();
+    expect(screen.getByText(/outside the allowed workspace roots/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('diff-editor')).not.toBeInTheDocument();
   });
 
   it('lists changed files missing from the fetched tree in a fallback list (I2)', async () => {
@@ -249,7 +274,8 @@ describe('SessionDetail', () => {
     expect(screen.getByText('−32')).toBeInTheDocument();
 
     await userEvent.click(item);
-    expect(await screen.findByLabelText('diff-editor')).toHaveValue('applied 2 edits · +84 −32');
+    expect(await screen.findByLabelText('diff-editor')).toHaveValue('export const token = "rotating";\n');
+    expect(fetchFsFileMock).toHaveBeenCalledWith('/repo/auth-app/src/auth/token.ts');
   });
 
   it('shows no fallback list when every changed file is in the fetched tree', async () => {

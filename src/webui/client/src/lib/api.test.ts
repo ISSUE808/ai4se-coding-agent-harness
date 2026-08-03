@@ -4,6 +4,7 @@ import {
   deleteKey,
   fetchConfig,
   fetchFsBrowse,
+  fetchFsFile,
   fetchFsTree,
   fetchMachineRoots,
   fetchSession,
@@ -240,6 +241,16 @@ describe('api client', () => {
     const [url] = fetchMock.mock.calls[0];
     expect(new URL(url).pathname).toBe('/api/fs/tree');
     expect(new URL(url).searchParams.get('path')).toBe('/repo/src');
+  });
+
+  it('fetchFsFile GETs /api/fs/file with the query path and returns the content', async () => {
+    const file = { path: '/repo/src/a.ts', name: 'a.ts', content: 'export const a = 1;', size: 20 };
+    fetchMock.mockResolvedValue(jsonResponse(file));
+    const result = await fetchFsFile('/repo/src/a.ts');
+    expect(result).toEqual(file);
+    const [url] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/fs/file');
+    expect(new URL(url).searchParams.get('path')).toBe('/repo/src/a.ts');
   });
 
   it('fetchFsTree omits the query when path is undefined (server default root)', async () => {

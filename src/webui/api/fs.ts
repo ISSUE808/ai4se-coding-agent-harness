@@ -59,11 +59,14 @@ export interface FsRouterDeps {
   maxEntriesPerDir?: number;
   /** Global node budget for the whole response tree (M7). */
   maxNodes?: number;
+  /** Byte cap for GET /api/fs/file content previews (413 beyond). */
+  maxFileBytes?: number;
 }
 
 const DEFAULT_MAX_DEPTH = 4;
 const DEFAULT_MAX_ENTRIES_PER_DIR = 200;
 const DEFAULT_MAX_NODES = 5000;
+const DEFAULT_MAX_FILE_BYTES = 256 * 1024;
 
 /** Canonical prefix check (CR I1: inputs must already be realpath'd forms;
  *  win32 paths are compared case-insensitively — M6). */
@@ -90,6 +93,7 @@ export function createFsRouter(deps: FsRouterDeps): Router {
   const maxDepth = deps.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxEntriesPerDir = deps.maxEntriesPerDir ?? DEFAULT_MAX_ENTRIES_PER_DIR;
   const maxNodes = deps.maxNodes ?? DEFAULT_MAX_NODES;
+  const maxFileBytes = deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   const router = Router();
 
   router.get('/tree', (req, res) => {
@@ -99,24 +103,17 @@ export function createFsRouter(deps: FsRouterDeps): Router {
       return;
     }
 
-    const roots = deps
-      .getAllowedRoots()
-      .filter((r) => typeof r === 'string' && r.trim() !== '')
-      .map((r) => path.resolve(r));
-    if (roots.length === 0) {
+    const boundary = canonicalBoundary(deps);
+    if (boundary === null) {
       res.status(400).json({ error: 'no workspace roots are configured' });
       return;
     }
-    // Canonicalize every root once per request; a root that cannot be
-    // resolved simply falls out of the boundary (enumeration would fail
-    // anyway when a requested path under it is canonicalized).
-    const canonicalRoots = roots.map((root) => tryRealpath(root) ?? root);
 
     // No path → the first allowed root (server.ts wires config
     // agent.workspaceRoot first, so this is the default workspace).
     const target = rawPath !== undefined && rawPath.trim() !== ''
       ? path.resolve(rawPath)
-      : roots[0];
+      : boundary.roots[0];
 
     // Canonicalize the request path: every symlink/junction component
     // (middle or final) is resolved, so an escaping link lands outside the
@@ -127,7 +124,7 @@ export function createFsRouter(deps: FsRouterDeps): Router {
       return;
     }
 
-    if (!canonicalRoots.some((root) => isInside(canonicalTarget, root))) {
+    if (!boundary.canonical.some((root) => isInside(canonicalTarget, root))) {
       res.status(400).json({ error: `path is outside the allowed workspace roots: ${target}` });
       return;
     }
@@ -155,6 +152,70 @@ export function createFsRouter(deps: FsRouterDeps): Router {
       return;
     }
     res.json(tree);
+  });
+
+  /**
+   * File content preview (1.5 real-test follow-up): GET /api/fs/file?path=
+   * serves a FILE'S CONTENT to the diff-preview pane. The old preview only
+   * showed tool-output summaries, which were EMPTY for write_file (its
+   * toolResult carries no output). Boundary semantics are EXACTLY the /tree
+   * ones — authorized roots + canonical prefix check, NOT the unrestricted
+   * /browse ones: content access must not escape the workspace (KNOWN_ISSUES
+   * §11 keeps /browse metadata-only; file contents are workspace-bounded).
+   * Files over `maxFileBytes` answer 413 so a preview cannot slurp a
+   * huge/binary file.
+   */
+  router.get('/file', (req, res) => {
+    const rawPath = req.query.path;
+    if (typeof rawPath !== 'string' || rawPath.trim() === '') {
+      res.status(400).json({ error: 'path must be a non-empty string' });
+      return;
+    }
+    const boundary = canonicalBoundary(deps);
+    if (boundary === null) {
+      res.status(400).json({ error: 'no workspace roots are configured' });
+      return;
+    }
+    const target = path.resolve(rawPath);
+    // Canonicalize the request path: an escaping symlink/junction lands
+    // outside the canonical roots and is rejected (same rule as /tree).
+    const canonicalTarget = tryRealpath(target);
+    if (canonicalTarget === null) {
+      res.status(400).json({ error: `file does not exist or is not readable: ${target}` });
+      return;
+    }
+    if (!boundary.canonical.some((root) => isInside(canonicalTarget, root))) {
+      res.status(400).json({ error: `path is outside the allowed workspace roots: ${target}` });
+      return;
+    }
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(canonicalTarget);
+    } catch {
+      res.status(400).json({ error: `file does not exist or is not readable: ${target}` });
+      return;
+    }
+    if (!stat.isFile()) {
+      res.status(400).json({ error: `path is not a file: ${target}` });
+      return;
+    }
+    if (stat.size > maxFileBytes) {
+      res.status(413).json({ error: `file is too large for the preview limit (${maxFileBytes} bytes): ${target}` });
+      return;
+    }
+    let content: string;
+    try {
+      content = fs.readFileSync(canonicalTarget, 'utf8');
+    } catch {
+      res.status(400).json({ error: `file is not readable: ${target}` });
+      return;
+    }
+    res.json({
+      path: canonicalTarget,
+      name: path.basename(canonicalTarget),
+      content,
+      size: stat.size,
+    });
   });
 
   /**
@@ -248,6 +309,20 @@ export function createFsRouter(deps: FsRouterDeps): Router {
   });
 
   return router;
+}
+
+/** Resolve + canonicalize the configured workspace roots; null when none
+ *  are configured (the caller answers 400). Roots that cannot be resolved
+ *  simply fall out of the boundary. */
+function canonicalBoundary(deps: FsRouterDeps): { roots: string[]; canonical: string[] } | null {
+  const roots = deps
+    .getAllowedRoots()
+    .filter((r) => typeof r === 'string' && r.trim() !== '')
+    .map((r) => path.resolve(r));
+  if (roots.length === 0) {
+    return null;
+  }
+  return { roots, canonical: roots.map((root) => tryRealpath(root) ?? root) };
 }
 
 /** Machine roots for the picker: drive letters on Windows, `/` elsewhere. */

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   aggregateFiles,
-  contentForFile,
   formatDateTime,
   languageForPath,
   mergeMessages,
@@ -127,29 +126,6 @@ describe('parseLineDelta', () => {
   it('returns null when no delta pattern is present', () => {
     expect(parseLineDelta('ok')).toBeNull();
     expect(parseLineDelta(undefined)).toBeNull();
-  });
-});
-
-describe('contentForFile', () => {
-  const tool = (id: string, files: string[], output?: string, error?: string): SessionMessage =>
-    msg({
-      id,
-      role: 'tool',
-      content: 'done',
-      metadata: { toolName: 'edit_file', toolResult: { success: !error, duration_ms: 5, filesChanged: files, output, error } },
-    });
-
-  it('returns the output of the last tool message that touched the file', () => {
-    const messages = [tool('t1', ['src/a.ts'], 'first pass'), tool('t2', ['src/a.ts'], 'second pass')];
-    expect(contentForFile(messages, 'src/a.ts')).toBe('second pass');
-  });
-
-  it('returns the error when the tool call failed without output', () => {
-    expect(contentForFile([tool('t1', ['src/a.ts'], undefined, 'boom')], 'src/a.ts')).toBe('boom');
-  });
-
-  it('returns null when no tool message touched the file', () => {
-    expect(contentForFile([tool('t1', ['src/a.ts'], 'x')], 'src/b.ts')).toBeNull();
   });
 });
 
