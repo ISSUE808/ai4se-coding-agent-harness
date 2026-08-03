@@ -708,3 +708,19 @@
   - **两个可变状态源必然失同步**：config router 的 current 与 server 的 liveConfig 并存，keys 路由写一个、config 路由读另一个——任何"启动快照 + 运行时更新"的双轨都埋雷。去状态化（单一真源 + getConfig 函数式）一次性消除整类 bug
   - **用户操作链是比单测更强的回归场景**：单测各自测 POST keys 和 PUT config 都过，只有完整链（注册→切换×2）暴露覆盖——把用户复现链原样写成集成测试
   - **持久化覆盖比内存丢失更严重**：不只是运行时拿不到 baseUrl，`.codeharness.json` 里的注册表条目也被旧 current merge 的结果覆盖删除了——状态丢失要同时检查内存与落盘
+
+---
+
+## 2026-08-04 01:30 真实测试修复：应用 nju 后调用的仍是 deepseek（loop 用启动快照 config）
+
+- **触发技能**：`systematic-debugging`（根因追查）、`test-driven-development`（红→绿）
+- **Subagent**：无（主 agent 直接修复——用户真实测试反馈）
+- **Prompt 要点**：用户实测"应用 nju 后调用的还是 deepseek 的 api"。根因链：`runSession` 每次 `buildAgentLoop({ config })` 用的 **createWebHarness 启动快照**——应用按钮只切 WebUI 层 liveConfig，agent loop 层每次构建 provider（新会话/恢复/重启）都用启动时 config → 请求永远发到 deepseek。另发现第二个根因：**abort 只在轮边界检查**（main-loop 循环顶部）——abort 落在 `llm.complete()` 等待期间时当前轮仍跑完，单轮任务直接 completed → runSession finally 的"pendingInjection + running"条件不满足 → 重启被抑制（模型/供应商切换在单轮任务上失效）
+- **产出**：
+  - Commit: `366c6b2`（① start.ts：createWebHarness 维护 `liveConfig`（persistConfig 包装同步），runSession 用 liveConfig 构建 loop；`onConfigChanged` 回调——llm.provider/baseUrl/model 变化 → 所有 running 会话 restartLiveRun（复用模型切换的 abort+restart 路径）② server.ts/config.ts：onConfigChanged 透传（prev/next）③ main-loop.ts：`llm.complete()` 返回后补 abort 检查（轮内中断，立即 break））
+  - 测试: 红→绿：full-loop +1 回归（慢 provider 运行中 PUT 切供应商 → 断言重启后的 build 用新 provider + 新会话也用新 provider）；3 个既有 Task 26 测试按新 abort 语义更新（中断轮工具不再执行：toolCount 1→0；PATCH 测试脚本改为重启后执行工具）；主套件 552/552 + client 192/192 + 双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **WebUI 层配置与 agent loop 层配置是两个世界**：应用按钮（PUT /api/config）只影响 WebUI 层，loop 的 provider 每次从"构建时传入的 config"取——不共享 liveConfig，切换就只停留在界面层。跨层状态必须显式共享（persistConfig 包装同步 + runSession 读同一引用）
+  - **abort 语义要覆盖"调用中"而非只"轮间"**：signal 只在轮边界检查时，慢 LLM 调用期间的中断全部失效——单轮任务直接完成导致重启被 finally 抑制。LLM 响应后补查 abort 是让中断真正生效的最小补丁；3 个既有测试因依赖旧语义（中断轮工具仍执行）而红——语义变更要同步审视依赖该行为的测试
+  - **用户的一句"还是 deepseek"同时暴露了两个层的问题**：先修 loop 层快照（新会话用新供应商），再发现 abort 边界问题（运行中切换失效）——真实测试的"再测一次"才逼出第二层
