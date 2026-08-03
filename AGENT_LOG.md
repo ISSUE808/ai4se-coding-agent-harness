@@ -526,3 +526,30 @@
   - **`??` 不能表达"显式 null 赢"**：模型清除帧（null）vs 迟到 REST 快照（旧值）——用 ref 记录"已收到 WS 帧"使 WS 成为权威，语义清晰
   - **provider 构造 spy 是"切换生效"的最好验证**：builtModels 序列 `[undefined, 'deepseek-v3']` 直接证明首构建无覆盖、重启带新模型
   - **executeApprovedAction 窗口当前不可达**（工具全同步）——M1 修复是纵深防御，测试固化不变量而非当前可达路径
+
+---
+
+## 2026-08-03 19:10 Task 27：CLI 交互式 REPL（阶段 15 最后一个任务）
+
+- **触发技能**：`test-driven-development`（subagent）、`requesting-code-review`（两阶段评审）
+- **Subagent**：`ab8ed348`（实现 `051e052` + 评审修复 `b5b5efe`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：无参数进 REPL；单会话（持久 readline 队列+waiters）；首输入=任务、后续=消息注入（hitl.reset + maxRounds 上调 + 每轮新 loop 带 session）；斜杠命令（/exit /help /model /clear）；Ctrl+C 两态（提示符退出/运行中中断）；HITL 确认在 REPL 内；凭据隔离（缺 key 抛可操作错误而非交互引导——防 key 进 REPL 队列泄漏）
+- **产出**：
+  - Commit: `051e052`（新增 src/cli/repl.ts + 15 测试）+ `b5b5efe`（评审修复 +10 测试）
+  - 涉及文件: repl.ts（新建）、index.ts（无参数进 REPL）、start.ts（导出共享 helper + runReplAction）、repl.test.ts（新建 24 测试）
+  - 测试: 主项目 495→520 + client 166；tsc 双 build + oxlint 干净
+- **评审**：0 CRITICAL；3 IMPORTANT + 6 Minor —— I1（HITL 循环条件在 EXECUTING/BLOCKED 态误问已决断命令 → approve 抛错）→ 条件改 AWAITING_APPROVAL（+ start.ts 同款）；I2（HITL 确认中 Ctrl+C 静默拒绝继续运行）→ SIGINT 先 interruptRun；I3（EOF 退出码不看会话结局）→ lastStatus 决定码；M1-M6 处理（adviceFor、测试补齐、模块环接受、/clear 决策注释、tsbuildinfo 清理）
+- **人工干预**：无（评审结论与修复决策由主 agent 给出）
+- **教训**：
+  - **状态机条件是边界的照妖镜**：`getPendingCommand() !== null` 在 IDLE/EXECUTING/BLOCKED 态都非空——循环条件必须用状态（AWAITING_APPROVAL）而非字段；评审发现的可达路径（批准后恢复 run 再撞 maxRounds）是"跨机制组合"才暴露的边界
+  - **Ctrl+C 是三态契约**：提示符/运行中/HITL 确认——文档只写了两态，评审抓到第三态行为违背；SIGINT 处理必须对每个挂起状态明确语义
+  - **凭据与交互界面的隔离**：REPL 持久 reader 与 promptHidden 共享 stdin 是真实泄漏路径（key 进下轮 LLM 上下文）——"不让工厂交互引导"是正确取舍（错误提示代替交互）
+  - **管道场景的退出码契约**：EOF 退出码必须镜像 start 命令的 I3 CR（非 completed → 1）——脚本可检测失败
+
+---
+
+## 2026-08-03 19:10 阶段 15 模块收尾：WebUI/CLI 产品增强（Task 23-27）
+
+- 5 个任务全部完成：Task 23（fs 端点/目录选择器/文件树）、Task 24（MD 渲染/删搜索框）、Task 25（自定义供应商/模型护栏可编辑）、Task 26（对话中切模型）、Task 27（CLI REPL）
+- 测试：主项目 449→520 + client 123→166；每个任务两阶段评审（0 CRITICAL 遗留）
+- 用户 8 条建议全部落地（搜索框删除、MD 预览、文件树、自定义供应商、模型护栏编辑、对话切模型、目录选择器、CLI REPL）

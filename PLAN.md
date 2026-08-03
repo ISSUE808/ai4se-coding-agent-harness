@@ -1211,6 +1211,8 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** `codeharness`（无参数）进入 REPL；输入任务即运行；运行中可输入新指令（注入下一轮）；HITL 确认在 REPL 内交互；`/exit` 退出、`/help` 列出命令；REPL 逻辑可注入测试（MockProvider 确定性）。
 
+- [x] **已完成**（commit `051e052` + 评审修复 `b5b5efe`，主项目 520 + client 166）——无参数进 REPL；单会话持久 reader（管道不丢行）；首输入=任务、后续=消息注入（hitl.reset + maxRounds 上调 + 每轮新 loop 带 session 保 model 覆盖）；斜杠命令（/exit /help /model /clear）；Ctrl+C 三态（提示符退出/运行中中断/HITL 确认中断）；EOF 退出码镜像 start（非 completed → 1）；凭据隔离（缺 key 抛可操作错误）；24 个确定性测试
+
 ---
 
 ## 实现阶段
