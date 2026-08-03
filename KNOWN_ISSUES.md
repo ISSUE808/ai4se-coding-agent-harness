@@ -118,6 +118,7 @@
 | **LLM call failed 裸报错**（"404 openai_error" 无端点/状态/响应信息——多供应商下无法判断是 baseUrl 填错还是协议不兼容）[实测] | provider 增强：HTTP 错误（数字 status）抛 `LLM API 调用失败（{baseUrl}/chat/completions，HTTP {status}）：{消息} 响应：{body 前 200 字符}——请检查 API 地址是否为 OpenAI 兼容端点（通常以 /v1 结尾）`；非 HTTP 错误（网络）原样透传 | `27d320b` |
 | **供应商信息编辑后行内/下方配置不刷新**（① 更新 baseURL 后需刷新页面左侧才显示新值——KeyRow 保存后不通知父级，KeyManagementCard.meta 是行内 baseUrl 显示源；② 修改供应商信息后需"先应用别的供应商再重新应用 + 刷新"下方配置才更新——POST /api/keys 只写 registry 不同步激活供应商的 llm.baseUrl，且前端 Settings.config 保存后不重拉）[实测] | ① KeyRow 加 `onSaved` → KeyManagementCard `load()` 重拉列表 + Settings `handleRegistryChanged` 重拉 config（仅 registry 实际变化时触发，纯 key 保存不打扰未保存的表单编辑）② keys.ts：`provider === config.llm.provider && hasBaseUrl` 时同一 persist 内同步 `llm.baseUrl` 并触发 `onConfigChanged`（运行中 loop 重启契约，评审补）③ 负向测试：非激活供应商编辑不误伤 llm.baseUrl | `8612a61` |
 | **会话详情 tab 恒跳第一个会话**（多会话时从详情页切走再切回，打开的是 sessions[0] 而非切换前查看的会话——SessionDetailTab 无记忆）[实测] | App.tsx sessionStorage 记忆 lastSessionId（pathname useEffect 记录，刷新可恢复；点击 tab 优先跳 lastSessionId，会话被删回退 sessions[0]；decodeURIComponent try/catch 防畸形 % 编码白屏） | `8612a61` |
+| **配置编辑板块不跟随 config 变化**（编辑激活供应商端点后，模型与护栏处立即更新但 JSON 编辑器仍显示旧值——ConfigEditorCard 只在自己 mount 时加载一次，保留静态快照；编辑器保存后模型卡也不跟随）[实测] | ConfigEditorCard 接收共享 config：外部变化（registry 编辑/供应商切换）时同步编辑器文本（baselineRef 脏检测——用户未保存的编辑不被覆盖）；保存成功后 merged 通过 onSaved 反向传播到设置页 config（模型与护栏/通用卡跟随）——三板块同一真源 | `dbae4f9` |
 
 ---
 

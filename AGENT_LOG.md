@@ -760,3 +760,17 @@
 <｜｜DSML｜｜tool_calls>
 <｜｜DSML｜｜invoke name="Bash">
 <｜｜DSML｜｜parameter name="command" string="true">tail -5 "C:\Users\ISSUE\AppData\Local\Temp\claude\c--Users-ISSUE-Desktop-se-summer\2e36ca82-8bbb-46fc-a2ed-c5ee2e7d5d6e\tasks\b5vsa5akz.output" 2>/dev/null || echo "still running"
+
+## 2026-08-04 02:35 真实测试反馈：配置编辑板块不跟随 config 变化（三卡同源）
+
+- **触发技能**：`test-driven-development`（红→绿 ×3）、`requesting-code-review`（上轮评审遗留观察）
+- **Subagent**：无（主 agent 直接修复——用户真实测试反馈）
+- **Prompt 要点**：用户实测"编辑激活供应商端点后，模型与护栏处立即更新了，但配置编辑处的配置显示还是要刷新后才更新"。上轮评审曾把"编辑器保留自己快照"判定为合理，用户预期是三板块同源——按用户预期修正
+- **产出**：
+  - 修复（`src/webui/client/src/pages/Settings.tsx`）：① ConfigEditorCard 接收共享 config prop + 同步 effect——外部 config 变化时编辑器文本跟随（baselineRef 脏检测：`text !== baseline` 时用户正在编辑，不覆盖）② 保存成功后 `baselineRef = text` + `onSaved(merged)` → Settings setConfig → 模型与护栏/通用卡跟随（双向同源）③ stripSecrets 提取为 useCallback（load 与同步 effect 共用）
+  - 测试: 红 2 → 绿：client 199/199（+3：编辑器跟随端点编辑、dirty 缓冲不被外部覆盖、编辑器保存传播到模型卡）；既有 "saves valid JSON" 断言适配（编辑器现在也显示 merged，`"apiKey": "****-9f2c"` 出现 2 处）
+- **人工干预**：无
+- **教训**：
+  - **编辑缓冲与外部快照的冲突用 baseline 脏检测解决**：外部 config 变化时，`text !== baseline`（用户未保存的编辑）→ 跳过覆盖；等于 baseline → 跟随。保存成功即提升 baseline——"所见即真实持久化状态"
+  - **方向性判断要听用户真实预期**：评审时把"编辑器保留自己的快照"判定为合理取舍，但用户实测后明确期望三板块同源——真实测试的预期优先于评审的技术判断
+  - **保存后的编辑器显示 merged 是增值**：用户保存后立即看到脱敏合并结果（含 apiKey 掩码字段），而不是保留自己未保存的局部视图——测试断言从 getByText 改为 getAllByText 适配
