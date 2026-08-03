@@ -17,6 +17,7 @@ import { createApprovalsRouter } from './api/approvals.js';
 import { createKeysRouter } from './api/keys.js';
 import { createConfigRouter } from './api/config.js';
 import { createFsRouter } from './api/fs.js';
+import { createModelsRouter } from './api/models.js';
 
 /**
  * WebUI backend (PLAN Task 17, SPEC §5.1): an Express HTTP server with a
@@ -41,6 +42,11 @@ export interface WebUIServerDeps {
   hitl: HITLManager;
   /** Injectable config persistence (defaults to writing the project file). */
   persistConfig?: (config: Config) => Promise<void>;
+  /**
+   * Task 26 follow-up: injectable fetch for GET /api/llm/models (defaults to
+   * globalThis.fetch) — tests keep the provider call zero-network.
+   */
+  fetchFn?: typeof fetch;
   /**
    * Task 19: invoked after a session is created (POST /api/sessions) so the
    * integrated harness can run the AgentLoop on the stored session in-process.
@@ -152,6 +158,15 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
         deps.config.agent.workspaceRoot,
         ...deps.sessionStore.list().map((session) => session.workspaceRoot),
       ],
+    }),
+  );
+  // Task 26 follow-up: provider model list (fetched with the stored key).
+  app.use(
+    '/api/llm/models',
+    createModelsRouter({
+      config: deps.config,
+      credentialStore: deps.credentialStore,
+      fetchFn: deps.fetchFn,
     }),
   );
 
