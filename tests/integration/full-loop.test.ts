@@ -283,6 +283,9 @@ function toolCount(store: SessionStore, id: string): number {
   return store.get(id)?.messages.filter((m) => m.role === 'tool').length ?? 0;
 }
 
+// Longer per-test budget: HITL approval scenarios (pause → decide → execute
+// → resume → complete) exceed the 5s default under parallel load — the WS
+// helpers already use their own 5-8s waits, this guards the vitest-level cap.
 describe('full integration — start --web wiring (Task 19)', () => {
   let configRoot: string;
 
@@ -692,4 +695,4 @@ describe('full integration — start --web wiring (Task 19)', () => {
     expect(toolCount(sessionStore, id)).toBeLessThanOrEqual(countAtStop + 1);
     expect(sessionStore.get(id)?.status).toBe('completed');
   });
-});
+}, 15000);
