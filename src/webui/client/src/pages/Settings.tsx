@@ -894,7 +894,7 @@ function GeneralCard({ config }: { config: ConfigValue | null }) {
                 lineHeight: designTokens.typography.lineHeight.normal,
               }}
             >
-              API Key 不进入配置文件（SPEC §3.6）——通过独立凭据通道
+              API Key 不进入配置文件——通过独立凭据通道
               （keytar → 加密文件 → 环境变量）管理，WebUI 仅显示掩码。
             </p>
           </SettingSection>

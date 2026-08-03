@@ -124,7 +124,7 @@ export function createConfigRouter(deps: ConfigRouterDeps): Router {
     const secretPath = findSecretField(body as Record<string, unknown>);
     if (secretPath !== null) {
       res.status(400).json({
-        error: `${secretPath} cannot be set via config — use POST /api/keys/:provider instead (SPEC §3.6)`,
+        error: `${secretPath} cannot be set via config — use POST /api/keys/:provider instead`,
       });
       return;
     }
