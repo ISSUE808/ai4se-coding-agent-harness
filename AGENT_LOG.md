@@ -642,3 +642,19 @@
   - **"复核过=成立"必须被真实测试证伪**：21:10 只读代码得出"仍会拒"，用户一测就推翻——平台行为（Windows access 不查 ACL）只能靠实测或文档明证，读代码会自欺
   - **纸面限制比没有限制更糟**：W_OK 在 Windows 恒真 → "代码声称会拒、实际能建"的不一致，最终由用户困惑买单；校验的可靠性比存在性更重要
   - **ESM 命名空间不能 spyOn**：`vi.spyOn(fs, 'accessSync')` 抛 `Cannot redefine property`；需要可注入行为时用 `vi.mock('node:fs', factory)` 把目标函数包成转发真实实现的 vi.fn（spread 会求值 promises getter，需确认无副作用），mockImplementationOnce 单次注入
+
+---
+
+## 2026-08-03 23:24 真实测试 4.1：模型选择器不渲染（config 读取路径错误）
+
+- **触发技能**：`test-driven-development`（红→绿）、`systematic-debugging`（根因追查）
+- **Subagent**：无（主 agent 直接修复——用户真实测试反馈驱动）
+- **Prompt 要点**：用户按测试流程 4.1 实测：会话详情页**没看到模型选择器**（预期"模型选择器显示当前模型（默认 · deepseek-v4-flash）"）。根因链：真实 Config 的 `model` 在 `config.llm.model`（types.ts Config 接口），前端 SessionDetail.tsx 却读顶层 `config.model` → 真实响应恒 undefined → `configModel` 恒 null → 渲染条件 `configModel !== null` 恒假 → 选择器永不渲染；测试 mock（`{ model: 'deepseek-v4-pro' }`）恰好用了与真实结构不符的顶层 model，8 个 Task 26 测试全绿掩盖了 bug
+- **产出**：
+  - Commit: `976b611`（SessionDetail.tsx `configModel` 改为 `llm.model` 读取——手写窄化与 guardrails 同风格；SessionDetail.test.tsx mock 改为真实结构 `{ llm: { model } }` 并加注释）
+  - 测试: 红 8 failed（mock 改真实结构后 Task 26 选择器测试全部失败——正是用户所见现象的测试再现）→ 绿 26/26；client 179/179（14 文件）；双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **"Mock fixture 必须来自真实代码路径"第三次重演**：KNOWN_ISSUES 三、1 已归档同类教训（工具 parameters 属性表），这次是 config 结构——测试 mock 与真实响应结构不一致时，测试全绿与页面损坏同时发生。修 bug 时必须顺带把 mock 改成真实结构，否则测试永远"绿得心安理得"
+  - **Record<string, unknown> 类型宽化掩盖路径错误**：ConfigValue 无类型约束，`config.model` 在 tsc 下合法 → 只有真实数据能暴露；对这种"宽类型 + 深层字段"的配置读取，应参照 Settings.tsx 的 `asRecord(config.llm)` 窄化模式统一
+  - **渲染条件隐藏 UI 是比报错更静的失败**：`configModel !== null` 恒假时选择器整个消失，无任何报错线索——条件渲染前先确认数据源真的取到了值
