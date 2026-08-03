@@ -507,3 +507,22 @@
   - **叠加层顺序**：新护栏检查放在 PatternGuard BLOCK 之后（不破坏硬拦截）、warn 之前（配置开关语义优先于 PatternGuard warn 缓存——同一命令二次出现仍要求二次确认）
   - **凭据枚举的设计取舍**：`list(service)` 加到 CredentialBackend 接口（唯一接口点）而非 harness 注入列表——重启持久化的真实依据是"凭据在持久通道、枚举同一批 account"
   - **M3 附带发现**：表单 seeding effect 前空值渲染一帧导致交互竞态——`seeded` 门控根治（不只是校验补丁）
+
+---
+
+## 2026-08-03 18:20 Task 26：对话中切换模型（阶段 15）
+
+- **触发技能**：`test-driven-development`（subagent）、`requesting-code-review`（两阶段评审）
+- **Subagent**：`ad7cfb78`（实现 `9743b5f` + 评审修复 `9422977`；commit 标注沿用主会话前缀 `095f64f2`，已知偏差同前）
+- **Prompt 要点**：Session.model 全链路（types/store/API/PATCH）；runSession → BuildAgentLoopOptions.session 显式字段 → createLLMProvider model 参数（config 不变、覆盖点显式）；运行中切换复用 abort+restart（pendingInjection）；WS 新事件 session:updated（按会话过滤）；前端上下文栏模型选择器
+- **产出**：
+  - Commit: `9743b5f`（17 文件 +827/−21）+ `9422977`（评审修复 8 文件 +246/−13）
+  - 涉及文件: types.ts、events.ts（session:updated）、session-store.ts（updateModel）、api/sessions.ts（PATCH /:id/model + normalizeModel 重载）、start.ts（session 传递 + restartLiveRun helper）、deepseek-provider.ts（readonly model）、ws-state/useSessionEvents/SessionDetail（选择器 + model 状态）
+  - 测试: 主项目 481→495 + client 147→166；tsc 双 build + oxlint 干净
+- **评审**：0 CRITICAL；1 IMPORTANT（pause/stop 与模型切换竞态——finally 见 latch 时 store 已 paused → 重启覆盖用户暂停）→ finally 加 `session.status === 'running'` 守卫 + 竞态测试（慢 provider + PATCH 后立即 pause，断言无重启流/无双重 loop）；5 Minor 全修（latch 错误消费→runSession 开头 delete；WS null 帧权威（modelFrameSeenRef）；死代码；dropdown 保留刚离开的模型；restartLiveRun 抽取）
+- **人工干预**：无（评审结论与修复决策由主 agent 给出）
+- **教训**：
+  - **复用机制时要重新审视其边界**：消息注入的 abort+restart latch 被模型切换复用——"运行中重启"的时序语义（暂停先落地则重启应放弃）必须显式处理，不能假设复用点语义相同
+  - **`??` 不能表达"显式 null 赢"**：模型清除帧（null）vs 迟到 REST 快照（旧值）——用 ref 记录"已收到 WS 帧"使 WS 成为权威，语义清晰
+  - **provider 构造 spy 是"切换生效"的最好验证**：builtModels 序列 `[undefined, 'deepseek-v3']` 直接证明首构建无覆盖、重启带新模型
+  - **executeApprovedAction 窗口当前不可达**（工具全同步）——M1 修复是纵深防御，测试固化不变量而非当前可达路径
