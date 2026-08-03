@@ -71,6 +71,12 @@
 - Task 21 分发（`npm install -g` + `docker build && docker run`）
 - Task 22 文档（README）
 
+### 11. 目录选择器整机浏览端点放开（安全取舍，接受）[设计]
+- **背景**：用户需求"目录选择器可以选择整台电脑的任何目录"→ 新增 `GET /api/fs/browse` 无授权浏览端点；`/api/fs/tree` 保持授权根不变。
+- **评估**：任何能访问 WebUI 的客户端可枚举本机目录结构（目录/文件名、类型、大小）——仅**元数据**、不返回文件内容，与本地 CLI `ls` 等价的信息暴露；配合用户在场监督模式（创建会话时选中的目录成为授权根），风险可接受。
+- **边界**：会话详情文件树仍走 `GET /api/fs/tree`（仅授权根）；browse 不跟随 symlink（标记 `link`）。
+- **位置**：`src/webui/api/fs.ts`（/browse 路由）、`src/webui/client/src/components/DirectoryPicker.tsx`。
+
 ---
 
 ## 二、已修复（归档）

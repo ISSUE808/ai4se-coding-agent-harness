@@ -318,3 +318,60 @@ describe('GET /api/fs/tree', () => {
     expect(rootRes.body.path).toBe(configRoot);
   });
 });
+
+describe('GET /api/fs/browse（目录选择器浏览端点——整机浏览，无授权限制）', () => {
+  it('browses ANY directory outside the workspace roots (user decision: picker browses the whole machine)', async () => {
+    const { app, other } = routerApp();
+    const res = await request(app).get('/api/fs/browse').query({ path: other });
+    expect(res.status).toBe(200);
+    expect(res.body.path).toBe(other);
+    // Entries: dirs first, then files, alphabetical (same contract as tree).
+    const names = res.body.entries.map((e: { name: string }) => e.name);
+    expect(names).toEqual(['src', 'package.json', 'README.md']);
+    const src = res.body.entries.find((e: { name: string }) => e.name === 'src');
+    expect(src.type).toBe('dir');
+    const pkg = res.body.entries.find((e: { name: string }) => e.name === 'package.json');
+    expect(pkg.type).toBe('file');
+    expect(pkg.size).toBeTypeOf('number');
+  });
+
+  it('returns the machine roots when no path is given (Windows: drive letters)', async () => {
+    const { app } = routerApp();
+    const res = await request(app).get('/api/fs/browse');
+    expect(res.status).toBe(200);
+    const roots = res.body.roots as string[];
+    expect(roots.length).toBeGreaterThan(0);
+    if (process.platform === 'win32') {
+      expect(roots.some((r) => /^[A-Z]:[\\/]$/.test(r))).toBe(true);
+    } else {
+      expect(roots).toContain('/');
+    }
+  });
+
+  it('rejects a missing directory with 400', async () => {
+    const { app } = routerApp();
+    const missing = path.join(os.tmpdir(), 'codeharness-browse-missing-' + Date.now());
+    const res = await request(app).get('/api/fs/browse').query({ path: missing });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a file path with 400 (browse requires a directory)', async () => {
+    const { app, root } = routerApp();
+    const filePath = path.join(root, 'package.json');
+    const res = await request(app).get('/api/fs/browse').query({ path: filePath });
+    expect(res.status).toBe(400);
+  });
+
+  it('marks symlink entries as type "link" without following them', async () => {
+    const { app, root, other } = routerApp();
+    const linkPath = path.join(root, 'link-out');
+    if (!tryCreateLink(other, linkPath)) {
+      return; // platform forbids links — nothing to assert
+    }
+    const res = await request(app).get('/api/fs/browse').query({ path: root });
+    expect(res.status).toBe(200);
+    const link = res.body.entries.find((e: { name: string }) => e.name === 'link-out');
+    expect(link).toBeDefined();
+    expect(link.type).toBe('link');
+  });
+});

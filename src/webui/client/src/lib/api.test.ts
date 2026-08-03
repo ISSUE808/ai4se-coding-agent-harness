@@ -3,7 +3,9 @@ import {
   createSession,
   deleteKey,
   fetchConfig,
+  fetchFsBrowse,
   fetchFsTree,
+  fetchMachineRoots,
   fetchSession,
   fetchSessions,
   getKeyStatus,
@@ -245,5 +247,31 @@ describe('api client', () => {
     await fetchFsTree();
     expect(lastPath()).toBe('/api/fs/tree');
     expect(new URL(fetchMock.mock.calls[0][0]).search).toBe('');
+  });
+
+  it('fetchMachineRoots GETs /api/fs/browse without a path and returns the machine roots', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ roots: ['C:\\', 'D:\\'] }));
+    const result = await fetchMachineRoots();
+    expect(result).toEqual(['C:\\', 'D:\\']);
+    expect(lastPath()).toBe('/api/fs/browse');
+    expect(new URL(fetchMock.mock.calls[0][0]).search).toBe('');
+  });
+
+  it('fetchFsBrowse GETs /api/fs/browse with the query path and returns the listing', async () => {
+    const listing = {
+      path: 'C:\\Users',
+      parent: 'C:\\',
+      entries: [
+        { path: 'C:\\Users\\me', name: 'me', type: 'dir' },
+        { path: 'C:\\Users\\a.txt', name: 'a.txt', type: 'file', size: 3 },
+        { path: 'C:\\Users\\alias', name: 'alias', type: 'link' },
+      ],
+    };
+    fetchMock.mockResolvedValue(jsonResponse(listing));
+    const result = await fetchFsBrowse('C:\\Users');
+    expect(result).toEqual(listing);
+    const [url] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/fs/browse');
+    expect(new URL(url).searchParams.get('path')).toBe('C:\\Users');
   });
 });

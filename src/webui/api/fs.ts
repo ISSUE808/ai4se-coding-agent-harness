@@ -157,7 +157,96 @@ export function createFsRouter(deps: FsRouterDeps): Router {
     res.json(tree);
   });
 
+  /**
+   * Directory picker browsing — intentionally UNRESTRICTED (user decision,
+   * Task 23 review follow-up): the picker must let the user select ANY
+   * directory on the machine as a future session workspace root. Unlike
+   * `/tree` (authorized roots only), `/browse` lists metadata only — entry
+   * names/types/sizes, never file contents. The exposure equals a local
+   * `ls`; the supervision model (choosing a dir authorizes it as a session
+   * root) is the real control. Documented limitation in KNOWN_ISSUES.
+   */
+  router.get('/browse', (req, res) => {
+    const rawPath = req.query.path;
+    if (rawPath !== undefined && typeof rawPath !== 'string') {
+      res.status(400).json({ error: 'path must be a single string' });
+      return;
+    }
+    // No path → machine roots (Windows drive letters / POSIX `/`).
+    if (rawPath === undefined || rawPath.trim() === '') {
+      res.json({ roots: machineRoots() });
+      return;
+    }
+    const target = path.resolve(rawPath);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(target);
+    } catch {
+      res.status(400).json({ error: `directory does not exist or is not readable: ${target}` });
+      return;
+    }
+    if (!stat.isDirectory()) {
+      res.status(400).json({ error: `not a directory: ${target}` });
+      return;
+    }
+
+    let names: string[];
+    try {
+      names = fs.readdirSync(target);
+    } catch {
+      res.status(400).json({ error: `directory is not readable: ${target}` });
+      return;
+    }
+    const truncated = names.length > maxEntriesPerDir;
+    if (truncated) {
+      names = names.slice(0, maxEntriesPerDir);
+    }
+
+    const entries: Array<{ path: string; name: string; type: 'dir' | 'file' | 'link'; size?: number }> = [];
+    for (const name of names) {
+      const full = path.join(target, name);
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(full);
+      } catch {
+        continue;
+      }
+      const type: 'dir' | 'file' | 'link' = st.isSymbolicLink()
+        ? 'link'
+        : st.isDirectory()
+          ? 'dir'
+          : 'file';
+      entries.push({ path: full, name, type, ...(type === 'file' ? { size: st.size } : {}) });
+    }
+    // Directories first, then alphabetical (same contract as /tree).
+    entries.sort(
+      (a, b) =>
+        (a.type === 'dir' ? -1 : 0) - (b.type === 'dir' ? -1 : 0) || a.name.localeCompare(b.name),
+    );
+
+    res.json({ path: target, parent: path.dirname(target), entries, truncated });
+  });
+
   return router;
+}
+
+/** Machine roots for the picker: drive letters on Windows, `/` elsewhere. */
+function machineRoots(): string[] {
+  if (process.platform !== 'win32') {
+    return ['/'];
+  }
+  const drives: string[] = [];
+  for (let code = 65; code <= 90; code++) {
+    const letter = String.fromCharCode(code);
+    try {
+      if (fs.existsSync(`${letter}:\\`)) {
+        drives.push(`${letter}:\\`);
+      }
+    } catch {
+      // unreadable drive — skip
+    }
+  }
+  return drives;
 }
 
 /** Mutable recursion state for the global node budget (M7). */

@@ -240,6 +240,42 @@ export async function fetchFsTree(path?: string): Promise<FsTreeNode> {
   return request<FsTreeNode>(`/api/fs/tree${query}`);
 }
 
+/** One entry in a GET /api/fs/browse listing (metadata only, never contents). */
+export interface FsBrowseEntry {
+  /** Absolute path of this entry. */
+  path: string;
+  /** Basename of this entry. */
+  name: string;
+  type: 'dir' | 'file' | 'link';
+  /** File size in bytes (files only). */
+  size?: number;
+}
+
+/** Directory listing served by GET /api/fs/browse?path=. */
+export interface FsBrowseResult {
+  path: string;
+  parent: string;
+  entries: FsBrowseEntry[];
+  /** True when the directory held more entries than the server cap. */
+  truncated?: boolean;
+}
+
+/**
+ * Fetch the machine's root directories (Windows drive letters like `C:\`,
+ * or `/` on POSIX). The picker's top level — browsing is deliberately
+ * UNRESTRICTED so the user can choose ANY directory as a session root;
+ * the server returns metadata only (see KNOWN_ISSUES).
+ */
+export async function fetchMachineRoots(): Promise<string[]> {
+  const body = await request<{ roots: string[] }>('/api/fs/browse');
+  return body.roots;
+}
+
+/** List one directory's entries (names/types/sizes — never file contents). */
+export async function fetchFsBrowse(path: string): Promise<FsBrowseResult> {
+  return request<FsBrowseResult>(`/api/fs/browse?path=${encodeURIComponent(path)}`);
+}
+
 export async function saveConfig(patch: ConfigValue): Promise<ConfigValue> {
   return request<ConfigValue>('/api/config', jsonInit('PUT', patch));
 }

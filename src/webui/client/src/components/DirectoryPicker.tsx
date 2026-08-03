@@ -1,16 +1,18 @@
 /**
- * DirectoryPicker (PLAN Task 23) — modal directory browser for the
- * new-session 工作目录 field. Renders the tree served by GET /api/fs/tree
- * (root = the server default workspace root): clicking a directory name
- * selects it (fills the parent form's input); clicking its chevron expands
- * it, lazily fetching deeper levels per directory. The server enforces the
- * workspace boundary and per-level caps, so the picker never browses outside
- * authorized roots.
+ * DirectoryPicker — modal directory browser for the new-session 工作目录
+ * field. Browsing is deliberately UNRESTRICTED (user decision): the picker
+ * opens on the machine roots (Windows drive letters like `C:\`, `/` on
+ * POSIX) and lazily fetches ANY directory below via GET /api/fs/browse.
+ * The server returns metadata only (names/types/sizes, never file
+ * contents), and picking a directory here authorizes it as the new
+ * session's workspace root — the supervision model is the real control
+ * (KNOWN_ISSUES). The session-detail file tree keeps using GET /api/fs/tree
+ * (authorized roots only).
  */
 import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { AlertTriangle, ChevronRight, File, Folder, FolderOpen, Loader2, RefreshCw, X } from 'lucide-react';
 import designTokens from '../design-tokens';
-import { fetchFsTree, type FsTreeNode } from '../lib/api';
+import { fetchFsBrowse, fetchMachineRoots, type FsBrowseEntry } from '../lib/api';
 
 interface DirectoryPickerProps {
   /** Called with the picked directory's absolute path. */
@@ -21,10 +23,16 @@ interface DirectoryPickerProps {
 
 type Phase = 'loading' | 'ready' | 'error';
 
+/** Virtual root of the browser: lists the machine roots, not a real dir. */
+const MACHINE_ROOT: FsBrowseEntry = { path: '', name: '这台电脑', type: 'dir' };
+
 export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerProps) {
-  // Dir path → lazily fetched tree rooted at that dir ('' = the root fetch).
-  const [trees, setTrees] = useState<Map<string, FsTreeNode>>(new Map());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Dir path → its browse listing ('' = the machine roots, synthesized as a
+  // pseudo-directory). Entries for a dir are only fetched on first expand.
+  const [dirs, setDirs] = useState<Map<string, { entries: FsBrowseEntry[]; truncated: boolean }>>(
+    new Map(),
+  );
+  const [expanded, setExpanded] = useState<Set<string>>(new Set([MACHINE_ROOT.path]));
   const [phase, setPhase] = useState<Phase>('loading');
   const [rootError, setRootError] = useState<string | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
@@ -33,10 +41,13 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
     setPhase('loading');
     setRootError(null);
     try {
-      const node = await fetchFsTree();
-      setTrees((prev) => new Map(prev).set('', node));
-      // The root starts expanded so the first level is visible immediately.
-      setExpanded((prev) => new Set(prev).add(node.path));
+      const roots = await fetchMachineRoots();
+      setDirs((prev) =>
+        new Map(prev).set(MACHINE_ROOT.path, {
+          entries: roots.map((root) => ({ path: root, name: root, type: 'dir' })),
+          truncated: false,
+        }),
+      );
       setPhase('ready');
     } catch (err) {
       setRootError(err instanceof Error ? err.message : '无法加载目录');
@@ -60,24 +71,26 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  /** Fetch one directory's children for expansion; failures are non-fatal. */
-  function loadBranch(node: FsTreeNode): void {
+  /** Fetch one directory's entries for expansion; failures are non-fatal. */
+  function loadBranch(node: FsBrowseEntry): void {
     setBranchError(null);
-    fetchFsTree(node.path)
-      .then((fetched) => {
-        setTrees((prev) => new Map(prev).set(node.path, fetched));
+    fetchFsBrowse(node.path)
+      .then((listing) => {
+        setDirs((prev) =>
+          new Map(prev).set(node.path, { entries: listing.entries, truncated: listing.truncated === true }),
+        );
       })
       .catch((err) => {
         setBranchError(err instanceof Error ? err.message : '无法展开目录');
       });
   }
 
-  function toggleExpand(node: FsTreeNode): void {
+  function toggleExpand(node: FsBrowseEntry): void {
     if (node.type !== 'dir') {
       return;
     }
     // M4: the fetch side effect lives OUTSIDE the state updater (an updater
-    // may run twice under StrictMode → duplicate requests), and the `trees`
+    // may run twice under StrictMode → duplicate requests), and the `dirs`
     // check happens against the current render's closure.
     if (expanded.has(node.path)) {
       setExpanded((prev) => {
@@ -86,7 +99,7 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
         return next;
       });
     } else {
-      if (!trees.has(node.path)) {
+      if (!dirs.has(node.path)) {
         loadBranch(node);
       }
       setExpanded((prev) => {
@@ -97,15 +110,11 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
     }
   }
 
-  /** The root node of the browser ('': the server default workspace root). */
-  const root = trees.get('') ?? null;
-
-  function renderNode(node: FsTreeNode, depth: number): ReactNode {
-    // A lazily fetched subtree replaces the node's original children.
-    const effective = node.type === 'dir' ? (trees.get(node.path) ?? node) : node;
+  function renderNode(node: FsBrowseEntry, depth: number): ReactNode {
+    const listing = node.type === 'dir' ? dirs.get(node.path) : undefined;
+    const children = listing?.entries ?? [];
     const isExpanded = expanded.has(node.path);
-    const children =
-      effective.type === 'dir' && Array.isArray(effective.children) ? effective.children : [];
+    const isDir = node.type === 'dir';
 
     return (
       <div key={node.path}>
@@ -120,7 +129,7 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
             borderRadius: designTokens.radius.sm,
           }}
         >
-          {node.type === 'dir' ? (
+          {isDir ? (
             <button
               type="button"
               aria-label={isExpanded ? `折叠 ${node.name}` : `展开 ${node.name}`}
@@ -135,7 +144,7 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
           ) : (
             <span style={{ width: 12, display: 'grid', placeItems: 'center', flexShrink: 0 }} />
           )}
-          {node.type === 'dir' ? (
+          {isDir ? (
             isExpanded ? (
               <FolderOpen size={13} style={{ color: designTokens.colors.textMuted, flexShrink: 0 }} />
             ) : (
@@ -144,7 +153,7 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
           ) : (
             <File size={13} style={{ color: designTokens.colors.textSubtle, flexShrink: 0 }} />
           )}
-          {node.type === 'dir' ? (
+          {isDir && node.path !== '' ? (
             <button
               type="button"
               aria-label={`选择 ${node.name}`}
@@ -156,9 +165,9 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
           ) : (
             <span style={fileLabelStyle}>{node.name}</span>
           )}
-          {node.truncated === true && <span style={truncatedHintStyle}>…截断</span>}
+          {listing?.truncated === true && <span style={truncatedHintStyle}>…截断</span>}
         </div>
-        {node.type === 'dir' && isExpanded && children.length > 0 && (
+        {isDir && isExpanded && children.length > 0 && (
           <div>{children.map((child) => renderNode(child, depth + 1))}</div>
         )}
       </div>
@@ -234,7 +243,7 @@ export default function DirectoryPicker({ onSelect, onClose }: DirectoryPickerPr
               </button>
             </div>
           )}
-          {phase === 'ready' && root !== null && renderNode(root, 0)}
+          {phase === 'ready' && renderNode(MACHINE_ROOT, 0)}
           {branchError !== null && (
             <p style={{ margin: `${designTokens.spacing[2]} 0 0`, color: designTokens.colors.danger, fontSize: designTokens.typography.fontSize.sm }}>
               {branchError}
