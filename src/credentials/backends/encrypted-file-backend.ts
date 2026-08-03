@@ -81,6 +81,11 @@ export class EncryptedFileBackend implements CredentialBackend {
     return Boolean(map[service] && account in map[service]);
   }
 
+  /** Enumerate the accounts stored under a service (Task 25). */
+  async list(service: string): Promise<string[]> {
+    return Object.keys(this.loadMap()[service] ?? {});
+  }
+
   private loadMap(): SecretMap {
     let raw: string;
     try {

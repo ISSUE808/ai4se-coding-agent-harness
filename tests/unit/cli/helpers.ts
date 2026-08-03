@@ -41,6 +41,7 @@ export function mockBackend(
     save,
     delete: remove,
     exists: vi.fn(async () => stored !== null),
+    list: vi.fn(async () => []),
   };
   return { backend, isAvailable, read, save, delete: remove };
 }

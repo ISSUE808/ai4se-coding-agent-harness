@@ -90,4 +90,10 @@ export class CredentialStore {
     const backend = await this.getActiveBackend();
     return backend.delete(service, account);
   }
+
+  /** Enumerate the accounts (providers) configured under a service (Task 25). */
+  async list(service: string): Promise<string[]> {
+    const backend = await this.getActiveBackend();
+    return backend.list(service);
+  }
 }

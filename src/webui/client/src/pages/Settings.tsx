@@ -12,6 +12,7 @@ import designTokens from '../design-tokens';
 import {
   deleteKey,
   fetchConfig,
+  fetchKeys,
   getKeyStatus,
   saveConfig,
   saveKey,
@@ -20,8 +21,12 @@ import {
 import { parseConfigJson } from '../lib/config-json';
 import { defineCodeHarnessTheme, MONACO_THEME } from '../lib/monaco-theme';
 
-/** Providers shown in key management (deepseek is the default harness LLM). */
-const PROVIDERS = ['deepseek', 'openai', 'anthropic'];
+/**
+ * Providers shown when GET /api/keys is unreachable — a fallback only, never
+ * a whitelist: the live list is enumerated from the credential store (Task 25),
+ * so custom providers added at runtime show up after a reload.
+ */
+const DEFAULT_PROVIDERS = ['deepseek', 'openai', 'anthropic'];
 
 const NOT_SET = 'not set';
 
@@ -140,6 +145,46 @@ export default function Settings() {
 // ─── Key management ──────────────────────────────────────────────────────────
 
 function KeyManagementCard() {
+  const [providers, setProviders] = useState<string[] | null>(null);
+  const [statuses, setStatuses] = useState<Record<string, string>>({});
+  const [newProvider, setNewProvider] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const list = await fetchKeys();
+      setStatuses(Object.fromEntries(list.providers.map((p) => [p.provider, p.status])));
+      setProviders(list.providers.map((p) => p.provider));
+    } catch {
+      // Backend unreachable — fall back to the well-known set (rows fetch
+      // their own status via getKeyStatus).
+      setProviders(DEFAULT_PROVIDERS);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function handleAddProvider(): void {
+    const name = newProvider.trim();
+    if (name === '') {
+      setAddError('请输入供应商名称');
+      return;
+    }
+    if (name.includes('/')) {
+      setAddError('供应商名称不能包含 "/"');
+      return;
+    }
+    if ((providers ?? []).some((p) => p.toLowerCase() === name.toLowerCase())) {
+      setAddError(`供应商 ${name} 已存在`);
+      return;
+    }
+    setAddError(null);
+    setProviders((prev) => [...(prev ?? []), name]);
+    setNewProvider('');
+  }
+
   return (
     <section
       id="settings-keys"
@@ -176,13 +221,62 @@ function KeyManagementCard() {
             fontSize: designTokens.typography.fontSize.sm,
           }}
         >
-          按 provider 管理密钥。密钥通过 POST /api/keys/:provider 单向写入凭据库，前端不保存明文。
+          按 provider 管理密钥（列表来自凭据库枚举，支持任意自定义供应商）。密钥通过 POST /api/keys/:provider
+          单向写入，前端不保存明文。
         </p>
       </div>
       <div>
-        {PROVIDERS.map((provider) => (
-          <KeyRow key={provider} provider={provider} />
-        ))}
+        {providers === null ? (
+          <div style={{ padding: designTokens.spacing[5], color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+            加载供应商列表…
+          </div>
+        ) : (
+          providers.map((provider) => (
+            <KeyRow
+              key={provider}
+              provider={provider}
+              initialStatus={statuses[provider]}
+            />
+          ))
+        )}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: designTokens.spacing[3],
+          padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+        }}
+      >
+        <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+          添加供应商
+        </span>
+        <input
+          aria-label="新供应商名称"
+          value={newProvider}
+          onChange={(e) => setNewProvider(e.target.value)}
+          placeholder="如 groq、mistral"
+          style={{
+            width: 180,
+            padding: designTokens.spacing[2],
+            borderRadius: designTokens.radius.md,
+            borderWidth: 1,
+            borderStyle: 'solid',
+            borderColor: designTokens.colors.borderStrong,
+            background: designTokens.colors.well,
+            color: designTokens.colors.text,
+            fontSize: designTokens.typography.fontSize.base,
+            fontFamily: designTokens.typography.fontFamily.mono,
+          }}
+        />
+        <button type="button" onClick={handleAddProvider} style={secondaryButtonStyle}>
+          添加供应商
+        </button>
+        {addError !== null && (
+          <span style={{ color: designTokens.colors.danger, fontSize: designTokens.typography.fontSize.sm }}>
+            {addError}
+          </span>
+        )}
       </div>
     </section>
   );
@@ -200,8 +294,8 @@ function logoColors(provider: string): { fg: string; bg: string } {
   }
 }
 
-function KeyRow({ provider }: { provider: string }) {
-  const [status, setStatus] = useState<string | null>(null);
+function KeyRow({ provider, initialStatus }: { provider: string; initialStatus?: string }) {
+  const [status, setStatus] = useState<string | null>(initialStatus ?? null);
   const [editing, setEditing] = useState(false);
   const [keyText, setKeyText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -216,8 +310,13 @@ function KeyRow({ provider }: { provider: string }) {
   }, [provider]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    // When the card supplied a status from GET /api/keys, trust it (avoids an
+    // N+1 of status requests); fallback rows (backend unreachable, or a just
+    // added custom provider) fetch their own status.
+    if (initialStatus === undefined) {
+      void load();
+    }
+  }, [load, initialStatus]);
 
   const configured = status !== null && status !== NOT_SET;
   const logo = logoColors(provider);
@@ -691,15 +790,108 @@ function ConfigEditorCard() {
   );
 }
 
-// ─── 模型与护栏 (read-only snapshot of llm/agent/guardrails config) ─────────
+// ─── 模型与护栏 (editable form over llm/agent/guardrails config) ────────────
+
+/** Result of validating the form: the PUT /api/config patch, or null + error. */
+interface FormValidation {
+  patch: ConfigValue;
+  error: string | null;
+}
 
 function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
   const llm = asRecord(config?.llm);
   const agent = asRecord(config?.agent);
-  const guardrails = asRecord(config?.guardrails);
-  const requireApproval = Array.isArray(guardrails?.requireApproval)
-    ? (guardrails.requireApproval as unknown[])
-    : [];
+
+  const [model, setModel] = useState('');
+  const [maxTokens, setMaxTokens] = useState('');
+  const [maxRounds, setMaxRounds] = useState('');
+  const [contextThreshold, setContextThreshold] = useState('');
+  const [approvalRules, setApprovalRules] = useState<string[]>([]);
+  const [blockOutbound, setBlockOutbound] = useState(false);
+  const [ruleText, setRuleText] = useState('');
+  const [ruleError, setRuleError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ kind: 'ok' | 'error' | 'saved'; message: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Seed the form once from GET /api/config (the parent fetches it on mount).
+  useEffect(() => {
+    if (config === null) {
+      return;
+    }
+    const seedLlm = asRecord(config.llm);
+    const seedAgent = asRecord(config.agent);
+    const seedGuardrails = asRecord(config.guardrails);
+    setModel(typeof seedLlm?.model === 'string' ? seedLlm.model : '');
+    setMaxTokens(typeof seedLlm?.maxTokens === 'number' ? String(seedLlm.maxTokens) : '');
+    setMaxRounds(typeof seedAgent?.maxRounds === 'number' ? String(seedAgent.maxRounds) : '');
+    setContextThreshold(
+      typeof seedAgent?.contextThreshold === 'number' ? String(seedAgent.contextThreshold) : '',
+    );
+    setApprovalRules(
+      Array.isArray(seedGuardrails?.requireApproval)
+        ? (seedGuardrails.requireApproval as unknown[]).map(String)
+        : [],
+    );
+    setBlockOutbound(seedGuardrails?.blockOutbound === true);
+  }, [config]);
+
+  function validate(): FormValidation {
+    if (model.trim() === '') {
+      return { patch: {}, error: '模型名称不能为空' };
+    }
+    const tokens = Number(maxTokens);
+    const rounds = Number(maxRounds);
+    const threshold = Number(contextThreshold);
+    if (!Number.isInteger(tokens) || tokens <= 0) {
+      return { patch: {}, error: '最大 Token 必须为正整数' };
+    }
+    if (!Number.isInteger(rounds) || rounds < 0) {
+      return { patch: {}, error: '最大轮次必须为不小于 0 的整数（0 = 无上限）' };
+    }
+    if (Number.isNaN(threshold) || threshold <= 0 || threshold > 1) {
+      return { patch: {}, error: '上下文阈值必须在 (0, 1] 之间' };
+    }
+    return {
+      patch: {
+        llm: { model: model.trim(), maxTokens: tokens },
+        agent: { maxRounds: rounds, contextThreshold: threshold },
+        guardrails: { requireApproval: [...approvalRules], blockOutbound },
+      },
+      error: null,
+    };
+  }
+
+  async function handleSave(): Promise<void> {
+    const { patch, error } = validate();
+    if (error !== null) {
+      setStatus({ kind: 'error', message: error });
+      return;
+    }
+    setBusy(true);
+    try {
+      await saveConfig(patch);
+      setStatus({ kind: 'saved', message: '设置已保存，配置已生效' });
+    } catch (err) {
+      setStatus({ kind: 'error', message: `保存失败：${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleAddRule(): void {
+    const rule = ruleText.trim();
+    if (rule === '') {
+      setRuleError('请输入规则名称');
+      return;
+    }
+    if (approvalRules.includes(rule)) {
+      setRuleError(`规则 ${rule} 已在列表中`);
+      return;
+    }
+    setApprovalRules([...approvalRules, rule]);
+    setRuleText('');
+    setRuleError(null);
+  }
 
   return (
     <section
@@ -737,7 +929,7 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
             fontSize: designTokens.typography.fontSize.sm,
           }}
         >
-          当前 LLM 配置与护栏规则（只读快照）。修改请在「配置编辑」中调整。
+          直接编辑 LLM 与 agent 运行参数，保存后写入配置（PUT /api/config）。密钥字段不接受——请通过 API Keys 管理。
         </p>
       </div>
 
@@ -748,22 +940,14 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
       ) : (
         <div>
           <SettingSection label="模型">
+            <SettingField k="模型名称" value={model} onChange={setModel} placeholder="如 deepseek-chat" mono />
+            <SettingField k="最大 Token" value={maxTokens} onChange={setMaxTokens} placeholder="如 4096" mono />
             <SettingKV k="提供商" v={typeof llm?.provider === 'string' ? llm.provider : '—'} mono />
-            <SettingKV k="模型" v={typeof llm?.model === 'string' ? llm.model : '—'} mono />
-            <SettingKV k="最大 Token" v={typeof llm?.maxTokens === 'number' ? String(llm.maxTokens) : '—'} mono />
             <SettingKV k="API 地址" v={typeof llm?.baseUrl === 'string' ? llm.baseUrl : '—'} mono />
           </SettingSection>
           <SettingSection label="Agent 参数">
-            <SettingKV
-              k="最大轮次"
-              v={typeof agent?.maxRounds === 'number' ? (agent.maxRounds === 0 ? '无上限' : String(agent.maxRounds)) : '—'}
-              mono
-            />
-            <SettingKV
-              k="上下文阈值"
-              v={typeof agent?.contextThreshold === 'number' ? String(agent.contextThreshold) : '—'}
-              mono
-            />
+            <SettingField k="最大轮次" value={maxRounds} onChange={setMaxRounds} placeholder="0 = 无上限" mono />
+            <SettingField k="上下文阈值" value={contextThreshold} onChange={setContextThreshold} placeholder="如 0.8" mono />
             <SettingKV
               k="工作目录"
               v={typeof agent?.workspaceRoot === 'string' ? agent.workspaceRoot : '—'}
@@ -771,50 +955,124 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
             />
           </SettingSection>
           <SettingSection label="护栏">
-            {requireApproval.length === 0 && guardrails?.blockOutbound !== true ? (
-              <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
-                配置中未声明护栏规则
-              </span>
-            ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {requireApproval.map((item) => (
-                  <span
-                    key={String(item)}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {approvalRules.map((item) => (
+                <span
+                  key={item}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: designTokens.spacing[1],
+                    padding: '2px 8px',
+                    borderRadius: designTokens.radius.pill,
+                    borderWidth: 1,
+                    borderStyle: 'solid',
+                    borderColor: designTokens.colors.warningBorder,
+                    color: designTokens.colors.warning,
+                    fontSize: designTokens.typography.fontSize.xs,
+                  }}
+                >
+                  {item} · 需审批
+                  <button
+                    type="button"
+                    aria-label={`移除规则 ${item}`}
+                    onClick={() => setApprovalRules(approvalRules.filter((r) => r !== item))}
                     style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      padding: '2px 8px',
-                      borderRadius: designTokens.radius.pill,
-                      borderWidth: 1,
-                      borderStyle: 'solid',
-                      borderColor: designTokens.colors.warningBorder,
-                      color: designTokens.colors.warning,
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      padding: 0,
                       fontSize: designTokens.typography.fontSize.xs,
+                      lineHeight: 1,
                     }}
                   >
-                    {String(item)} · 需审批
-                  </span>
-                ))}
-                {guardrails?.blockOutbound === true && (
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      padding: '2px 8px',
-                      borderRadius: designTokens.radius.pill,
-                      borderWidth: 1,
-                      borderStyle: 'solid',
-                      borderColor: designTokens.colors.dangerBorder,
-                      color: designTokens.colors.danger,
-                      fontSize: designTokens.typography.fontSize.xs,
-                    }}
-                  >
-                    禁止 · 网络外呼
-                  </span>
-                )}
-              </div>
-            )}
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: designTokens.spacing[2], marginTop: designTokens.spacing[2] }}>
+              <input
+                aria-label="新增审批规则"
+                value={ruleText}
+                onChange={(e) => setRuleText(e.target.value)}
+                placeholder="规则名（如 prod、network）"
+                style={{
+                  width: 200,
+                  padding: designTokens.spacing[2],
+                  borderRadius: designTokens.radius.md,
+                  borderWidth: 1,
+                  borderStyle: 'solid',
+                  borderColor: designTokens.colors.borderStrong,
+                  background: designTokens.colors.well,
+                  color: designTokens.colors.text,
+                  fontSize: designTokens.typography.fontSize.base,
+                  fontFamily: designTokens.typography.fontFamily.mono,
+                }}
+              />
+              <button type="button" onClick={handleAddRule} style={secondaryButtonStyle}>
+                添加规则
+              </button>
+              {ruleError !== null && (
+                <span style={{ color: designTokens.colors.danger, fontSize: designTokens.typography.fontSize.sm }}>
+                  {ruleError}
+                </span>
+              )}
+            </div>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: designTokens.spacing[2],
+                marginTop: designTokens.spacing[3],
+                fontSize: designTokens.typography.fontSize.sm,
+                color: designTokens.colors.text,
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                aria-label="禁止网络外呼"
+                checked={blockOutbound}
+                onChange={(e) => setBlockOutbound(e.target.checked)}
+              />
+              禁止网络外呼
+            </label>
           </SettingSection>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: designTokens.spacing[3],
+              padding: `${designTokens.spacing[4]} ${designTokens.spacing[5]}`,
+            }}
+          >
+            {status !== null && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: designTokens.spacing[2],
+                  fontSize: designTokens.typography.fontSize.sm,
+                  color: status.kind === 'error' ? designTokens.colors.danger : status.kind === 'saved' ? designTokens.colors.success : designTokens.colors.info,
+                }}
+              >
+                {status.kind === 'error' ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+                {status.message}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={busy}
+              style={{ ...primaryButtonStyle, opacity: busy ? 0.5 : 1 }}
+            >
+              {busy ? <Loader2 size={12} /> : <Save size={12} />}
+              保存设置
+            </button>
+          </div>
         </div>
       )}
     </section>
@@ -967,6 +1225,55 @@ function SettingKV({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
       >
         {v}
       </span>
+    </div>
+  );
+}
+
+/** Editable single-line field for the 模型与护栏 form (token-derived styles). */
+function SettingField({
+  k,
+  value,
+  onChange,
+  placeholder,
+  mono,
+}: {
+  k: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  mono?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: designTokens.spacing[4],
+        paddingBlock: designTokens.spacing[1],
+        fontSize: 12.5,
+      }}
+    >
+      <span style={{ color: designTokens.colors.textMuted, flexShrink: 0 }}>{k}</span>
+      <input
+        aria-label={k}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{
+          width: 200,
+          padding: designTokens.spacing[1],
+          borderRadius: designTokens.radius.md,
+          borderWidth: 1,
+          borderStyle: 'solid',
+          borderColor: designTokens.colors.borderStrong,
+          background: designTokens.colors.well,
+          color: designTokens.colors.text,
+          fontSize: designTokens.typography.fontSize.base,
+          fontFamily: mono ? designTokens.typography.fontFamily.mono : designTokens.typography.fontFamily.sans,
+          textAlign: 'right',
+        }}
+      />
     </div>
   );
 }

@@ -4,10 +4,15 @@ import type { CredentialStore } from '../../credentials/store.js';
 import { maskSecret } from '../../credentials/mask.js';
 
 /**
- * API key management REST API (PLAN Task 17, SPEC §4.2/§4.3).
+ * API key management REST API (PLAN Task 17 + Task 25, SPEC §4.2/§4.3).
  * All reads flow through CredentialStore.status() / maskSecret() — a masked
  * suffix at most, never plaintext. The secret only ever travels one way:
  * client → POST body → CredentialStore.save().
+ *
+ * Task 25: GET /api/keys enumerates the CONFIGURED providers from the
+ * credential store (CredentialStore.list) — any account a key was saved for
+ * (including custom providers) shows up here, sorted alphabetically, each
+ * with its masked status. No hardcoded provider whitelist exists anywhere.
  */
 
 export interface KeysRouterDeps {
@@ -28,6 +33,20 @@ function asyncRoute(
 export function createKeysRouter(deps: KeysRouterDeps): Router {
   const { credentialStore, service } = deps;
   const router = Router();
+
+  router.get(
+    '/',
+    asyncRoute(async (_req, res) => {
+      const providers = (await credentialStore.list(service)).sort();
+      const entries = await Promise.all(
+        providers.map(async (provider) => ({
+          provider,
+          status: await credentialStore.status(service, provider),
+        })),
+      );
+      res.json({ providers: entries });
+    }),
+  );
 
   router.get(
     '/:provider',

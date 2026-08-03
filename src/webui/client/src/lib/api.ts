@@ -24,6 +24,17 @@ export interface KeyStatus {
   status: string;
 }
 
+export interface KeyProviderStatus {
+  provider: string;
+  /** Masked value e.g. `****-9f2c`, or the literal `not set`. */
+  status: string;
+}
+
+export interface KeyListResponse {
+  /** Every provider that has a credential in the store (Task 25). */
+  providers: KeyProviderStatus[];
+}
+
 export interface KeySaveResponse {
   provider: string;
   saved: boolean;
@@ -146,6 +157,15 @@ export async function resolveApproval(
 }
 
 // ─── Keys (provider-scoped; responses are masked server-side) ───────────────
+
+/**
+ * Enumerate the providers that have a credential in the store (Task 25) —
+ * including custom providers added at runtime. The backend never returns a
+ * hardcoded whitelist; providers come from the credential store itself.
+ */
+export async function fetchKeys(): Promise<KeyListResponse> {
+  return request<KeyListResponse>('/api/keys');
+}
 
 export async function getKeyStatus(provider: string): Promise<KeyStatus> {
   return request<KeyStatus>(`/api/keys/${provider}`);

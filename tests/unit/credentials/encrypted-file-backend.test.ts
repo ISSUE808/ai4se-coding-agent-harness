@@ -82,4 +82,17 @@ describe('EncryptedFileBackend', () => {
     await backend.save(service, account, 'second-secret');
     await expect(backend.read(service, account)).resolves.toBe('second-secret');
   });
+
+  it('list returns the accounts stored under a service, ignoring other services', async () => {
+    const backend = new EncryptedFileBackend(masterPassword, filePath);
+    await backend.save(service, account, secret);
+    await backend.save(service, 'groq', 'sk-groq-123');
+    await backend.save('other-service', 'nested', 'sk-nested-1');
+    await expect(backend.list(service)).resolves.toEqual([account, 'groq']);
+  });
+
+  it('list returns an empty array for a service with no entries', async () => {
+    const backend = new EncryptedFileBackend(masterPassword, filePath);
+    await expect(backend.list(service)).resolves.toEqual([]);
+  });
 });

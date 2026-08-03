@@ -22,6 +22,7 @@ function mockBackend(
   const save = vi.fn(async () => undefined);
   const remove = vi.fn(async () => true);
   const exists = vi.fn(async () => secret !== null);
+  const list = vi.fn(async () => []);
   const backend: CredentialBackend = {
     name,
     isAvailable,
@@ -29,8 +30,9 @@ function mockBackend(
     save,
     delete: remove,
     exists,
+    list,
   };
-  return { backend, isAvailable, read, save, remove };
+  return { backend, isAvailable, read, save, remove, list };
 }
 
 const service = 'codeharness';
@@ -164,5 +166,14 @@ describe('CredentialStore get/status/save/delete', () => {
 
     await expect(store.delete(service, account)).resolves.toBe(true);
     expect(keytar.remove).toHaveBeenCalledWith(service, account);
+  });
+
+  it('list delegates to the active backend, returning configured account names', async () => {
+    const keytar = mockBackend('keytar');
+    keytar.list.mockResolvedValue(['deepseek', 'groq']);
+    const store = new CredentialStore([keytar.backend]);
+
+    await expect(store.list(service)).resolves.toEqual(['deepseek', 'groq']);
+    expect(keytar.list).toHaveBeenCalledWith(service);
   });
 });

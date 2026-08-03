@@ -44,4 +44,9 @@ describe('EnvBackend', () => {
   it('delete throws — env backend is read-only', async () => {
     await expect(backend.delete('codeharness', 'openai')).rejects.toThrow(/read-only/i);
   });
+
+  it('list returns an empty array — the environment has no account namespace to enumerate', async () => {
+    vi.stubEnv(envKey, 'sk-env-test');
+    await expect(backend.list('codeharness')).resolves.toEqual([]);
+  });
 });

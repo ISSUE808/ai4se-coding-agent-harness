@@ -146,4 +146,10 @@ export interface CredentialBackend {
   read(service: string, account: string): Promise<string | null>;
   delete(service: string, account: string): Promise<boolean>;
   exists(service: string, account: string): Promise<boolean>;
+  /**
+   * Enumerate the account names configured under a service (Task 25: WebUI
+   * GET /api/keys lists providers from the credential store). Backends that
+   * cannot enumerate (env: no account namespace) return an empty array.
+   */
+  list(service: string): Promise<string[]>;
 }

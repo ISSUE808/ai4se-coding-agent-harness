@@ -43,6 +43,9 @@ function memoryBackend(): CredentialBackend {
     async exists(_service, account) {
       return secrets.has(account);
     },
+    async list() {
+      return [...secrets.keys()];
+    },
   };
 }
 
@@ -70,10 +73,13 @@ afterEach(async () => {
   openServers.length = 0;
 });
 
-async function makeFixture(config?: Config): Promise<Fixture> {
+async function makeFixture(
+  config?: Config,
+  credentialBackend?: CredentialBackend,
+): Promise<Fixture> {
   const events = createEventBus();
   const sessionStore = new InMemorySessionStore();
-  const credentialStore = new CredentialStore([memoryBackend()]);
+  const credentialStore = new CredentialStore([credentialBackend ?? memoryBackend()]);
   const hitl = new HITLManager();
   let persisted: Config | null = null;
   const web = createWebUIServer({
@@ -458,6 +464,50 @@ describe('REST /api/keys', () => {
   });
 });
 
+describe('REST /api/keys enumeration (Task 25: custom providers)', () => {
+  it('GET /api/keys returns an empty provider list when nothing is configured', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    expect(res.body.providers).toEqual([]);
+  });
+
+  it('GET /api/keys enumerates every configured provider with a masked status, never plaintext', async () => {
+    const { web } = await makeFixture();
+    await request(web.app).post('/api/keys/deepseek').send({ apiKey: 'sk-secret-abcd1' });
+    await request(web.app).post('/api/keys/groq').send({ apiKey: 'sk-groq-5678' });
+    const res = await request(web.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    expect(res.body.providers).toEqual([
+      { provider: 'deepseek', status: '****-bcd1' },
+      { provider: 'groq', status: '****-5678' },
+    ]);
+    expect(JSON.stringify(res.body)).not.toContain('sk-secret-abcd1');
+    expect(JSON.stringify(res.body)).not.toContain('sk-groq-5678');
+  });
+
+  it('a custom provider survives a backend restart — enumerated from the credential store', async () => {
+    // The SAME in-memory backend spans two server instances (a "restart").
+    const backend = memoryBackend();
+    const { web: first } = await makeFixture(undefined, backend);
+    await request(first.app).post('/api/keys/mistral').send({ apiKey: 'sk-mistral-9999' });
+    await first.close();
+
+    const { web: second } = await makeFixture(undefined, backend);
+    const res = await request(second.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    expect(res.body.providers).toEqual([{ provider: 'mistral', status: '****-9999' }]);
+  });
+
+  it('deleting a key removes the provider from GET /api/keys', async () => {
+    const { web } = await makeFixture();
+    await request(web.app).post('/api/keys/groq').send({ apiKey: 'sk-groq-5678' });
+    await request(web.app).delete('/api/keys/groq');
+    const res = await request(web.app).get('/api/keys');
+    expect(res.body.providers).toEqual([]);
+  });
+});
+
 describe('REST /api/config', () => {
   it('GET returns the merged config with secrets masked', async () => {
     const { web } = await makeFixture(secretConfig());
@@ -519,6 +569,35 @@ describe('REST /api/config', () => {
     const persisted = getPersisted();
     expect(persisted).toBeNull();
     expect(JSON.stringify(persisted)).not.toContain('sk-leak');
+  });
+
+  it('PUT still rejects a secret nested in the Task 25 editable shape (guardrails.apiKey)', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).put('/api/config').send({
+      llm: { model: 'deepseek-v4', maxTokens: 8192 },
+      agent: { maxRounds: 5, contextThreshold: 0.7 },
+      guardrails: { requireApproval: ['prod'], apiKey: 'sk-deep-leak' },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('guardrails.apiKey cannot be set via config — use POST /api/keys/:provider instead');
+  });
+
+  it('PUT accepts the Task 25 editable fields and persists them', async () => {
+    const { web, getPersisted } = await makeFixture();
+    const res = await request(web.app).put('/api/config').send({
+      llm: { model: 'deepseek-v4', maxTokens: 8192 },
+      agent: { maxRounds: 5, contextThreshold: 0.7 },
+      guardrails: { requireApproval: ['prod', 'network'], blockOutbound: true },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.llm.model).toBe('deepseek-v4');
+    expect(res.body.llm.maxTokens).toBe(8192);
+    expect(res.body.agent.maxRounds).toBe(5);
+    expect(res.body.agent.contextThreshold).toBe(0.7);
+    expect(res.body.guardrails.requireApproval).toEqual(['prod', 'network']);
+    expect(res.body.guardrails.blockOutbound).toBe(true);
+    const persisted = getPersisted();
+    expect(persisted?.guardrails).toEqual({ requireApproval: ['prod', 'network'], blockOutbound: true });
   });
 });
 

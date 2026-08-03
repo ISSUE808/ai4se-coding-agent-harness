@@ -31,4 +31,12 @@ export class EnvBackend implements CredentialBackend {
   async exists(_service: string, _account: string): Promise<boolean> {
     return Boolean(process.env[ENV_KEY]);
   }
+
+  /**
+   * The environment has no account namespace — a single CODEHARNESS_API_KEY
+   * serves every account, so nothing can be enumerated (Task 25).
+   */
+  async list(_service: string): Promise<string[]> {
+    return [];
+  }
 }
