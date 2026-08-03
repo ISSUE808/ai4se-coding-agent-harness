@@ -724,3 +724,18 @@
   - **WebUI 层配置与 agent loop 层配置是两个世界**：应用按钮（PUT /api/config）只影响 WebUI 层，loop 的 provider 每次从"构建时传入的 config"取——不共享 liveConfig，切换就只停留在界面层。跨层状态必须显式共享（persistConfig 包装同步 + runSession 读同一引用）
   - **abort 语义要覆盖"调用中"而非只"轮间"**：signal 只在轮边界检查时，慢 LLM 调用期间的中断全部失效——单轮任务直接完成导致重启被 finally 抑制。LLM 响应后补查 abort 是让中断真正生效的最小补丁；3 个既有测试因依赖旧语义（中断轮工具仍执行）而红——语义变更要同步审视依赖该行为的测试
   - **用户的一句"还是 deepseek"同时暴露了两个层的问题**：先修 loop 层快照（新会话用新供应商），再发现 abort 边界问题（运行中切换失效）——真实测试的"再测一次"才逼出第二层
+
+---
+
+## 2026-08-04 01:55 真实测试反馈：LLM call failed 可诊断性增强
+
+- **触发技能**：`test-driven-development`（红→绿）
+- **Subagent**：无（主 agent 直接实现——用户真实测试反馈）
+- **Prompt 要点**：用户应用 nju（baseUrl `https://njusehub.info/v1`）后发消息报 "LLM call failed: 404 openai_error"——裸错误无法判断是端点问题还是协议问题（404 + 非 JSON body = 路由不存在；模型错误通常是 400 带 JSON）。用户确认增强错误消息
+- **产出**：
+  - Commit: `27d320b`（deepseek-provider.ts：complete 的 create 包 try/catch——HTTP 错误（数字 status）抛增强消息：`LLM API 调用失败（{baseUrl}/chat/completions，HTTP {status}）：{原始消息} 响应：{body 前 200 字符}——请检查 API 地址是否为 OpenAI 兼容端点（通常以 /v1 结尾）`；非 HTTP 错误（网络）原样透传；provider 增加 readonly baseUrl 字段；测试 +2：增强断言（URL/HTTP 404/兼容提示/响应片段）+ 非 HTTP 透传）
+  - 测试: 红 1 → 绿 19/19；主套件 554/554 + client 192/192 + 双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **裸 SDK 错误对多供应商场景不可接受**：单供应商时代 "404 openai_error" 尚可猜；多供应商后错误必须自带"发到了哪、什么状态、服务回了什么"——可诊断性随配置自由度同步提升
+  - **instanceof 判断在 mock 环境不可靠**：测试里 OpenAI 被 vi.mock 成 vi.fn()（无 APIError 属性）——用鸭子类型（数字 status）判断 HTTP 错误，比 instanceof 稳
