@@ -160,6 +160,7 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
       service: deps.config.llm.apiKeyService,
       getConfig: () => liveConfig,
       persistConfig,
+      onConfigChanged: deps.onConfigChanged,
     }),
   );
   app.use(

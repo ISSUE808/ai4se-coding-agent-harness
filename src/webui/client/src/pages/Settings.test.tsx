@@ -31,6 +31,7 @@ import {
   getKeyStatus,
   saveConfig,
   saveKey,
+  type KeyProviderStatus,
 } from '../lib/api';
 
 const fetchConfigMock = vi.mocked(fetchConfig);
@@ -220,47 +221,32 @@ describe('Settings', () => {
   it('adds a custom provider and saves its key through the existing POST flow', async () => {
     const user = userEvent.setup();
     saveKeyMock.mockResolvedValue({ provider: 'groq', saved: true, masked: '****-7777' });
-    // After the add (which re-fetches), the list includes groq with metadata.
-    fetchKeysMock.mockResolvedValueOnce({
-      providers: [
-        {
-          provider: 'deepseek',
-          status: '****-9f2c',
-          baseUrl: 'https://api.deepseek.com',
-          defaultModel: 'deepseek-chat',
-          isActive: true,
-        },
-        { provider: 'openai', status: 'not set' },
-        { provider: 'anthropic', status: 'not set' },
-      ],
-    });
-    // The re-fetch after the add includes the new provider.
-    fetchKeysMock.mockResolvedValueOnce({
-      providers: [
-        {
-          provider: 'deepseek',
-          status: '****-9f2c',
-          baseUrl: 'https://api.deepseek.com',
-          defaultModel: 'deepseek-chat',
-          isActive: true,
-        },
-        {
-          provider: 'groq',
-          status: 'not set',
-          baseUrl: 'https://api.groq.com/openai/v1',
-        },
-        { provider: 'openai', status: 'not set' },
-        { provider: 'anthropic', status: 'not set' },
-      ],
-    });
+    // Backend state across the re-fetches the card triggers after the add and
+    // after the save (the save also re-fetches the list — real-test fix).
+    let rows: KeyProviderStatus[] = [
+      {
+        provider: 'deepseek',
+        status: '****-9f2c',
+        baseUrl: 'https://api.deepseek.com',
+        defaultModel: 'deepseek-chat',
+        isActive: true,
+      },
+      { provider: 'openai', status: 'not set' },
+      { provider: 'anthropic', status: 'not set' },
+    ];
+    fetchKeysMock.mockImplementation(async () => ({ providers: rows }));
     render(<Settings />);
     await screen.findByText('****-9f2c');
 
     await user.type(screen.getByLabelText('新供应商名称'), 'groq');
     await user.type(screen.getByLabelText('新供应商 API 地址'), 'https://api.groq.com/openai/v1');
+    // The backend registers the provider — the re-fetch triggered by the
+    // click below returns the updated list (mock state, like the pre-queued
+    // responses of the original test).
+    rows = [...rows, { provider: 'groq', status: 'not set', baseUrl: 'https://api.groq.com/openai/v1' }];
     await user.click(screen.getByRole('button', { name: '添加供应商' }));
 
-    const groqRow = row('groq');
+    const groqRow = await screen.findByTestId('key-row-groq');
     await user.click(within(groqRow).getByRole('button', { name: '添加密钥' }));
     await user.type(within(groqRow).getByLabelText('新密钥'), 'sk-groq-key');
     await user.click(within(groqRow).getByRole('button', { name: '保存' }));
@@ -497,6 +483,104 @@ describe('Settings', () => {
         baseUrl: 'https://api.groq.com/openai/v1',
         defaultModel: 'llama-3.3-70b',
       });
+    });
+  });
+
+  it('a key-only save for a provider WITHOUT registry metadata does not re-fetch (reviewer: unsaved edits survive)', async () => {
+    const user = userEvent.setup();
+    saveKeyMock.mockResolvedValue({ provider: 'openai', saved: true, masked: '****-7777' });
+    render(<Settings />);
+    await screen.findByText('****-9f2c');
+
+    await user.click(within(row('openai')).getByRole('button', { name: '添加密钥' }));
+    await user.type(within(row('openai')).getByLabelText('新密钥'), 'sk-openai-key');
+    await user.click(within(row('openai')).getByRole('button', { name: '保存' }));
+
+    await waitFor(() => {
+      expect(saveKeyMock).toHaveBeenCalledWith('openai', 'sk-openai-key', {});
+    });
+    expect(await within(row('openai')).findByText('****-7777')).toBeInTheDocument();
+    // No registry metadata was touched — the list and the page config must
+    // not be re-fetched (unsaved 模型与护栏 edits survive a key save).
+    expect(fetchKeysMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a newly saved provider baseUrl in the row without a page reload (real-test: needed one)', async () => {
+    const user = userEvent.setup();
+    // Backend state after the save: openai gains registry metadata.
+    let openaiBaseUrl: string | undefined;
+    fetchKeysMock.mockImplementation(async () => ({
+      providers: [
+        {
+          provider: 'deepseek',
+          status: '****-9f2c',
+          baseUrl: 'https://api.deepseek.com',
+          defaultModel: 'deepseek-chat',
+          isActive: true,
+        },
+        ...(openaiBaseUrl !== undefined
+          ? [{ provider: 'openai', status: 'not set', baseUrl: openaiBaseUrl }]
+          : [{ provider: 'openai', status: 'not set' }]),
+      ],
+    }));
+    render(<Settings />);
+    await screen.findByText('****-9f2c');
+    expect(within(row('openai')).queryByText(/https:/)).not.toBeInTheDocument();
+
+    await user.click(within(row('openai')).getByRole('button', { name: '添加密钥' }));
+    await user.type(within(row('openai')).getByLabelText('新 API 地址'), 'https://api.openai.com/v1');
+    openaiBaseUrl = 'https://api.openai.com/v1';
+    await user.click(within(row('openai')).getByRole('button', { name: '保存' }));
+
+    // The row re-fetches the key list after a save — the new endpoint shows
+    // immediately, no manual reload.
+    await waitFor(() => {
+      expect(fetchKeysMock).toHaveBeenCalledTimes(2);
+    });
+    expect(await within(row('openai')).findByText('https://api.openai.com/v1')).toBeInTheDocument();
+  });
+
+  it('re-points the 模型与护栏 API 地址 when the ACTIVE provider baseUrl is edited (real-test: needed re-apply + reload)', async () => {
+    const user = userEvent.setup();
+    // Backend state after the save: the ACTIVE provider's endpoint changed,
+    // so both the registry and config.llm.baseUrl carry the new value.
+    let baseUrl = 'https://api.deepseek.com';
+    fetchKeysMock.mockImplementation(async () => ({
+      providers: [
+        {
+          provider: 'deepseek',
+          status: '****-9f2c',
+          baseUrl,
+          defaultModel: 'deepseek-chat',
+          isActive: true,
+        },
+      ],
+    }));
+    fetchConfigMock.mockImplementation(async () => ({
+      llm: { provider: 'deepseek', baseUrl, model: 'deepseek-chat', maxTokens: 4096, apiKeySource: 'keytar' },
+      agent: { maxRounds: 3, contextThreshold: 0.8, workspaceRoot: '/work' },
+      webui: { port: 3000 },
+      guardrails: { requireApproval: ['prod'], blockOutbound: true },
+    }));
+    render(<Settings />);
+    // The endpoint appears twice initially: the row and the 模型与护栏 card.
+    // (Regex — the row's text node is followed by " · 默认 …", so exact-text
+    // matching against the row's textContent would miss it.)
+    await waitFor(() => {
+      expect(screen.getAllByText(/https:\/\/api\.deepseek\.com/).length).toBeGreaterThanOrEqual(2);
+    });
+
+    await user.click(within(row('deepseek')).getByRole('button', { name: '更新' }));
+    await user.clear(within(row('deepseek')).getByLabelText('新 API 地址'));
+    await user.type(within(row('deepseek')).getByLabelText('新 API 地址'), 'https://nju-mirror.example/v1');
+    baseUrl = 'https://nju-mirror.example/v1';
+    await user.click(within(row('deepseek')).getByRole('button', { name: '保存' }));
+
+    // The row AND the card below follow the save without re-applying the
+    // provider or reloading the page (row shows one copy, the card another;
+    // the JSON editor keeps its own snapshot, so it is excluded here).
+    await waitFor(() => {
+      expect(screen.getAllByText(/https:\/\/nju-mirror\.example\/v1/).length).toBeGreaterThanOrEqual(2);
     });
   });
 });

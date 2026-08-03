@@ -86,6 +86,7 @@ async function makeFixture(
   config?: Config,
   credentialBackend?: CredentialBackend,
   fetchFn?: typeof fetch,
+  onConfigChanged?: (prev: Config, next: Config) => void,
 ): Promise<Fixture> {
   const events = createEventBus();
   const sessionStore = new InMemorySessionStore();
@@ -99,6 +100,7 @@ async function makeFixture(
     config: config ?? structuredClone(DEFAULT_CONFIG),
     hitl,
     fetchFn,
+    onConfigChanged,
     persistConfig: async (c: Config) => {
       persisted = structuredClone(c);
     },
@@ -989,6 +991,55 @@ describe('provider registry (multi-provider keys, Task 26 follow-up)', () => {
       }),
     );
     expect(getPersisted()?.llm.provider).toBe('openai');
+  });
+
+  it('POST /api/keys editing the ACTIVE provider baseUrl syncs config.llm.baseUrl', async () => {
+    // Real-test: editing the active provider's endpoint in the keys card
+    // showed the OLD endpoint below until the provider was re-applied —
+    // POST /api/keys only wrote the registry. The active provider's
+    // endpoint must re-point config.llm.baseUrl in the same write.
+    const { web, port, getPersisted } = await makeFixture();
+    const res = await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/deepseek')
+      .send({ baseUrl: 'https://nju-mirror.example/v1' });
+    expect(res.status).toBe(200);
+    const cfg = await request(`http://127.0.0.1:${port}`).get('/api/config');
+    expect(cfg.body.llm.baseUrl).toBe('https://nju-mirror.example/v1');
+    // The registry entry holds the new endpoint too, and the persisted
+    // config carries both.
+    expect(cfg.body.llm.providers.deepseek.baseUrl).toBe('https://nju-mirror.example/v1');
+    expect(getPersisted()?.llm.baseUrl).toBe('https://nju-mirror.example/v1');
+  });
+
+  it('POST /api/keys editing a NON-active provider baseUrl leaves config.llm.baseUrl unchanged', async () => {
+    // Negative guard (reviewer): only the ACTIVE provider's endpoint may
+    // re-point llm.baseUrl — an unconditional sync would break the runtime.
+    const { web, port } = await makeFixture();
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ baseUrl: 'https://api.openai.com/v1' });
+    const cfg = await request(`http://127.0.0.1:${port}`).get('/api/config');
+    expect(cfg.body.llm.baseUrl).toBe('https://api.deepseek.com');
+    expect(cfg.body.llm.providers.openai.baseUrl).toBe('https://api.openai.com/v1');
+  });
+
+  it('POST /api/keys editing the ACTIVE provider baseUrl fires onConfigChanged (running loops restart)', async () => {
+    // Reviewer: PUT /api/config re-points restart running loops via
+    // onConfigChanged — a keys-card endpoint edit must honor the same
+    // contract, or running sessions keep the stale endpoint.
+    const onConfigChanged = vi.fn();
+    const { web, port } = await makeFixture(undefined, undefined, undefined, onConfigChanged);
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/deepseek')
+      .send({ baseUrl: 'https://nju-mirror.example/v1' });
+    expect(onConfigChanged).toHaveBeenCalledTimes(1);
+    const [prev, next] = onConfigChanged.mock.calls[0];
+    expect(next.llm.baseUrl).toBe('https://nju-mirror.example/v1');
+    // A non-active provider edit does not fire it.
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ baseUrl: 'https://api.openai.com/v1' });
+    expect(onConfigChanged).toHaveBeenCalledTimes(1);
   });
 });
 

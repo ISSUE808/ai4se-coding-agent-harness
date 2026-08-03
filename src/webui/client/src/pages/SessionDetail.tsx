@@ -1583,19 +1583,6 @@ function absoluteWithin(root: string, rel: string): string {
   return `${root.replace(/[\\/]+$/, '')}/${rel}`;
 }
 
-/** Relative form of a tree path (under the root), else unchanged. */
-function relativeToRoot(root: string, abs: string): string {
-  const nRoot = normalizePath(root);
-  const nAbs = normalizePath(abs);
-  if (nAbs === nRoot) {
-    return '';
-  }
-  if (nAbs.startsWith(`${nRoot}/`)) {
-    return nAbs.slice(nRoot.length + 1);
-  }
-  return nAbs;
-}
-
 function formatDurationBetween(fromIso: string, toIso: string): string {
   const ms = Math.max(0, new Date(toIso).getTime() - new Date(fromIso).getTime());
   const total = Math.floor(ms / 1000);

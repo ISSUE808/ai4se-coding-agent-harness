@@ -63,6 +63,17 @@ export default function Settings() {
     setConfig(next);
   }, []);
 
+  // Real-test: saving registry metadata (baseUrl/defaultModel) in the keys
+  // card re-fetches the config — the 模型与护栏 card must follow the new
+  // endpoint without a manual reload or a re-apply.
+  const handleRegistryChanged = useCallback(async () => {
+    try {
+      setConfig(await fetchConfig());
+    } catch {
+      // Backend unreachable — keep the current config.
+    }
+  }, []);
+
   return (
     <main
       style={{
@@ -140,8 +151,8 @@ export default function Settings() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: designTokens.spacing[6], minWidth: 0 }}>
             <KeyManagementCard
-              config={config}
               onConfigChanged={handleConfigChanged}
+              onRegistryChanged={() => void handleRegistryChanged()}
             />
             <ConfigEditorCard />
             <ModelGuardrailCard config={config} />
@@ -157,12 +168,17 @@ export default function Settings() {
 // ─── Key management ──────────────────────────────────────────────────────────
 
 function KeyManagementCard({
-  config,
   onConfigChanged,
+  onRegistryChanged,
 }: {
-  config: ConfigValue | null;
   /** The activated provider's merged config (Task 26 follow-up). */
   onConfigChanged: (config: ConfigValue) => void;
+  /**
+   * Fired after registry metadata (baseUrl/defaultModel) is saved — the page
+   * re-fetches the config so the 模型与护栏 card follows (real-test: the
+   * edited endpoint only appeared after a reload / re-apply).
+   */
+  onRegistryChanged: () => void;
 }) {
   const [providers, setProviders] = useState<string[] | null>(null);
   const [statuses, setStatuses] = useState<Record<string, string>>({});
@@ -350,6 +366,10 @@ function KeyManagementCard({
               activating={applying === provider}
               onActivate={() => void activateProvider(provider)}
               onDeleted={() => removeProvider(provider)}
+              onSaved={() => {
+                void load();
+                onRegistryChanged();
+              }}
             />
           ))
         )}
@@ -436,6 +456,7 @@ function KeyRow({
   activating,
   onActivate,
   onDeleted,
+  onSaved,
 }: {
   provider: string;
   initialStatus?: string;
@@ -450,6 +471,11 @@ function KeyRow({
   onActivate?: () => void;
   /** Called after a successful delete so the parent drops the row (M2). */
   onDeleted?: () => void;
+  /**
+   * Called after a successful save so the parent re-fetches the list and the
+   * page config (real-test: a saved baseUrl only appeared after a reload).
+   */
+  onSaved?: () => void;
 }) {
   const [status, setStatus] = useState<string | null>(initialStatus ?? null);
   const [editing, setEditing] = useState(false);
@@ -504,6 +530,12 @@ function KeyRow({
       setKeyText('');
       setBaseUrlText('');
       setDefaultModelText('');
+      // Reviewer: only a save that actually changed registry metadata
+      // (baseUrl/defaultModel) re-fetches the list and page config — a
+      // key-only save must not clobber unsaved 模型与护栏 edits.
+      if (hasBase || hasDefault) {
+        onSaved?.();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败');
     } finally {
@@ -1252,12 +1284,12 @@ function ModelGuardrailCard({ config }: { config: ConfigValue | null }) {
                   模型列表加载失败：{modelsError}（请先在「API Keys」中保存密钥后刷新）
                 </span>
               )}
-              {modelsStatus === 'ready' && models.length === 0 && (
+              {modelsStatus === 'ready' && models !== null && models.length === 0 && (
                 <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
                   供应商未返回模型
                 </span>
               )}
-              {modelsStatus === 'ready' && models.length > 0 && (
+              {modelsStatus === 'ready' && models !== null && models.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: designTokens.spacing[1] }}>
                   {models.map((m) => {
                     const active = m === model;

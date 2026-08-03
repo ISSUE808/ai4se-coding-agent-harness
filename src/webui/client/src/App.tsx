@@ -17,8 +17,41 @@ import Dashboard from './pages/Dashboard';
 import SettingsPage from './pages/Settings';
 import SessionDetail from './pages/SessionDetail';
 
+/** sessionStorage key for the last-viewed session (real-test fix). */
+const LAST_SESSION_KEY = 'codeharness.lastSessionId';
+
 export default function App() {
   const wsConnected = useGlobalWsStatus();
+  const { pathname } = useLocation();
+  // Real-test: the 会话详情 tab always jumped to the FIRST session. Remember
+  // the last-viewed session (persisted across reloads) so re-clicking the tab
+  // returns to the session the user was actually in.
+  const [lastSessionId, setLastSessionId] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem(LAST_SESSION_KEY);
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    const match = pathname.match(/^\/sessions\/([^/]+)/);
+    if (match) {
+      // Reviewer: a malformed percent-encoding (%E0%A4%A) makes
+      // decodeURIComponent throw — fall back to the raw segment.
+      let id: string;
+      try {
+        id = decodeURIComponent(match[1]);
+      } catch {
+        id = match[1];
+      }
+      setLastSessionId(id);
+      try {
+        sessionStorage.setItem(LAST_SESSION_KEY, id);
+      } catch {
+        // Storage unavailable (privacy mode) — in-memory fallback only.
+      }
+    }
+  }, [pathname]);
   return (
     <div
       style={{
@@ -29,7 +62,7 @@ export default function App() {
         color: designTokens.colors.text,
       }}
     >
-      <TopBar wsConnected={wsConnected} />
+      <TopBar wsConnected={wsConnected} lastSessionId={lastSessionId} />
       <div style={{ flex: 1, minHeight: 0 }}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -98,7 +131,7 @@ function useGlobalWsStatus(): boolean {
   return connected;
 }
 
-function TopBar({ wsConnected }: { wsConnected: boolean }) {
+function TopBar({ wsConnected, lastSessionId }: { wsConnected: boolean; lastSessionId: string | null }) {
   return (
     <header
       style={{
@@ -167,7 +200,7 @@ function TopBar({ wsConnected }: { wsConnected: boolean }) {
         <ViewTab to="/" label="会话">
           <SquareTerminal size={14} />
         </ViewTab>
-        <SessionDetailTab />
+        <SessionDetailTab lastSessionId={lastSessionId} />
         <ViewTab to="/settings" label="设置">
           <SettingsIcon size={14} />
         </ViewTab>
@@ -214,10 +247,11 @@ function ViewTab({ to, label, children }: { to: string; label: string; children:
 
 /**
  * 会话详情 tab — active while on any `/sessions/:id` route. Clicking it from
- * elsewhere jumps into the first existing session (or back to the dashboard
- * when there are none), mirroring the prototype's demo tab.
+ * elsewhere returns to the LAST-viewed session when it still exists (real-test
+ * fix: it always jumped to the first session), falling back to the first
+ * existing session, then to the dashboard when there are none.
  */
-function SessionDetailTab() {
+function SessionDetailTab({ lastSessionId }: { lastSessionId: string | null }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const active = pathname.startsWith('/sessions');
@@ -231,7 +265,9 @@ function SessionDetailTab() {
         }
         void fetchSessions()
           .then((sessions) => {
-            navigate(sessions[0] ? `/sessions/${sessions[0].id}` : '/');
+            const target =
+              sessions.find((s) => s.id === lastSessionId) ?? sessions[0];
+            navigate(target ? `/sessions/${target.id}` : '/');
           })
           .catch(() => navigate('/'));
       }}

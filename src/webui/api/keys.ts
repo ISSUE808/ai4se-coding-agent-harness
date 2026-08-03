@@ -28,6 +28,12 @@ export interface KeysRouterDeps {
   getConfig: () => Config;
   /** Persist a config change (registry writes from POST /api/keys). */
   persistConfig: (config: Config) => Promise<void>;
+  /**
+   * Reviewer: an ACTIVE-provider endpoint edit re-points config.llm.baseUrl —
+   * the same contract PUT /api/config honors — so running loops restart on
+   * the new endpoint instead of holding the stale one.
+   */
+  onConfigChanged?: (prev: Config, next: Config) => void;
 }
 
 /** Express 4 does not catch async rejections — route them to the error handler. */
@@ -115,20 +121,35 @@ export function createKeysRouter(deps: KeysRouterDeps): Router {
       }
       if (hasBaseUrl || hasDefault) {
         const config = deps.getConfig();
+        const isActive = provider === config.llm.provider;
+        const nextBaseUrl = hasBaseUrl
+          ? (baseUrl as string).trim()
+          : ((config.llm.providers ?? {})[provider]?.baseUrl ?? config.llm.baseUrl);
         const next: Config = {
           ...config,
           llm: {
             ...config.llm,
+            // Real-test: editing the ACTIVE provider's endpoint must re-point
+            // config.llm.baseUrl in the same write — otherwise the 模型与护栏
+            // card and the runtime keep the stale endpoint until the provider
+            // is re-applied. Registry and live config stay one source of truth.
+            ...(isActive && hasBaseUrl ? { baseUrl: nextBaseUrl } : {}),
             providers: {
               ...(config.llm.providers ?? {}),
               [provider]: {
-                baseUrl: hasBaseUrl ? (baseUrl as string).trim() : ((config.llm.providers ?? {})[provider]?.baseUrl ?? config.llm.baseUrl),
+                baseUrl: nextBaseUrl,
                 ...(hasDefault ? { defaultModel: (defaultModel as string).trim() } : {}),
               },
             },
           },
         };
         await deps.persistConfig(next);
+        // Reviewer: an ACTIVE-provider endpoint edit re-points llm.baseUrl —
+        // fire the same onConfigChanged contract PUT /api/config honors so
+        // running loops restart on the new endpoint.
+        if (isActive && hasBaseUrl) {
+          deps.onConfigChanged?.(config, next);
+        }
       }
       res.json({ provider, saved: hasKey, masked: hasKey ? maskSecret(apiKey as string) : 'not set' });
     }),
