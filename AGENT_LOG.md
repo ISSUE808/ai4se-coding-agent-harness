@@ -625,3 +625,20 @@
   - **"预览为空"先查工具契约再怀疑 UI**：write_file 从不产出 output 摘要——摘要型预览对写文件类工具结构性失效；用户建议（内容预览）直接消灭了这类空白
   - **内容端点必须收紧边界，元数据端点放开≠内容放开**：/browse 整机仅元数据（§11）；/api/fs/file 复用 /tree 的 canonical boundary（授权根 + symlink 逃逸拒绝）——安全取舍分层：元数据宽、内容窄
   - **抽取共享边界时小心暗依赖**：canonicalBoundary 重构 /tree 时丢了 `roots[0]`（默认根），5 个既有测试 500——重构公共逻辑必须全量跑目标文件，不能只看新测试
+
+---
+
+## 2026-08-03 22:35 真实测试推翻复核：1.6 手动输入任意目录可建会话（W_OK 校验删除）
+
+- **触发技能**：`test-driven-development`（红→绿）、`systematic-debugging`（复核结论被真实测试推翻后的根因追查）
+- **Subagent**：无（主 agent 直接实现——用户真实测试反馈驱动）
+- **Prompt 要点**：用户实测 1.6：手动输入 `C:\Windows` 创建会话**成功**（仅树加载报错），问"放开限制让所有目录都可以创建会话怎么样"。此前 21:10 复核条目结论"仍会拒"被推翻——根因：Node 文档明示 Windows 上 `fs.access` 只查文件属性（READONLY 位）**不查 ACL**，目录无 read-only 属性 → W_OK 恒通过，纸面校验从未真正拦截过
+- **产出**：
+  - Commit: `f1f60fd`（`sessions.ts` validateWorkspaceRoot 删 W_OK 检查 + 注释；`webui-api.test.ts` +1 测试——vi.mock('node:fs') 包装 accessSync 为可控制 vi.fn（ESM 命名空间不可 spyOn，`vi.spyOn(fs,'accessSync')` 抛 Cannot redefine property），mockImplementationOnce 模拟不可写 → 断言 201；PLAN.md L1089 更新）
+  - 决策: 采纳用户方向——放开=承认现状（选择器本就整机可选，手动输入校验形同虚设）；保留 非空/绝对/存在/是目录 校验；不可读根的树加载错误保留（可见反馈）；工具层 isWithinWorkspace 硬边界兜底
+  - 测试: webui-api 54/54；主套件待全量确认
+- **人工干预**：无
+- **教训**：
+  - **"复核过=成立"必须被真实测试证伪**：21:10 只读代码得出"仍会拒"，用户一测就推翻——平台行为（Windows access 不查 ACL）只能靠实测或文档明证，读代码会自欺
+  - **纸面限制比没有限制更糟**：W_OK 在 Windows 恒真 → "代码声称会拒、实际能建"的不一致，最终由用户困惑买单；校验的可靠性比存在性更重要
+  - **ESM 命名空间不能 spyOn**：`vi.spyOn(fs, 'accessSync')` 抛 `Cannot redefine property`；需要可注入行为时用 `vi.mock('node:fs', factory)` 把目标函数包成转发真实实现的 vi.fn（spread 会求值 promises getter，需确认无副作用），mockImplementationOnce 单次注入
