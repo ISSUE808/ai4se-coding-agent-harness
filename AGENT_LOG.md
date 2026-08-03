@@ -570,3 +570,20 @@
   - **正则字符类是转义重灾区**：`[\/]` 在 JS 中只含 `/`（`\` 只是多余转义），Windows 路径断言必须写 `[\/]`——"一眼看着对"的断言在 win32 永远红，复现脚本（node 复刻 machineRoots + 双正则对比）一次锁定根因
   - **Windows 命令行转义两层吃反斜杠**：bash 双引号 + 单引号都会处理 `\`——commit message 含正则时用 `-F message文件`，验证用 `git log | od -c`
   - **交接文件模型有效**：中断会话按"现状一句话/已批准方案/进度/接续清单/环境坑"交接，新会话 5 分钟即可全绿接手，无需回看原 transcript
+
+---
+
+## 2026-08-03 21:02 Task 23 评审跟进：整机浏览两阶段评审（reviewer ab2ff25c）
+
+- **触发技能**：`requesting-code-review`（两阶段：spec 合规 + 代码质量）、`systematic-debugging`（复现评审发现的 unhandled 错误）
+- **Subagent**：`ab2ff25c`（评审 6bb3fc5..e5f88e8，read-only）
+- **Prompt 要点**：两阶段评审强制——spec 合规对照 SPEC §3.4（/browse 是有意偏离，须确认偏离文档化且边界收窄）+ 代码质量；明确列出怀疑对象（machineRoots、400 语义、排序稳定性、StrictMode/M4、虚拟根守卫、渲染安全）
+- **产出**：
+  - Commit: `4f2632c`（4 文件 +157/-40）
+  - 修复: I1 循环 fixture → client 套件 1 unhandled 栈溢出（"177 passed" 掩盖）→ 按路径分发 fixture + renderNode 祖先链环守卫；I2 browse 截断在排序前（readdir 序不定，ext4/APFS 非确定性）→ withFileTypes 分区 → byName 排序 → 截断，与 /tree 同契约 + 消除逐条 lstat / socket-FIFO 归类差异（M3/M4）；M7 +3 集成测试
+  - 测试: 主项目 525→528 + client 177（unhandled 清零）；tsc 双项目干净
+- **人工干预**：评审结论全部采纳（2 Important + 4 Minor 处理，0 Critical）；未采纳项无
+- **教训**：
+  - **"全绿"会掩盖 unhandled 错误**：vitest 的 `Tests 177 passed` 与 `1 unhandled error` 同屏——用 grep 过滤结果会漏掉错误行；全量验证必须看 Errors 计数（评审 agent 抓住了主 agent 漏掉的栈溢出）
+  - **mock fixture 必须无环**：`mockResolvedValue(同一 listing)` 在逐级展开的组件测试里等于"目录包含自己"——服务器契约（path 严格加深）保证不了前端拿到的数据；渲染递归必须自带祖先链守卫
+  - **排序后再截断是唯一可断言的契约**：readdir 返回序在 NTFS 恰好有序、ext4 任意——"截断保前 N"只有先排序才有意义；/tree 早已做对，/browse 初版切在排序前
