@@ -8,17 +8,6 @@
 
 ## 一、待改进（按优先级）
 
-### 6. 多会话并发 HITL 键控（架构级，后续版本）[评审]
-- **现象**：HITLManager 为全局单例，pending 命令无会话归属——两个会话同时触发 warn 时，第二个静默变 "HITL busy"；`POST /api/approvals/:sessionId` 不校验 id 归属。
-- **建议**：HITL 状态按 sessionId 键控；approvals API 校验 pending 命令所属会话。
-- **位置**：`src/guardrail/hitl-manager.ts`、`src/webui/api/approvals.ts`。
-- **状态**：已在 `createWebHarness.runSession` 注释注明为已知限制。
-
-### 7. scope-fence 词法路径校验的符号链接局限（安全增强）[评审]
-- **现象**：`validatePath` 为 `path.resolve` + 前缀匹配（无 realpath）——会话根内符号链接（`root/link → /etc`）可绕过围栏读写根外。
-- **评估**：信任模型为"用户本地授权目录"，风险低（Task 8 起既有）。
-- **建议**：校验时对最终路径做 `fs.realpath` 后再前缀匹配；在 scope-fence.ts 头注释注明已知限制。
-
 ### 8. CLI `--cwd` 未实现（可选增强）[设计]
 - **现象**：PLAN Task 19 需求备注第 5 项"CLI start 加 --cwd 选项"标注可选增强，未实现。
 - **建议**：`start` 增加 `--cwd <path>` 覆盖 `config.agent.workspaceRoot`（复用会话级 workspaceRoot 链路）。
@@ -89,6 +78,8 @@
 | **CLI 模式 HITL 暂停后无恢复指引**（`start <task>` 直跑触发 maxRounds 升级暂停后进程退出，仅输出 `[session] paused`——升级暂停无 pending command，stdin 交互循环不触发，用户不知如何恢复）[实测] | runStartTask 结束时 status=paused 输出恢复指引：重跑（提高 maxRounds）或改用 `codeharness start --web`（WebUI 批准恢复，`continueSession` 的 `maxRounds += currentRound` 路径已核实）；测试断言指引含 `--web`/`maxRounds` | `07a1111` |
 | **read_file 无编码检测**（UTF-16 含 BOM 文件按 UTF-8 读取乱码——PowerShell 5.1 重定向默认写 UTF-16LE 触发；无 BOM 的 GBK 静默乱码）[实测] | BOM 驱动的编码探测：UTF-8（剥 BOM）/UTF-16LE/BE（TextDecoder fatal，奇数长度与孤立代理 → per-file error）/UTF-32LE/BE（手写解码，%4 校验 + 码点范围校验）全覆盖；无 BOM → `TextDecoder('utf-8', {fatal:true})` 严格校验，失败返回带 `file`/`iconv` 兜底指引的明确错误（"正确或明确失败优先"——无 BOM 编码不可判定，不做猜测；对比 Claude Code 官方是静默 U+FFFD 乱码）。评审发现并修复静默损坏路径：UTF-16 奇数长度丢字节、UTF-32 截断、孤立代理。测试 +12（红→绿） | `81f1aab` |
 | **run_test/testRunner 无环境前提检查**（run_test 工具与 TestResultValidator 在无 vitest 环境触发 `npx vitest` 下载；`npx tsc` 在无本地 TypeScript 时下载废弃同名包 `tsc@2.0.4`、`npx eslint` 同理——环境噪音污染反馈闭环）[实测] | 统一"环境前提检查"模式（`src/utils/env-prereq.ts` `hasLocalBin`，覆盖 POSIX sh / .cmd / .ps1 三种 bin 变体）：① run_test 无本地 vitest → `success:false` + 可操作错误（`npm i -D vitest` 指引）② TestResultValidator 无 vitest → passed:true + skipped ③ eslint/tsc 有配置文件但无本地 bin → skip（`npx tsc` 的废弃包陷阱根除；npx 保留，前置 bin 检查保证 npx 只解析本地）。run_shell 未拦（npx 是 agent 合法工具，守卫只落在确定性代码路径）。测试 +8（4 skip 红→绿 + 4 hasLocalBin 直测）；评审 Minor×4 全部处理（清理 try/finally、.ps1 直测、tsbuildinfo 删除、import 顺序） | `08b5469` |
+| **scope-fence 词法路径校验的符号链接局限**（`validatePath` 为 `path.resolve` + 前缀匹配（无 realpath）——会话根内符号链接（`root/link → /etc`）可绕过围栏读写根外）[评审] | 两层校验：① 词法快路径（根外直接拒绝，零 IO）② canonical 校验——`canonicalize()` 对**最近存在祖先** realpath（写入目标可能尚不存在，ENOENT 走 walk-up 重挂词法尾部；叶子不存在时**不可能**是 symlink，截断安全）再前缀比较（win32 大小写归一）。**fail-closed（评审 Important）**：ELOOP/EACCES/EMFILE 等非 ENOENT 错误返回 null → 拒绝——叶子可能是真实逃逸 symlink 而截断接受会放行。canonical root 按 workspaceRoot memoize（热路径每工具动作从 2 次 realpath 降到 1 次）。测试 +5（真实 junction/symlink：逃逸拦截 ×2、根内放行、不存在目标放行、ELOOP 双向循环 fail-closed；skipIf 链接不可用） | `4ba6eaa` `f66dbd8` |
+| **多会话并发 HITL 键控**（HITLManager 全局单例，pending 命令无会话归属——两个会话同时触发 warn 第二个静默变 "HITL busy"；`POST /api/approvals/:sessionId` 不校验 id 归属）[评审] | HITLManager 全部方法显式 `sessionId` 参数，状态 Map 键控（`Map<string, SessionHITL>` 惰性创建）；`removeSession` 删除条目（REPL /clear 接线——**行为变化**：新会话新 id → 重发已批准命令需重新确认，比旧共享 cache 更安全，注释文档化）；approvals API 归属校验：`getState(session.id) !== AWAITING_APPROVAL` → 409 带当前状态（400→404→409 顺序保持契约；try/catch 保留防御状态守卫）。CLI 侧（repl/start）循环与 main-loop 全部传 `session.id`。测试 +7（键控单测 ×4、approvals 归属 409、main-loop 集成：两 loop 共享 HITLManager 各会话独立 pending/批准互不影响、removeSession ×2） | `7929b1a` `f66dbd8` |
 | **Windows 工具差异**（agent 调用 `xxd`（Unix 工具）在 Windows 上不存在——真实执行失败并消耗轮次；调查确认 harness 原本无主 system prompt，LLM 只能靠踩坑学习平台限制）[实测] | 新建 `src/utils/platform-guidance.ts`：`platformGuidance(platform)` 纯函数，win32 返回环境提示（xxd→`od -A x -t x1z` 替代、`command -v` 确认、Git Bash 存在性限定、PowerShell 5.1 UTF-16LE、裸 npx 废弃包陷阱），POSIX 返回 undefined 零噪音；main-loop run() 初始化注入 system 消息（幂等守卫防恢复/重启累积——评审发现双写会在 resume 路径每条 guidance 重复 seed 两次）。测试 +5（4 单测 + 2 集成含幂等回归，skipIf 非 win32 保 CI 可移植）；评审 Important×1（幂等守卫）+ Minor×4 全部处理 | `146cb75` |
 | **run_test 无 pattern 参数行为不明确**（真实抓取 vitest v2.1.9 输出发现根因：**pipe 下仍输出 ANSI SGR 颜色码**——`\x1b[32m✓\x1b[39m path`、`\x1b[1m\x1b[32m48 passed\x1b[39m`，旧正则假设 ✓ 后直接是文件名、summary 数字直接跟在 Test Files 后，全部匹配失败 → 恒返回 `{passed:false, results:[]}`——587 测试全过也报失败，agent 困惑后改用 run_shell 直跑）[实测] | ① 解析前 `stripAnsi()` 剥离 CSI 序列（`\x1b\[[0-9;?]*[a-zA-Z]`，`?` 覆盖私有序列）——根因修复 ② summary 行解析重构（`2 failed \| 46 passed (48)`→false、`48 passed (48)`→true、全 failed→false）③ 完全无法解析（新版本/语言/包装器）→ output 附 `rawOutput`（截断 4000 + 显式标记），不再静默报 `{passed:false}` ④ output 附 `command` 字段（agent 知道实际执行了什么，无 pattern 即跑全部）。测试 +6（fixture 来自真实 `npx vitest run \| cat -v` 抓取 + 评审补 3 边界：**skipped 后缀行误报 passed**（`(5 tests \| 1 failed \| 2 skipped)` 使正则不匹配失败行、其他 ✓ 行短路 passed:true——Important 已修：per-file 分支也 consult summary 行）、全 failed summary、4000 截断）；评审对照 vitest 2.1.9 dist 源码逐一核实 fixture 真实性 | `4da212b` `22cc72a` |
 

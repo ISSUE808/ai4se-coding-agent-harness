@@ -857,3 +857,37 @@
   - **解析类工具的 fixture 必须来自真实输出**：旧测试用手写理想格式（无 ANSI）所以全绿，真实世界一行颜色码就打穿。这次 fixture 直接从真实 `npx vitest run | cat -v` 抓取，评审还对照 vitest dist 源码验证了渲染逻辑——测试诚实性的标准是"fixture 与真实输出逐字节同构"，不是"测试覆盖了代码路径"
   - **聚合判定不能只看单层证据**：per-file 行最详细但正则可能漏（skipped 后缀），summary 行最可靠但无细节——两层都要读，per-file 通过后仍要 summary 兜底防误报。单层短路（`results.length > 0` 就返回）正是旧代码的隐藏缺陷
   - **execSync 抛错时 stdout/stderr 是 Error 的附加属性**，message 只有 stderr 截断——catch 分支必须拼 `(execError.stdout || '') + (execError.stderr || '')` 才能拿到完整输出喂给解析器，否则失败场景解析永远是空
+
+## 2026-08-04 15:50 KNOWN_ISSUES 7 修复：scope-fence canonical 校验
+
+- **触发技能**：`test-driven-development`（红 → 绿）、`requesting-code-review`（评审 a678abc6）
+- **Subagent**：评审 a678abc6
+- **Prompt 要点**：用户"继续#6#7"推进 KNOWN_ISSUES。头注释"future hardening"已在 Task 8 写明局限——本次落地 realpath 校验。设计约束：write_file 目标可能不存在（realpathSync 抛 ENOENT）→ "最近存在祖先 realpath + 词法尾部重挂"；Windows junction 无需管理员（测试可真实跑）；win32 盘符大小写归一
+- **产出**：
+  - `canonicalize()`：ENOENT/ENOTDIR 走 walk-up（叶子不存在不可能被 symlink，截断安全）；**fail-closed（评审 Important）**：ELOOP/EACCES/EMFILE 返回 null → validatePath 拒绝——否则叶子可能是真实逃逸 symlink 而截断路径被"未验证接受"（评审运行时验证 `canonicalize(root/new) → root` 丢叶子）
+  - 两层校验：词法快路径（根外零 IO 拒绝）→ canonical 比较；canonical root 按 workspaceRoot memoize（**评审 Important**：热路径每次工具动作 2 次 realpathSync 多级 walk-up → 缓存后单 realpath）
+  - 测试 +5：junction 逃逸 ×2（含深层 root/sub/esc）、根内真实路径放行、不存在写入目标放行、ELOOP 双向循环 fail-closed（self-symlink 在 Windows 被 EPERM 拒绝，改 a→b、b→a 双向循环）
+  - 全量：主套件 606/606（+8）、client 199/199、双 tsc
+- **人工干预**：无
+- **教训**：
+  - **canonicalize 的截断路径是隐式信任漏洞**：walk-up 丢叶子在 ENOENT 时安全（不存在的叶子不可能被 symlink），但 catch-all 会吞 ELOOP/EACCES 也走截断——"最近存在祖先"算法只在缺失路径上有语义，其余错误必须 fail-closed。评审给了运行时证据（canonicalize(root/new) → root），我不该只靠推演
+  - **Windows 测试要先验证链接创建能力**：junction 免管理员可测 symlink 逃逸，但 self-symlink 被 EPERM 拒绝（Windows 拒绝自指链接）——用双向循环替代；链接能力仍可能因文件系统（无 reparse 支持）失败，skipIf 探测兜底
+  - **词法快检不只有性能价值**：先拦根外路径也避免对越界路径做无谓 realpath——fail-closed 与 fast-path 分层后，每个校验动作只对"看似合法"的路径付 IO 成本
+
+## 2026-08-04 16:10 KNOWN_ISSUES 6 修复：HITL 多会话键控
+
+- **触发技能**：`test-driven-development`（红 → 绿）、`requesting-code-review`（评审 a678abc6）
+- **Subagent**：评审 a678abc6
+- **Prompt 要点**：用户"继续#6#7"。架构级改动：HITLManager 全局单例 → Map 键控。设计决策：① 全部方法显式 sessionId 参数（无默认 key——CLI 单会话也传 session.id，防止"忘传默认 key 隐式共享"）② `removeSession` 新方法（REPL /clear 接线；WebUI 无删除端点暂不接——条目随会话数有界增长，评审判 acceptable）③ approvals 归属校验放 404 之后、决策方法之前（400→404→409 契约保持）
+- **产出**：
+  - `hitl-manager.ts`：`Map<string, SessionHITL>` 惰性创建；26 个旧测试 sed 机械适配 's1'（变量命名 `a`/`b` 的确定性测试手工改）；webui-api 3 个 approvals 测试重排（真实流程：先建会话拿 id 再 requestApproval）
+  - main-loop 4 个调用点传 session.id；repl/start 循环传 session.id；`/clear` 改 `removeSession(session.id)`——**行为变化**（注释文档化）：键控后新会话新 id，重发已批准命令需重新确认，比旧共享 cache 更安全
+  - **行为变化**（M5 CR 文档化决策修订）：旧 "cache per-HITLManager lifetime" 在新会话边界失效——KNOW_ISSUES/AGENT_LOG 记录
+  - 评审：Important×1（fail-open，见 #7 条目）+ Minor×4（approvals getState 双调用复用、removeSession 单测 ×2、try/catch 防御注释、KNOWN_ISSUES 未更新）
+  - 全量：主套件 606/606（+9：键控 ×4、approvals 归属、main-loop 集成 ×1、removeSession ×2、ELOOP）、client 199/199、双 tsc
+- **人工干预**：无
+- **教训**：
+  - **sed 机械适配的坑**：`hitl.requestApproval(\([^)]*\))` 会把已带双参的新测试也改坏（`[^)]*` 贪婪匹配 `'sess-a', 'cmd-a'`）——先跑出 5 个红，逐个看是"真实红"还是"适配红"。适配类变更要 grep 出所有形状再写模式，变量命名（a/b 而非 hitl）是漏网点
+  - **API 签名变化时测试顺序也是契约**：approvals 测试"先 requestApproval 后建 session"在键控后语义颠倒（pending 归属尚未存在的会话）——重排成真实流程（session 先存在）本身就在验证时序契约
+  - **键控让既有"安全折衷"更安全**：M5 的 cache 保留语义在共享实例下是便利性折衷；键控后新会话自然隔离，重确认成本换来的安全增益是设计副产品而非妥协
+
