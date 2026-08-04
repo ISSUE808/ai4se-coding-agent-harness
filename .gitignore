@@ -43,3 +43,7 @@ PREPARATION_CHECKLIST.md
 #CLAUDE.md
 
 .claude/
+
+# desktop 独立 package
+desktop/build/
+desktop/node_modules/
