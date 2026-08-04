@@ -14,7 +14,7 @@ describe('resolveBackendDir', () => {
 });
 
 describe('resolveNodePath', () => {
-  it('打包（isPackaged=true）：electron.exe run-as-node（keytar.node 按 electron ABI 重编译）', () => {
+  it('打包（isPackaged=true）：electron.exe run-as-node（打包 keytar 按打包机系统 Node ABI 编译，与 electron 内嵌 Node 匹配与否取决于打包机 Node 版本）', () => {
     expect(resolveNodePath(true, 'C:/x/electron.exe')).toBe('C:/x/electron.exe');
   });
   it('开发（isPackaged=false）：系统 node（root node_modules 的 keytar 按系统 Node ABI 编译，dev 不用 electron 内嵌 Node）', () => {
@@ -28,10 +28,10 @@ describe('buildBackendCommand', () => {
     expect(cmd.cmd).toBe('node');
     expect(cmd.args).toEqual([path.join('C:/app/backend', 'dist', 'cli', 'index.js'), 'start', '--web']);
     expect(cmd.env.CODEHARNESS_WEBUI_DIR).toBe(path.join('C:/app/backend', 'webui'));
-    expect(cmd.env.ELECTRON_RUN_AS_NODE).toBe('1');
+    expect(cmd.env.ELECTRON_RUN_AS_NODE).toBeUndefined(); // dev 用系统 node：不设 run-as-node
     expect(cmd.cwd).toBe('C:/app/backend');
   });
-  it('nodePath 参数化：Electron 打包传 electron.exe（ELECTRON_RUN_AS_NODE 纯 Node 模式，ABI 匹配）', () => {
+  it('nodePath 参数化：Electron 打包传 electron.exe（ELECTRON_RUN_AS_NODE=1 纯 Node 模式）', () => {
     const cmd = buildBackendCommand('C:/app/backend', 'C:/x/electron.exe');
     expect(cmd.cmd).toBe('C:/x/electron.exe');
     expect(cmd.args).toEqual([path.join('C:/app/backend', 'dist', 'cli', 'index.js'), 'start', '--web']);

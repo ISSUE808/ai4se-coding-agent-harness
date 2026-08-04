@@ -17,8 +17,12 @@ export function resolveBackendDir(options: {
 
 /**
  * 后端运行时可执行文件解析（spec 2026-08-04 第 3 层）：
- * - 打包（isPackaged=true）：electron.exe 以 ELECTRON_RUN_AS_NODE=1 纯 Node 模式运行后端——
- *   keytar.node 等原生模块打包前按 electron ABI 重编译（@electron/rebuild），ABI 天然匹配；
+ * - 打包（isPackaged=true）：electron.exe 以 ELECTRON_RUN_AS_NODE=1 纯 Node 模式运行后端。
+ *   ABI 真相：backend/node_modules 由 prepare-resources.mjs 从项目根 verbatim 复制进包
+ *   （desktop 自身零 dependencies，@electron/rebuild 无物可重建）——keytar.node 按
+ *   【打包机系统 Node】ABI 编译，与 electron 内嵌 Node（Electron 33 → Node 20.18，ABI 115）
+ *   匹配与否取决于打包机 Node 版本。完整修复 = 打包机钉 Node 20 或对 backend-pack
+ *   跑 @electron/rebuild（见 KNOWN_ISSUES）；
  * - 开发（isPackaged=false）：系统 node——root node_modules 的 keytar 按系统 Node ABI 编译，
  *   若用 electron 内嵌 Node（版本不同）则 keytar 加载失败、静默降级 encrypted-file，
  *   用户已有 keytar 密钥读不到。
@@ -30,9 +34,11 @@ export function resolveNodePath(isPackaged: boolean, execPath: string): string {
 /**
  * 后端 spawn 命令：生产模式（静态目录由 env 指向打包布局 webui/）。
  * nodePath 指定运行后端的可执行文件：Electron 打包环境传 process.execPath
- * （electron.exe + ELECTRON_RUN_AS_NODE=1 以纯 Node 模式运行——keytar.node
- * 等原生模块按 electron ABI 重编译，系统 Node ABI 不匹配无法加载）；
- * 默认 'node' 保留开发/测试语义。nodePath 由 resolveNodePath 解析。
+ * （electron.exe + ELECTRON_RUN_AS_NODE=1 以纯 Node 模式运行——keytar.node 按打包机
+ * 系统 Node ABI 编译，与 electron 内嵌 Node（20.18/ABI 115）匹配与否取决于打包机
+ * Node 版本，见 resolveNodePath 与 KNOWN_ISSUES）；
+ * 默认 'node' 保留开发/测试语义——只有 nodePath !== 'node'（electron.exe run-as-node）
+ * 才设置 ELECTRON_RUN_AS_NODE。nodePath 由 resolveNodePath 解析。
  */
 export function buildBackendCommand(backendDir: string, nodePath = 'node'): {
   cmd: string;
@@ -40,13 +46,17 @@ export function buildBackendCommand(backendDir: string, nodePath = 'node'): {
   env: Record<string, string>;
   cwd: string;
 } {
+  const env: Record<string, string> = {
+    CODEHARNESS_WEBUI_DIR: path.join(backendDir, 'webui'),
+  };
+  // 仅 electron.exe run-as-node 场景需要该 env；dev 用系统 node，设置它无效且有误导性
+  if (nodePath !== 'node') {
+    env.ELECTRON_RUN_AS_NODE = '1';
+  }
   return {
     cmd: nodePath,
     args: [path.join(backendDir, 'dist', 'cli', 'index.js'), 'start', '--web'],
-    env: {
-      CODEHARNESS_WEBUI_DIR: path.join(backendDir, 'webui'),
-      ELECTRON_RUN_AS_NODE: '1',
-    },
+    env,
     cwd: backendDir,
   };
 }

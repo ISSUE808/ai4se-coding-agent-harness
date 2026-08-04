@@ -27,8 +27,10 @@ app.whenReady().then(async () => {
   const lifecycle = await runDesktopLifecycle({
     projectRoot,
     resourcesPath: app.isPackaged ? process.resourcesPath : undefined,
-    // 打包内没有系统 Node：electron.exe 以 ELECTRON_RUN_AS_NODE=1 纯 Node 模式
-    // 运行后端（keytar.node 等原生模块按 electron ABI 重编译，ABI 天然匹配）；
+    // 打包内没有系统 Node：electron.exe 以 ELECTRON_RUN_AS_NODE=1 纯 Node 模式运行后端。
+    // ABI 真相：打包内 keytar 按打包机系统 Node ABI 编译（backend/node_modules 是
+    // verbatim 复制，@electron/rebuild 无物可重建），与 electron 内嵌 Node（20.18/ABI 115）
+    // 匹配与否取决于打包机 Node 版本，见 KNOWN_ISSUES；
     // dev 用系统 node（root node_modules 的 keytar 按系统 Node ABI 编译，electron
     // 内嵌 Node 版本不同会 keytar 加载失败、静默降级 encrypted-file 读不到已有密钥）
     nodePath: resolveNodePath(app.isPackaged, process.execPath),
