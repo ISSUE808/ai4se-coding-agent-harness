@@ -963,3 +963,20 @@
   - **sdd 派发前必须确认工作区干净**：implementer 报告提示 repl.ts 未提交变更——是我上次解构统一后文档 commit 只 add 了 3 个文档文件，代码改动漏掉了。评审包 BASE 记录在派发前，遗漏变更会混入 diff 或污染后续 commit
   - **express 路由顺序即安全边界**：/api 404 兜底 → static → SPA fallback → error handler——`/api/*` 被兜底终结，即使 build 产物含 api/ 目录也不受影响
   - **app.get('*') 只匹配 GET/HEAD**：方法检查 `req.method !== 'GET'` 对 GET 永不生效（brief 原样代码，评审确认行为符合需求）
+
+
+## 2026-08-04 21:35 分发功能 Task 2：start --web 生产模式接线 + dist 缺失报错 + npm link
+
+- **触发技能**：`subagent-driven-development`（implementer a94d0d5a + fix resume 同 agent）、`test-driven-development`、`requesting-code-review`（评审 aa6b6192）
+- **Subagent**：implementer a94d0d5a（haiku）
+- **Prompt 要点**：需求源 = task-2-brief.md；关键补充——npm link 后只验证 `codeharness --version`（`start --web` 启动验证留给主 agent/用户，避免占终端）；fix 轮：full-loop CI 回归风险 + 冗余 import（评审前处理）
+- **产出**：
+  - Commits: `90e3778`（接线）、`c4d7724`（fix：full-loop fixture staticDir + 删冗余 import）
+  - 涉及文件: src/cli/commands/start.ts（resolveStaticDir 导出 + createWebHarness 校验/接线）、tests/integration/webui-static.test.ts（+3 测试）、tests/integration/full-loop.test.ts（makeHarness fixture staticDir）
+  - 测试: 7/7（webui-static）、full-loop 19/19（含 CI 模拟：移走真实 client/dist 仍绿）；全量 630/630、双 tsc 干净；`codeharness --version` → 0.1.0（npm link 已保留）
+- **人工干预**：① implementer 发现 brief off-by-one（4 层 '..' 落在根上一级 → 3 层，已实测 src/dist 双布局验证）② CI 模拟时 Windows 重命名被句柄锁定 → 复制+删除绕过（implementer 报告）
+- **教训**：
+  - **计划里的路径上溯数必须实测**：`dist/cli/commands/start.js` 到根是 3 层不是 4 层——off-by-one 直到 CI 全量回归（默认路径指向根上一级、staticDir 校验抛错）才暴露。写计划时对 `import.meta.url` 上溯应先在真实 dist 布局验证
+  - **生产默认分支是最容易被测试绕开的路径**：所有测试都传显式 projectRoot/staticDir，唯二生产路径（默认解析、npm link 任意目录运行）零自动化——评审 Minor 2 提醒加默认分支断言，防 off-by-one 类回归
+  - **CI 与开发机环境差异是测试确定性的一部分**：本机有真实 client/dist 掩盖了 full-loop 对构建产物的隐式依赖——CI 不构建 client 时红。测试 fixture 必须自给自足（评审透镜）
+  - **3000 端口旧实例（PID 202428）**：非本会话进程，不杀；`start --web` 手动验证前需用户决策
