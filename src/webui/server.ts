@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { Socket } from 'node:net';
+import * as path from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
@@ -42,6 +43,12 @@ export interface WebUIServerDeps {
   hitl: HITLManager;
   /** Injectable config persistence (defaults to writing the project file). */
   persistConfig?: (config: Config) => Promise<void>;
+  /**
+   * 生产模式静态目录（vite build 产物，spec 2026-08-04 第 1 层）。存在时
+   * 挂载 express.static + SPA fallback；缺省保持 API-only（开发模式走
+   * Vite dev server，不受影响）。
+   */
+  staticDir?: string;
   /**
    * Task 26 follow-up: injectable fetch for GET /api/llm/models (defaults to
    * globalThis.fetch) — tests keep the provider call zero-network.
@@ -197,6 +204,26 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found' });
   });
+
+  // 生产模式（spec 2026-08-04）：静态服务 + SPA fallback。API 路由与 `/api`
+  // 404 兜底均在此前注册——`/api/*` 永不落入 fallback；未知静态路径由
+  // sendFile 的 err 走 jsonErrorHandler。
+  if (deps.staticDir !== undefined) {
+    app.use(express.static(deps.staticDir));
+    // react-router client 路由深链（/sessions/xxx 直接访问）需要回 index.html。
+    app.get('*', (req, res, next) => {
+      if (req.method !== 'GET') {
+        next();
+        return;
+      }
+      res.sendFile(path.join(deps.staticDir as string, 'index.html'), (err) => {
+        if (err) {
+          next(err);
+        }
+      });
+    });
+  }
+
   app.use(jsonErrorHandler);
 
   const server = createServer(app);
