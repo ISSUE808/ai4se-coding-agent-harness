@@ -442,24 +442,46 @@ describe('createStartCommand wiring', () => {
   });
 
   it('`start --web` starts the server in-process and prints the URL (no task needed)', async () => {
-    const printed: string[] = [];
-    const cmd = createStartCommand({
-      config: {
-        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
-        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
-        cliArgs: { webui: { port: 0 } }, // ephemeral port — no collision with other servers
-      },
-      storeFactory: async () => new CredentialStore([mockBackend('mem', { secret: 'sk-mock' }).backend]),
-      buildAgentLoop: buildMockAgentLoop([{ content: 'done' }]),
-      print: (line) => printed.push(line),
-      waitForShutdown: async () => {
-        // Test-only: resolve immediately so the command exits.
-      },
-    });
-    const result = await parseCaptured(cmd, ['start', '--web']);
-    expect(printed.some((l) => l.includes('[web] WebUI'))).toBe(true);
-    expect(result.err).toBe('');
-    expect(process.exitCode).toBe(0);
+    // CI regression fix: runWebAction 不给 createWebHarness 传 staticDir，走
+    // resolveStaticDir 的 env 覆盖路径（CODEHARNESS_WEBUI_DIR，生产/Electron 同
+    // 机制）。CI 的 unit-test job 不构建 client（dist 被 gitignore），真实 dist
+    // 缺失时 createWebHarness 抛"请先构建前端"→ 测试在 CI 红、本机绿。指向
+    // fixture 静态目录使测试自给自足。
+    const webuiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-cli-webui-'));
+    fs.writeFileSync(path.join(webuiDir, 'index.html'), '<!doctype html><title>CodeHarness</title>');
+    const originalWebuiDir = process.env.CODEHARNESS_WEBUI_DIR;
+    try {
+      // runWebAction 只在失败时写 exitCode=1，成功路径不触碰——测试必须自己
+      // 播种 0，否则单独跑（-t 过滤）时 worker 里 exitCode 是 undefined（Node
+      // 默认值），断言依赖前一个测试的 afterEach 才成立（顺序耦合）。
+      process.exitCode = 0;
+      process.env.CODEHARNESS_WEBUI_DIR = webuiDir;
+      const printed: string[] = [];
+      const cmd = createStartCommand({
+        config: {
+          userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+          projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+          cliArgs: { webui: { port: 0 } }, // ephemeral port — no collision with other servers
+        },
+        storeFactory: async () => new CredentialStore([mockBackend('mem', { secret: 'sk-mock' }).backend]),
+        buildAgentLoop: buildMockAgentLoop([{ content: 'done' }]),
+        print: (line) => printed.push(line),
+        waitForShutdown: async () => {
+          // Test-only: resolve immediately so the command exits.
+        },
+      });
+      const result = await parseCaptured(cmd, ['start', '--web']);
+      expect(printed.some((l) => l.includes('[web] WebUI'))).toBe(true);
+      expect(result.err).toBe('');
+      expect(process.exitCode).toBe(0);
+    } finally {
+      if (originalWebuiDir === undefined) {
+        delete process.env.CODEHARNESS_WEBUI_DIR;
+      } else {
+        process.env.CODEHARNESS_WEBUI_DIR = originalWebuiDir;
+      }
+      fs.rmSync(webuiDir, { recursive: true, force: true });
+    }
   });
 
   it('`start` without a task and without --web exits 1 with a task-required error', async () => {
