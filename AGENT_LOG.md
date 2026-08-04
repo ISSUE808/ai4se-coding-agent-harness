@@ -997,3 +997,20 @@
   - **Windows 路径分隔符是断言层面最容易踩的差异**：测试期望字面量 `C:/app/resources/backend` 在 path.join 输出反斜杠时必败——期望值用 path.join 构造（implementer 实测修正，语义不变）
   - **electron 二进制下载在国内网络需镜像**：官方源 TLS 证书错误 → --use-system-ca 卡死 → npmmirror 镜像成功。环境处理，无代码影响；Task 4 单测不依赖该二进制
   - **tsc 的 include:["src"] 会把 *.test.ts 编入 dist**（无 exclude）——打包时会携带测试产物，Task 4/5 需加 exclude
+
+
+## 2026-08-04 22:45 分发功能 Task 4：Electron 生命周期 + main 接线
+
+- **触发技能**：`subagent-driven-development`（implementer ab2ccfdd + fix resume 同 agent）、`test-driven-development`、`requesting-code-review`（评审 ac6cf5be + 复评审 a9391de5）
+- **Subagent**：implementer ab2ccfdd（haiku）
+- **Prompt 要点**：需求源 = task-4-brief.md；明确不启动 electron（只 tsc 校验 main.ts 的 electron import）；顺带修 Task 3 评审的 tsconfig exclude
+- **产出**：
+  - Commits: `0d5fdf9`（生命周期 + main 接线）、`d2203dc`（CR 修复）
+  - 涉及文件: desktop/src/lifecycle.ts（runDesktopLifecycle）、desktop/src/main.ts（electron 接线薄层）、desktop/src/lifecycle.test.ts（+3 新 +2 fix）、desktop/tsconfig.json（exclude 测试）
+  - 测试: 9/9 → 11/11；desktop tsc 干净；main.ts 仅类型校验未执行
+- **人工干预**：评审发现 Important（主动关闭误弹框）→ fix round 1 修复（intentional 标志 + 孤儿进程 + spawn null + 补测试），复评审 all addressed
+- **教训**：
+  - **Windows 强杀进程的 exit code 假设是坑**：taskkill /F 杀掉的进程 exit code 几乎不可能是 0（典型 1）——"正常退出码 0 静默"的注释假设在 Windows 不成立，评审抓出「每次关窗都弹错误框」的确定性 bug。主动/被动 kill 必须显式区分（intentional 标志），不能靠 exit code 判断
+  - **失败分支的 close 空操作 = 孤儿进程**：spawn 成功但超时未就绪时没有窗口（window-all-closed 不触发）→ 进程无清理路径。评审 Minor 提醒后修复：超时分支 close 也 kill
+  - **spawn 返回 null 应立即报错**：原实现空等 30s 才说"未就绪"，真相是 spawn 失败——错误语义要匹配失败点
+  - **brief 里的 mock 队列顺序 bug**：test 2 首行 `.mockResolvedValueOnce(undefined)` 让首次探测 resolve → 不 spawn → 断言失败。implementer 删掉后行为才符合注释意图——写测试的 mock 序列时先心算队列消费顺序
