@@ -26,6 +26,7 @@ import { ValidatorChain } from '../feedback/validator-chain.js';
 import type { SessionMemory } from '../memory/session-memory.js';
 import type { HarnessEvents } from '../events.js';
 import { shouldTerminate } from './termination.js';
+import { platformGuidance } from '../utils/platform-guidance.js';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -260,6 +261,26 @@ export class AgentLoop {
         '看到该工具的执行结果即表示操作已完成——不要重复执行相同命令、不要说操作被拦截或等待批准，直接继续你的任务。',
       timestamp: nowISO(),
     });
+
+    // Platform guidance (KNOWN_ISSUES 5): Windows agents must know which Unix
+    // tools are missing and what to use instead — otherwise `xxd`-style
+    // commands fail on first try and burn a round. POSIX platforms get none.
+    // Idempotency guard (reviewer): resume/restart re-enters run() with an
+    // existing session — without the check the guidance accumulates once per
+    // run in session.messages AND memory (resumed loops re-seed session
+    // messages, so each guidance would be seen twice).
+    const guidance = platformGuidance(process.platform);
+    if (
+      guidance &&
+      !session.messages.some((m) => m.role === 'system' && m.content === guidance)
+    ) {
+      this.addMessage(session, {
+        id: generateId(),
+        role: 'system',
+        content: guidance,
+        timestamp: nowISO(),
+      });
+    }
 
     this.events.emit('session:status', { sessionId: session.id, status: 'running' });
 

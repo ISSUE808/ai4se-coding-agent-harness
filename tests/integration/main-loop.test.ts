@@ -159,6 +159,27 @@ describe('Agent Main Loop (integration)', () => {
     expect(toolMessages[0].metadata?.toolName).toBe('read_file');
   });
 
+  it.skipIf(process.platform !== 'win32')('injects Windows platform guidance as a system message (KNOWN_ISSUES 5)', async () => {
+    const harness = createTestHarness([{ content: 'done' }], workspaceRoot);
+    const session = await harness.run('随便');
+    const guidance = session.messages.find(
+      (m) => m.role === 'system' && m.content.includes('Git Bash'),
+    );
+    expect(guidance).toBeDefined();
+  });
+
+  it.skipIf(process.platform !== 'win32')('resuming a session does not duplicate the platform guidance (reviewer regression)', async () => {
+    const harness = createTestHarness([{ content: 'done' }, { content: 'done' }], workspaceRoot);
+    let session = await harness.run('随便');
+    const guidanceCount = (): number =>
+      session.messages.filter(
+        (m) => m.role === 'system' && m.content.includes('Git Bash'),
+      ).length;
+    expect(guidanceCount()).toBe(1);
+    session = await harness.run(session.task, { session });
+    expect(guidanceCount()).toBe(1);
+  });
+
   it('Markdown 含链接（方括号在文本中间）不触发 parse_error（KNOWN_ISSUES 9.5）', async () => {
     // Real-test regression: a plain Markdown answer with a link
     // `[文字](URL)` contains `[`, and the old "content includes '{' or '['"
