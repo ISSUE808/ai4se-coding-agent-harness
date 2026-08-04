@@ -179,6 +179,32 @@ describe('runRepl', () => {
     expect(out).toContain('status=completed');
   });
 
+  it('管道输入（echoInput=false，无终端回显）时 [user] 行保留——脚本捕获可见（CR Minor 2）', async () => {
+    const { io, printed } = makeIo(['read test.ts', null]);
+    io.echoInput = false;
+    const { provider } = capturingProvider([
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { content: 'Task complete.' },
+    ]);
+    await runRepl({ config, buildAgentLoop: buildTestLoop(provider), io });
+    const out = printed.join('\n');
+    expect(out).toContain('[user] read test.ts');
+    expect(out).toContain('Task complete.');
+  });
+
+  it('color: true 时对话标签着色（REPL 端到端，CR Minor 3）', async () => {
+    const { io, printed } = makeIo(['read test.ts', null]);
+    io.color = true;
+    const { provider } = capturingProvider([
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { content: 'Task complete.' },
+    ]);
+    await runRepl({ config, buildAgentLoop: buildTestLoop(provider), io });
+    const out = printed.join('\n');
+    expect(out).toContain('\x1b[36m[assistant]\x1b[0m Task complete.');
+    expect(out).toContain('\x1b[90m[tool:read_file]\x1b[0m');
+  });
+
   it('a new instruction after completion is injected into the NEXT run with full context', async () => {
     const { io, printed } = makeIo(['first task', 'second instruction', null]);
     const { provider, contexts } = capturingProvider([
@@ -561,13 +587,30 @@ describe('runRepl', () => {
 });
 
 describe('createTerminalReplIO', () => {
-  it('Ctrl+C while a read is pending ALSO interrupts the run (I2 CR)', async () => {
-    class FakeTty extends PassThrough {
-      isTTY = true;
-      setRawMode(): this {
-        return this;
-      }
+  // A PassThrough that reports as a terminal (isTTY) — shared by the
+  // echoInput and Ctrl+C tests.
+  class FakeTty extends PassThrough {
+    isTTY = true;
+    setRawMode(): this {
+      return this;
     }
+  }
+
+  it('echoInput 按输入流 TTY 状态设置（管道输入无回显 → false，CR Minor 2）', async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const piped = createTerminalReplIO(() => {}, undefined, { input, output });
+    expect(piped.echoInput).toBe(false);
+    piped.close?.();
+    const ttyIo = createTerminalReplIO(() => {}, undefined, {
+      input: new FakeTty(),
+      output: new FakeTty(),
+    });
+    expect(ttyIo.echoInput).toBe(true);
+    ttyIo.close?.();
+  });
+
+  it('Ctrl+C while a read is pending ALSO interrupts the run (I2 CR)', async () => {
     const input = new FakeTty();
     const output = new FakeTty();
     const interrupt = vi.fn();

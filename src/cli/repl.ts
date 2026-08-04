@@ -46,6 +46,13 @@ export interface ReplIO {
    * 按 output.isTTY 自动设置；测试注入的 io 留空即纯文本。
    */
   color?: boolean;
+  /**
+   * 输入行是否已由终端回显（CR Minor 2）。交互 TTY 为 true → REPL 不再打印
+   * [user] 回声（与 readline 回显重复）；管道输入无回显 → false → [user] 行
+   * 保留，脚本捕获（`echo ... | codeharness | tee log`）不丢失指令。
+   * createTerminalReplIO 按 input.isTTY 自动设置；未设置时默认视为已回显。
+   */
+  echoInput?: boolean;
 }
 
 export interface ReplDeps {
@@ -161,14 +168,17 @@ async function runInstruction(opts: {
   signal: AbortSignal;
   print: (line: string) => void;
   color: boolean;
+  /** 输入行是否已由终端回显——true 时不打印 [user] 回声（降噪）。 */
+  echoInput: boolean;
 }): Promise<Session> {
   const { config, events, hitl } = opts;
   const { color } = opts;
 
   const onMessage = (data: HarnessEventMap['message:added']): void => {
-    // 降噪：REPL 中 readline 已在 prompt 行回显输入——[user] 回声与回显
-    // 完全重复，不再打印（start 单次模式无回显，保留 [user] 行）。
-    if (data.role === 'user') {
+    // 降噪：交互 TTY 下 readline 已在 prompt 行回显输入——[user] 回声与
+    // 回显完全重复，不再打印（CR Minor 2：管道输入无回显时 echoInput=false，
+    // 保留 [user] 行，脚本捕获可见；start 单次模式始终保留 [user] 行）。
+    if (data.role === 'user' && opts.echoInput) {
       return;
     }
     const line = formatMessageLine(data, color);
@@ -374,6 +384,7 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
         signal: controller.signal,
         print: io.print,
         color: io.color ?? false,
+        echoInput: io.echoInput ?? true,
       });
       lastStatus = session.status;
     } catch (err) {
@@ -460,6 +471,9 @@ export function createTerminalReplIO(
     print,
     // 着色只对真实 TTY 生效（isTTY 在管道下为 undefined → 纯文本）。
     color: streams.output.isTTY === true,
+    // 输入回显同样只发生在 TTY（readline 不回显管道输入 → echoInput=false，
+    // [user] 行保留，脚本捕获可读）。
+    echoInput: streams.input.isTTY === true,
     readLine(prompt: string): Promise<string | null> {
       rl.setPrompt(prompt);
       rl.prompt();

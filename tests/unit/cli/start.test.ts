@@ -141,6 +141,8 @@ describe('runStartTask', () => {
     const assistantIdx = printed.findIndex((l) => l.includes('Task complete.'));
     expect(userIdx).toBeGreaterThanOrEqual(0);
     expect(assistantIdx).toBeGreaterThan(userIdx);
+    // 降噪：纯工具调用的 assistant 消息（无文本）不打空头（CR Minor 5）
+    expect(printed.filter((l) => l.trim() === '[assistant]')).toHaveLength(0);
     // Final status line
     expect(printed.some((l) => l.includes('status=completed'))).toBe(true);
   });
@@ -312,6 +314,30 @@ describe('formatMessageLine', () => {
     expect(
       formatMessageLine({ id: 'm1', role: 'assistant', content: '', timestamp: 't' }),
     ).toBeNull();
+  });
+
+  it('feedback 消息（系统类）标签灰色（CR Minor 1）', () => {
+    expect(
+      formatMessageLine({ id: 'm4', role: 'feedback', content: 'x', timestamp: 't' }, true),
+    ).toBe('\x1b[90m[feedback]\x1b[0m x');
+  });
+
+  it('color: true 时着色标签到达打印流（TTY 模式端到端，CR Minor 3）', async () => {
+    const printed: string[] = [];
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { content: 'Task complete.' },
+    ];
+    await runStartTask({
+      task: 'read test.ts',
+      config: makeConfig(),
+      buildAgentLoop: buildMockAgentLoop(responses),
+      print: (line) => printed.push(line),
+      color: true,
+    });
+    const out = printed.join('\n');
+    expect(out).toContain('\x1b[32m[user]\x1b[0m read test.ts');
+    expect(out).toContain('\x1b[36m[assistant]\x1b[0m Task complete.');
   });
 });
 

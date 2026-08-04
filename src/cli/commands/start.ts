@@ -150,6 +150,7 @@ const ROLE_COLORS: Record<string, string> = {
   assistant: ANSI_CYAN,
   tool: ANSI_GRAY,
   system: ANSI_GRAY,
+  feedback: ANSI_GRAY,
 };
 
 /** 消息行格式化。返回 null 表示该消息无需打印（空内容且无工具标注——纯
