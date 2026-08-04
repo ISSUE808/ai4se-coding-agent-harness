@@ -774,3 +774,19 @@
   - **编辑缓冲与外部快照的冲突用 baseline 脏检测解决**：外部 config 变化时，`text !== baseline`（用户未保存的编辑）→ 跳过覆盖；等于 baseline → 跟随。保存成功即提升 baseline——"所见即真实持久化状态"
   - **方向性判断要听用户真实预期**：评审时把"编辑器保留自己的快照"判定为合理取舍，但用户实测后明确期望三板块同源——真实测试的预期优先于评审的技术判断
   - **保存后的编辑器显示 merged 是增值**：用户保存后立即看到脱敏合并结果（含 apiKey 掩码字段），而不是保留自己未保存的局部视图——测试断言从 getByText 改为 getAllByText 适配
+
+## 2026-08-04 13:35 KNOWN_ISSUES 修复：9.5 parseActions 误判 Markdown 为 JSON + 1 CLI 暂停恢复指引
+
+- **触发技能**：`systematic-debugging`（根因来自真实会话 a4b7e7fe 的完整消息序列）、`test-driven-development`（红→绿 ×2）、`requesting-code-review`
+- **Subagent**：评审 ade4b3e5（两阶段：spec 合规 + 代码质量）
+- **Prompt 要点**：用户实测"只是让 AI 用 md 格式写一段话，AI 却回复了三次"——curl `/api/sessions/:id` 拿到完整记录：assistant(markdown 含 `[链接](…)`) → feedback parse_error → assistant → feedback parse_error → assistant(无括号) → completed。currentRound=3 恰好坐实 KNOWN_ISSUES 9.5
+- **产出**：
+  - 修复 1（`src/core/main-loop.ts` parseActions）：旧启发式 `content.includes('{') || content.includes('[')` 把文本中间出现方括号/花括号的纯文本误判为"JSON 尝试"→ 无谓 parse_error → LLM 白重写。收紧为 **trim 后以 `{` 或 `[` 开头** 才算 JSON 尝试（KNOWN_ISSUES 9.5 建议）
+  - 修复 2（`src/cli/commands/start.ts` runStartTask）：maxRounds 升级暂停（triggerHITL 无 pending command → stdin 交互循环不触发）后仅输出 `[session] paused` 就退出。结束时 status=paused 追加恢复指引：重跑（提高 maxRounds）或改用 `--web` 在 WebUI 恢复（评审核实 `continueSession` 的 `maxRounds += currentRound` 恢复路径属实）
+  - 测试: 红 2 → 绿。新测试：① 集成 markdown 含链接+代码块（`[`/`{` 都在文本中间）→ 无 parse_error、1 轮完成 ② CLI 升级暂停 → 输出含 `--web`/`maxRounds` 指引。适配：既有 parse_error 恢复测试 fixture `'not valid json {{{}'`（新语义下是纯文本）改为 `it.each` 参数化 `{`/`[` 两种真残缺 JSON 开头。评审 Minor×4 全部处理：删 trimStart 空操作、`[` 开头分支补测试、fixture 加 ts 代码块（贴近 9.5 原始复现）、文案"需要人工批准"收紧为"升级暂停"
+  - 全量：主套件 560/560（+3）、client 199/199、双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **真实会话记录是最好的 bug 报告**：用户一句"回复了三次"背后，`/api/sessions/:id` 的完整消息序列直接展示了根因链条（含 feedback 的 failureCategory/strategy 元数据）——先拉数据再猜
+  - **启发式判定的关键特征是"位置"不是"存在"**：`[` 在 Markdown 里无处不在（链接、引用代码），只有以 `{`/`[` **开头**的文本才可能是内联 JSON——同理可推广到其他"contains → startsWith"型启发式
+  - **升级暂停与 warn 暂停的恢复路径不同**：warn 暂停有 pending command（stdin y/n 交互）；升级暂停无（只能 WebUI 恢复或重跑）——指引文案必须对应真实可用的恢复路径，评审逐条核实了 `--web` 恢复语义后才算数

@@ -8,11 +8,6 @@
 
 ## 一、待改进（按优先级）
 
-### 1. CLI 模式 HITL 暂停后无恢复指引（中）[实测]
-- **现象**：`start <task>` 直跑时触发 HITL（warn 批准或 maxRounds 升级），会话 `paused` 后进程退出，输出仅有 `[session] paused`——用户不知道如何恢复，也没有 CLI 内交互批准途径。
-- **建议**：CLI 在 HITL 暂停时输出可操作指引（如"使用 `codeharness start --web` 或 WebUI 批准 API 恢复会话"）；或为 CLI 增加交互式批准模式（读 stdin）。
-- **位置**：`src/cli/commands/start.ts`（runStartTask 的状态输出）。
-
 ### 2. read_file 无编码检测（中）[实测]
 - **现象**：UTF-16（含 BOM）文件按 UTF-8 读取产生乱码（PowerShell 5.1 重定向默认写 UTF-16LE 触发）。node 运行带 BOM 的 UTF-16 文件成功，但 `read_file` 乱码——同一文件两种行为。
 - **建议**：`read_file` 增加 BOM/编码探测（UTF-8 BOM、UTF-16LE/BE BOM 检测，非 UTF-8 时返回明确提示或尝试解码）。
@@ -55,11 +50,6 @@
 | 会话详情「终端」tab | 占位提示（"Task 19 接入"） | 接入 agent 运行日志/终端流 |
 | Settings「清空会话」danger-zone | 按钮 disabled（"Task 19 后提供"） | 新增 DELETE 端点（会话批量清空） |
 | 上下文栏 Token 明细 | 仅总计 | 后端提供输入/输出/缓存命中统计 |
-
-### 9.5 parseActions 对 markdown 总结误判 JSON（低）[实测]
-- **现象**：agent 输出含代码块的 markdown 总结（如 `**add.ts** — ...` + ts 代码块）被 `parseActions` 判定为"看起来像 JSON" → 尝试 `JSON.parse` 失败 → 回灌 `parse_error` 反馈 → agent 多消耗一轮重新输出纯文本才完成。
-- **建议**：`parseActions` 的 JSON 判定收紧（如仅当 content 以 `{`/`[` 开头且 trim 后首尾配对才尝试解析），或 parse_error 反馈带上更明确的格式要求。
-- **位置**：`src/core/main-loop.ts`（parseActions）。
 
 ### 9.6 run_test 无 pattern 参数行为不明确（低）[实测]
 - **现象**：`run_test` 无参数调用返回 `{passed:false, results:[]}`（无 pattern 匹配），agent 困惑后自适应改用 `run_shell` 直跑 vitest 成功——工具默认行为（无 pattern 时跑全部？）与反馈信息不清晰。
@@ -119,6 +109,8 @@
 | **供应商信息编辑后行内/下方配置不刷新**（① 更新 baseURL 后需刷新页面左侧才显示新值——KeyRow 保存后不通知父级，KeyManagementCard.meta 是行内 baseUrl 显示源；② 修改供应商信息后需"先应用别的供应商再重新应用 + 刷新"下方配置才更新——POST /api/keys 只写 registry 不同步激活供应商的 llm.baseUrl，且前端 Settings.config 保存后不重拉）[实测] | ① KeyRow 加 `onSaved` → KeyManagementCard `load()` 重拉列表 + Settings `handleRegistryChanged` 重拉 config（仅 registry 实际变化时触发，纯 key 保存不打扰未保存的表单编辑）② keys.ts：`provider === config.llm.provider && hasBaseUrl` 时同一 persist 内同步 `llm.baseUrl` 并触发 `onConfigChanged`（运行中 loop 重启契约，评审补）③ 负向测试：非激活供应商编辑不误伤 llm.baseUrl | `8612a61` |
 | **会话详情 tab 恒跳第一个会话**（多会话时从详情页切走再切回，打开的是 sessions[0] 而非切换前查看的会话——SessionDetailTab 无记忆）[实测] | App.tsx sessionStorage 记忆 lastSessionId（pathname useEffect 记录，刷新可恢复；点击 tab 优先跳 lastSessionId，会话被删回退 sessions[0]；decodeURIComponent try/catch 防畸形 % 编码白屏） | `8612a61` |
 | **配置编辑板块不跟随 config 变化**（编辑激活供应商端点后，模型与护栏处立即更新但 JSON 编辑器仍显示旧值——ConfigEditorCard 只在自己 mount 时加载一次，保留静态快照；编辑器保存后模型卡也不跟随）[实测] | ConfigEditorCard 接收共享 config：外部变化（registry 编辑/供应商切换）时同步编辑器文本（baselineRef 脏检测——用户未保存的编辑不被覆盖）；保存成功后 merged 通过 onSaved 反向传播到设置页 config（模型与护栏/通用卡跟随）——三板块同一真源 | `dbae4f9` |
+| **parseActions 对 markdown 总结误判 JSON**（agent 输出含代码块/链接的 markdown 总结被判定"看起来像 JSON" → JSON.parse 失败 → 回灌 parse_error → 白重写；真实会话 a4b7e7fe 复现：`用md格式写一段话` 含 `[链接](…)` → 回复 3 次才完成，严重度实测升中）[实测] | JSON 判定收紧为 **trim 后以 `{` 或 `[` 开头** 才算 JSON 尝试（`content.includes` → `startsWith`，文本中间的括号不再误伤）；parse_error 恢复测试参数化覆盖 `{`/`[` 两种残缺开头；回归测试：markdown 含链接+ts 代码块 → 无 parse_error、1 轮完成 | `[未提交]` |
+| **CLI 模式 HITL 暂停后无恢复指引**（`start <task>` 直跑触发 maxRounds 升级暂停后进程退出，仅输出 `[session] paused`——升级暂停无 pending command，stdin 交互循环不触发，用户不知如何恢复）[实测] | runStartTask 结束时 status=paused 输出恢复指引：重跑（提高 maxRounds）或改用 `codeharness start --web`（WebUI 批准恢复，`continueSession` 的 `maxRounds += currentRound` 路径已核实）；测试断言指引含 `--web`/`maxRounds` | `[未提交]` |
 
 ---
 
