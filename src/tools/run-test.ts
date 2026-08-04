@@ -19,7 +19,9 @@ interface TestResult {
 // matching against them made every real invocation resolve to
 // `{passed:false, results:[]}` (KNOWN_ISSUES 9.6).
 function stripAnsi(input: string): string {
-  return input.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  // `?` covers private CSI sequences like `\x1b[?25l` (cursor hide) in case a
+  // wrapper around vitest emits them; rawOutput fallback covers worst case.
+  return input.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
 }
 
 function parseVitestOutput(
@@ -27,7 +29,10 @@ function parseVitestOutput(
 ): { passed: boolean; results: TestResult[]; rawOutput?: string } {
   const clean = stripAnsi(output);
   const results: TestResult[] = [];
-  // Parse vitest per-file lines: "✓ file.test.ts (N tests) Xms" or "❯ file.test.ts (N tests | M failed) Xms"
+  // Parse vitest per-file lines: "✓ file.test.ts (N tests) Xms" or
+  // "❯ file.test.ts (N tests | M failed) Xms". Durations are matched as
+  // `Xms` only — a slow file rendered as `1.2s` simply skips this line and
+  // the summary fallback below still decides pass/fail.
   const summaryRe = /([✓❯])\s+(.+?\.test\.\w+)\s+\((\d+)\s+tests?(?:\s*\|\s*(\d+)\s+failed)?\)\s+(\d+)ms/g;
   let match;
   while ((match = summaryRe.exec(clean)) !== null) {
@@ -39,21 +44,31 @@ function parseVitestOutput(
     });
   }
 
-  if (results.length > 0) {
-    return { passed: results.every(r => r.status === 'passed'), results };
-  }
-
-  // No per-file lines — fall back to the "Test Files" summary line. Vitest
-  // prints failures as `2 failed | 46 passed (48)` and a green run as
-  // `48 passed (48)`; treat it as passed only when something passed and
-  // nothing failed.
+  // "Test Files" summary line. Vitest prints failures as `2 failed | 46 passed (48)`
+  // and a green run as `48 passed (48)`; treat it as passed only when
+  // something passed and nothing failed.
   const testFilesLine = clean.split('\n').find(l => l.includes('Test Files'));
+  let summaryPassedCount = 0;
+  let summaryFailed = false;
   if (testFilesLine) {
     const passedMatch = /(\d+)\s+passed/.exec(testFilesLine);
     const failedMatch = /(\d+)\s+failed/.exec(testFilesLine);
-    const passed =
-      passedMatch !== null && parseInt(passedMatch[1]) > 0 && failedMatch === null;
-    return { passed, results: [] };
+    summaryPassedCount = passedMatch ? parseInt(passedMatch[1]) : 0;
+    summaryFailed = failedMatch !== null;
+  }
+
+  if (results.length > 0) {
+    // Per-file lines are usually authoritative, but a file with failures AND
+    // skips renders `(5 tests | 1 failed | 2 skipped)` — the `| 2 skipped`
+    // suffix defeats the regex, so that failing file produces NO result
+    // entry. Guard against the resulting false `passed:true` by consulting
+    // the summary line too (reviewer Important).
+    const passed = results.every(r => r.status === 'passed') && !summaryFailed;
+    return { passed, results };
+  }
+
+  if (testFilesLine) {
+    return { passed: summaryPassedCount > 0 && !summaryFailed, results: [] };
   }
 
   // Nothing recognizable (new vitest version, locale, or a wrapper around

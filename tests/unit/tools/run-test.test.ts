@@ -169,6 +169,49 @@ describe('run_test tool', () => {
     expect(p.results).toHaveLength(0);
   });
 
+  it('does not report passed:true when a skipped-count line hid a failed file (reviewer Important)', async () => {
+    // Vitest renders a file with failures AND skips as
+    // `❯ path (5 tests | 1 failed | 2 skipped) 13ms` — the per-file regex
+    // stops at `| 1 failed` and the `| 2 skipped` suffix makes it not match
+    // at all. If another file's ✓ line matched, the per-file path used to
+    // short-circuit to passed:true while the summary said a file failed.
+    mockedExecSync.mockReturnValue(
+      '\x1b[32m✓\x1b[39m tests/unit/ok.test.ts \x1b[2m(\x1b[22m\x1b[2m2 tests\x1b[22m\x1b[2m)\x1b[22m\x1b[90m 4\x1b[2mms\x1b[22m\x1b[39m\n' +
+        '\x1b[31m❯\x1b[39m tests/unit/flaky.test.ts \x1b[2m(\x1b[22m\x1b[2m5 tests\x1b[22m \x1b[2m|\x1b[22m \x1b[2m1 failed\x1b[22m \x1b[2m|\x1b[22m \x1b[2m2 skipped\x1b[22m\x1b[2m)\x1b[22m\x1b[90m 13\x1b[2mms\x1b[22m\x1b[39m\n' +
+        '\n\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[90m |\x1b[39m\x1b[22m\x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (2)\x1b[39m\n' +
+        '\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m6 passed\x1b[39m\x1b[22m\x1b[90m\x1b[39m\x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[90m (7 | 1 skipped)\x1b[39m\n',
+    );
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.passed).toBe(false);
+  });
+
+  it('reports passed:false on an all-failed summary line (reviewer Minor)', async () => {
+    mockedExecSync.mockReturnValue(
+      '\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m3 failed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m\n' +
+        '\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[31m3 failed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m\n',
+    );
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.passed).toBe(false);
+    expect(p.results).toHaveLength(0);
+  });
+
+  it('truncates rawOutput beyond 4000 chars with an explicit marker (reviewer Minor)', async () => {
+    const longOutput = 'line of vitest output\n'.repeat(600); // ~12600 chars
+    mockedExecSync.mockReturnValue(longOutput);
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.rawOutput!.length).toBeLessThanOrEqual(4000 + 64);
+    expect(p.rawOutput).toContain('output truncated at 4000 chars');
+  });
+
   it('includes the raw stdout in output.rawOutput when parsing fails (KNOWN_ISSUES 9.6)', async () => {
     // A vitest version/locale change could defeat the parser — the agent must
     // still see the original stdout instead of an empty `{passed:false}`.
