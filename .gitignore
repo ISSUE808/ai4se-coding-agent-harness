@@ -47,3 +47,4 @@ PREPARATION_CHECKLIST.md
 # desktop 独立 package
 desktop/build/
 desktop/node_modules/
+desktop/backend-pack/
