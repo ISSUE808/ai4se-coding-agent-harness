@@ -1,5 +1,6 @@
 import { execSync } from 'child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
+import { hasLocalBin } from '../utils/env-prereq.js';
 import { buildWhitelistedEnv } from './env-utils.js';
 
 interface RunTestParams {
@@ -54,6 +55,19 @@ export const runTestTool: Tool = {
     const start = Date.now();
     try {
       const p = params as unknown as RunTestParams;
+
+      // Env prerequisite (KNOWN_ISSUES 3): without a LOCAL vitest, `npx vitest`
+      // would download it — fail with an actionable message instead of
+      // triggering a network install mid-task.
+      if (!hasLocalBin(context.workspaceRoot, 'vitest')) {
+        return {
+          success: false,
+          error:
+            'vitest is not installed in the workspace (node_modules/.bin/vitest missing). ' +
+            'Install it with `npm i -D vitest` (run_shell), or run tests via run_shell directly.',
+          duration_ms: Date.now() - start,
+        };
+      }
 
       const pattern = typeof p.pattern === 'string' && p.pattern.trim().length > 0
         ? p.pattern.trim()

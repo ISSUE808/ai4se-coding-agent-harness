@@ -2,6 +2,7 @@ import type { Validator, Action, ToolResult, ValidatorContext, FeedbackResult } 
 import { execSync as nodeExecSync } from 'child_process';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
+import { hasLocalBin } from '../../utils/env-prereq.js';
 
 /** ESLint config files recognized by eslint v8/v9 (flat + legacy). */
 const ESLINT_CONFIG_FILES = [
@@ -21,10 +22,16 @@ export class EslintValidator implements Validator {
   name = 'eslint';
   private _exec: typeof nodeExecSync;
   private _hasConfig: (root: string) => boolean;
+  private _hasBin: (root: string) => boolean;
 
-  constructor(exec?: typeof nodeExecSync, hasConfig?: (root: string) => boolean) {
+  constructor(
+    exec?: typeof nodeExecSync,
+    hasConfig?: (root: string) => boolean,
+    hasBin?: (root: string) => boolean,
+  ) {
     this._exec = exec ?? nodeExecSync;
     this._hasConfig = hasConfig ?? defaultHasEslintConfig;
+    this._hasBin = hasBin ?? ((root) => hasLocalBin(root, 'eslint'));
   }
 
   async validate(action: Action, result: ToolResult, context: ValidatorContext): Promise<FeedbackResult> {
@@ -38,6 +45,17 @@ export class EslintValidator implements Validator {
         passed: true,
         validator: 'eslint',
         evidence: 'ESLint skipped: no eslint.config.(js|mjs|cjs) in workspace',
+      };
+    }
+
+    // Env prerequisite (KNOWN_ISSUES 4): with a config but no LOCAL eslint,
+    // `npx eslint` downloads the package — skip rather than trigger an
+    // install/network fetch from inside a feedback loop.
+    if (!this._hasBin(context.workspaceRoot)) {
+      return {
+        passed: true,
+        validator: 'eslint',
+        evidence: 'ESLint skipped: no local eslint binary (node_modules/.bin/eslint missing)',
       };
     }
 

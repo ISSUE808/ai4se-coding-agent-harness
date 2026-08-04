@@ -15,11 +15,25 @@ describe('EslintValidator', () => {
 
   beforeEach(() => {
     execSync = makeExec();
-    validator = new EslintValidator(execSync, () => true);
+    // hasConfig + hasBin injected as present so execSync paths are exercised
+    // (the env-prereq skip is tested separately below).
+    validator = new EslintValidator(execSync, () => true, () => true);
   });
 
   it('has name "eslint"', () => {
     expect(validator.name).toBe('eslint');
+  });
+
+  it('skips (passes) when eslint config exists but no local eslint binary — npx trap (KNOWN_ISSUES 4)', async () => {
+    const result: ToolResult = { success: true, duration_ms: 10, filesChanged: ['src/index.ts'] };
+    const noBinValidator = new EslintValidator(execSync, () => true, () => false);
+
+    const feedback = await noBinValidator.validate(action, result, ctx);
+
+    expect(feedback.passed).toBe(true);
+    expect(feedback.validator).toBe('eslint');
+    expect(feedback.evidence).toContain('eslint');
+    expect(execSync).not.toHaveBeenCalled();
   });
 
   it('returns passed when eslint finds no errors', async () => {

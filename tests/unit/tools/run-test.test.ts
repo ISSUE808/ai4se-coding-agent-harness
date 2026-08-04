@@ -19,6 +19,12 @@ let context: ToolContext;
 
 beforeAll(() => {
   workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-rt-'));
+  // Real env prerequisite (KNOWN_ISSUES 3): run_test skips when vitest is not
+  // installed. Give the shared workspace a fake local vitest binary so the
+  // execSync paths below are exercised; the skip path gets its own workspace.
+  fs.mkdirSync(path.join(workspaceRoot, 'node_modules', '.bin'), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, 'node_modules', '.bin', 'vitest'), '#!/bin/sh\n');
+  fs.writeFileSync(path.join(workspaceRoot, 'node_modules', '.bin', 'vitest.cmd'), '@echo off\n');
   context = { workspaceRoot };
 });
 
@@ -125,5 +131,20 @@ describe('run_test tool', () => {
     expect(runTestTool.name).toBe('run_test');
     expect(runTestTool.description).toBeDefined();
     expect(runTestTool.parameters).toBeDefined();
+  });
+
+  it('fails clearly without triggering an npx download when vitest is not installed (KNOWN_ISSUES 3)', async () => {
+    const bareRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-rt-bare-'));
+    const bareContext: ToolContext = { workspaceRoot: bareRoot };
+
+    try {
+      const result = await runTestTool.execute({}, bareContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('vitest');
+      expect(mockedExecSync).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(bareRoot, { recursive: true, force: true });
+    }
   });
 });
