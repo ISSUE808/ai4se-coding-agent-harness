@@ -8,15 +8,6 @@
 
 ## 一、待改进（按优先级）
 
-### 3. 其余校验器的环境前提检查（中）[实测]
-- **现象**：eslint/tsc 校验器已实现"无配置 → 跳过"（SPEC §10 未决问题 2），但 `run_test` 工具在无 vitest 环境会触发 `npx vitest` 下载；TestResultValidator 同样依赖环境。
-- **建议**：对 run_test / testRunner 校验器做同样的前提检测（package.json 声明 vitest/jest 才执行）；统一封装"环境前提检查"模式。
-- **位置**：`src/tools/run-test.ts`、`src/feedback/validators/test-result-validator.ts`。
-
-### 4. npx 依赖下载陷阱（中）[实测]
-- **现象**：`npx tsc` 在无本地 TypeScript 时下载 npm 上的**废弃同名包** `tsc@2.0.4`（非 TypeScript 官方）；`npx eslint` 同理。环境噪音曾污染反馈闭环（已通过 skip 缓解）。
-- **建议**：run_shell / 校验器层优先使用本地 `node_modules/.bin`，避免裸 `npx`；或对 npx 下载行为显式提示。
-
 ### 5. Windows 工具差异（中）[实测]
 - **现象**：agent 调用 `xxd`（Unix 工具）在 Windows 上不存在——真实执行失败并消耗轮次。
 - **建议**：agent system prompt 注入平台感知（Windows 可用工具清单/替代品，如 `certutil`/PowerShell）；或工具层做平台适配（`xxd` → 内置 read 原始字节）。
@@ -105,7 +96,8 @@
 | **配置编辑板块不跟随 config 变化**（编辑激活供应商端点后，模型与护栏处立即更新但 JSON 编辑器仍显示旧值——ConfigEditorCard 只在自己 mount 时加载一次，保留静态快照；编辑器保存后模型卡也不跟随）[实测] | ConfigEditorCard 接收共享 config：外部变化（registry 编辑/供应商切换）时同步编辑器文本（baselineRef 脏检测——用户未保存的编辑不被覆盖）；保存成功后 merged 通过 onSaved 反向传播到设置页 config（模型与护栏/通用卡跟随）——三板块同一真源 | `dbae4f9` |
 | **parseActions 对 markdown 总结误判 JSON**（agent 输出含代码块/链接的 markdown 总结被判定"看起来像 JSON" → JSON.parse 失败 → 回灌 parse_error → 白重写；真实会话 a4b7e7fe 复现：`用md格式写一段话` 含 `[链接](…)` → 回复 3 次才完成，严重度实测升中）[实测] | JSON 判定收紧为 **trim 后以 `{` 或 `[` 开头** 才算 JSON 尝试（`content.includes` → `startsWith`，文本中间的括号不再误伤）；parse_error 恢复测试参数化覆盖 `{`/`[` 两种残缺开头；回归测试：markdown 含链接+ts 代码块 → 无 parse_error、1 轮完成 | `[未提交]` |
 | **CLI 模式 HITL 暂停后无恢复指引**（`start <task>` 直跑触发 maxRounds 升级暂停后进程退出，仅输出 `[session] paused`——升级暂停无 pending command，stdin 交互循环不触发，用户不知如何恢复）[实测] | runStartTask 结束时 status=paused 输出恢复指引：重跑（提高 maxRounds）或改用 `codeharness start --web`（WebUI 批准恢复，`continueSession` 的 `maxRounds += currentRound` 路径已核实）；测试断言指引含 `--web`/`maxRounds` | `07a1111` |
-| **read_file 无编码检测**（UTF-16 含 BOM 文件按 UTF-8 读取乱码——PowerShell 5.1 重定向默认写 UTF-16LE 触发；无 BOM 的 GBK 静默乱码）[实测] | BOM 驱动的编码探测：UTF-8（剥 BOM）/UTF-16LE/BE（TextDecoder fatal，奇数长度与孤立代理 → per-file error）/UTF-32LE/BE（手写解码，%4 校验 + 码点范围校验）全覆盖；无 BOM → `TextDecoder('utf-8', {fatal:true})` 严格校验，失败返回带 `file`/`iconv` 兜底指引的明确错误（"正确或明确失败优先"——无 BOM 编码不可判定，不做猜测；对比 Claude Code 官方是静默 U+FFFD 乱码）。评审发现并修复静默损坏路径：UTF-16 奇数长度丢字节、UTF-32 截断、孤立代理。测试 +12（红→绿） | `[未提交]` |
+| **read_file 无编码检测**（UTF-16 含 BOM 文件按 UTF-8 读取乱码——PowerShell 5.1 重定向默认写 UTF-16LE 触发；无 BOM 的 GBK 静默乱码）[实测] | BOM 驱动的编码探测：UTF-8（剥 BOM）/UTF-16LE/BE（TextDecoder fatal，奇数长度与孤立代理 → per-file error）/UTF-32LE/BE（手写解码，%4 校验 + 码点范围校验）全覆盖；无 BOM → `TextDecoder('utf-8', {fatal:true})` 严格校验，失败返回带 `file`/`iconv` 兜底指引的明确错误（"正确或明确失败优先"——无 BOM 编码不可判定，不做猜测；对比 Claude Code 官方是静默 U+FFFD 乱码）。评审发现并修复静默损坏路径：UTF-16 奇数长度丢字节、UTF-32 截断、孤立代理。测试 +12（红→绿） | `81f1aab` |
+| **run_test/testRunner 无环境前提检查**（run_test 工具与 TestResultValidator 在无 vitest 环境触发 `npx vitest` 下载；`npx tsc` 在无本地 TypeScript 时下载废弃同名包 `tsc@2.0.4`、`npx eslint` 同理——环境噪音污染反馈闭环）[实测] | 统一"环境前提检查"模式（`src/utils/env-prereq.ts` `hasLocalBin`，覆盖 POSIX sh / .cmd / .ps1 三种 bin 变体）：① run_test 无本地 vitest → `success:false` + 可操作错误（`npm i -D vitest` 指引）② TestResultValidator 无 vitest → passed:true + skipped ③ eslint/tsc 有配置文件但无本地 bin → skip（`npx tsc` 的废弃包陷阱根除；npx 保留，前置 bin 检查保证 npx 只解析本地）。run_shell 未拦（npx 是 agent 合法工具，守卫只落在确定性代码路径）。测试 +8（4 skip 红→绿 + 4 hasLocalBin 直测）；评审 Minor×4 全部处理（清理 try/finally、.ps1 直测、tsbuildinfo 删除、import 顺序） | `[未提交]` |
 
 ---
 

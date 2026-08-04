@@ -807,3 +807,20 @@
   - **对标 Claude Code 反而印证了我们的设计**：官方零编码探测（静默 U+FFFD 不可逆、BOM 不处理、Edit 还破坏 BOM），社区同构实现（BOM→fatal→ICU）被 revert——"正确或明确失败优先"是我们比业界标杆更优的取舍，也是"机制由代码而非提示词/模型判断"命题的实例
   - **解码器边界要实测，不能凭 API 直觉**：`Buffer.from(str, 'utf16be')` 抛 ERR_UNKNOWN_ENCODING（Buffer 编码表没有 utf16be）；`String.fromCodePoint(0xD800)` 不抛错（代理区静默通过）；`TextDecoder` fatal 模式才是统一严格路径——评审的 2 个 Important 全是"静默数据损坏"路径，都是 Node API 的隐蔽行为
   - **测试构造要自校验**：UTF-32 截断测试第一次红在测试自身（'好' 只有 4 字节，subarray(0,6) 截不出 6 字节）——测试 fixture 的字节数要先心算验证
+
+## 2026-08-04 15:20 KNOWN_ISSUES 3/4 修复：统一环境前提检查 + npx 下载陷阱
+
+- **触发技能**：`test-driven-development`（红 4 → 绿）、`requesting-code-review`（评审 a61da146）
+- **Subagent**：评审 a61da146
+- **Prompt 要点**：用户"继续"推进 KNOWN_ISSUES 3/4（一族：环境前提检查）。设计决策：① 检查对象用 `node_modules/.bin` 存在性（package.json 声明检查会漏 monorepo——声明了没装 / 装了没声明）② run_shell 不拦 npx（agent 合法工具，守卫只落在确定性代码路径：工具/校验器）③ 校验器 skip 语义与既有"无配置 → 跳过"同构（passed:true + evidence 含 skipped）④ 保留 npx 调用（npx 优先解析本地 .bin，有 bin 就不下载），只加前置检查
+- **产出**：
+  - 新建 `src/utils/env-prereq.ts`：`hasLocalBin(root, bin)`——检查 node_modules/.bin 下 sh / .cmd / .ps1 三种变体（Windows shim 是 .cmd/.ps1）
+  - 接入 4 处：① run_test 无 vitest → `success:false` + 错误含 `npm i -D vitest` 指引（不触发 npx 下载）② TestResultValidator 构造器加 hasVitest 注入，无 → passed:true + skipped ③ eslint 有配置无 bin → skip ④ tsc 有 tsconfig 无 bin → skip（**`npx tsc` 废弃包 tsc@2.0.4 陷阱根除**）
+  - 测试: 红 4 → 绿：validator skip ×3（构造器注入 `() => false`）、run_test 无 bin 工作区（真实 mkdtemp 无 node_modules）；hasLocalBin 直测 ×4（sh/.cmd/.ps1/不存在）；现有 30 个测试 beforeEach 适配注入 `() => true` + run-test 测试造 fake bin 文件（真实环境形状）
+  - 评审 Minor×4 全部处理：裸目录清理改 try/finally、.ps1 分支补直测、tsconfig.tsbuildinfo 删除（.gitignore 按 §12.2 基线不可加条目）、import 顺序
+  - 全量：主套件 581/581（+8）、client 199/199、双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **"无配置跳过"的既有模式有盲区**：eslint/tsc 只查配置文件存在性——tsc 有 tsconfig 但没装 TypeScript 时 `npx tsc` 仍会下载废弃包。环境前提检查要查 **bin 存在性**（配置 + 运行时两层），"统一封装"不是复制模式而是抽象出共享函数（hasLocalBin）
+  - **注入参数一律追加在尾部**：3 个 validator 构造器 (exec, hasConfig) → (exec, hasConfig, hasBin)，14 个调用点 grep 确认无遗漏；真实默认值路径（无参构造）由集成测试覆盖（裸临时目录 hasConfig 先短路）
+  - **skip 与失败语义分层**：校验器层 skip（passed:true，环境噪音不反馈给 LLM 当代码错误）；工具层明确失败（success:false + 可操作错误）——同一前提检查，两层语义不同，因为消费者不同（校验器结果进反馈闭环、工具结果给 agent 决策）
