@@ -13,7 +13,7 @@ npm link          # 全局 codeharness 命令（任意目录可用）
 
 ```bash
 cd desktop && npm install && npm run dist
-# 产物：desktop/dist/CodeHarness*.exe（portable 免安装 / NSIS 安装程序）
+# 产物：desktop/build/CodeHarness*.exe（portable 免安装 / NSIS 安装程序）
 ```
 
 ## 快速开始
