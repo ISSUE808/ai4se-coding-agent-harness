@@ -13,6 +13,8 @@ import {
   cliPromptApproval,
   executeApprovedActionImpl,
   formatMessageLine,
+  ANSI_GRAY,
+  ANSI_RESET,
 } from './commands/start.js';
 import { adviceFor } from './errors.js';
 
@@ -39,6 +41,11 @@ export interface ReplIO {
   askYesNo?(question: string): Promise<boolean>;
   /** Release the input (production closes the shared readline on exit). */
   close?(): void;
+  /**
+   * 标签着色开关（对话内容 vs 系统消息的视觉区分）。createTerminalReplIO
+   * 按 output.isTTY 自动设置；测试注入的 io 留空即纯文本。
+   */
+  color?: boolean;
 }
 
 export interface ReplDeps {
@@ -153,14 +160,30 @@ async function runInstruction(opts: {
   ask: (question: string) => Promise<boolean>;
   signal: AbortSignal;
   print: (line: string) => void;
+  color: boolean;
 }): Promise<Session> {
   const { config, events, hitl } = opts;
+  const { color } = opts;
 
   const onMessage = (data: HarnessEventMap['message:added']): void => {
-    opts.print(formatMessageLine(data));
+    // 降噪：REPL 中 readline 已在 prompt 行回显输入——[user] 回声与回显
+    // 完全重复，不再打印（start 单次模式无回显，保留 [user] 行）。
+    if (data.role === 'user') {
+      return;
+    }
+    const line = formatMessageLine(data, color);
+    if (line !== null) {
+      opts.print(line);
+    }
   };
   const onStatus = (data: HarnessEventMap['session:status']): void => {
-    opts.print(`[session] ${data.status}`);
+    // 降噪：running/completed 无信息量（done 摘要已含终态）；paused 等
+    // 中间态保留（暂停指引、中断提示需要前置行）。
+    if (data.status === 'running' || data.status === 'completed') {
+      return;
+    }
+    const tag = color ? `${ANSI_GRAY}[session]${ANSI_RESET}` : '[session]';
+    opts.print(`${tag} ${data.status}`);
   };
   events.on('message:added', onMessage);
   events.on('session:status', onStatus);
@@ -350,6 +373,7 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
         ask,
         signal: controller.signal,
         print: io.print,
+        color: io.color ?? false,
       });
       lastStatus = session.status;
     } catch (err) {
@@ -434,6 +458,8 @@ export function createTerminalReplIO(
 
   return {
     print,
+    // 着色只对真实 TTY 生效（isTTY 在管道下为 undefined → 纯文本）。
+    color: streams.output.isTTY === true,
     readLine(prompt: string): Promise<string | null> {
       rl.setPrompt(prompt);
       rl.prompt();

@@ -154,10 +154,29 @@ describe('runRepl', () => {
       onExit: (code) => exitCodes.push(code),
     });
     const out = printed.join('\n');
-    expect(out).toContain('[user] read test.ts');
+    // 降噪：REPL 中 readline 已在 prompt 行回显输入，[user] 回声不再打印。
+    expect(out).not.toContain('[user] read test.ts');
     expect(out).toContain('Task complete.');
     expect(out).toContain('status=completed');
     expect(exitCodes).toEqual([0]);
+  });
+
+  it('降噪：空 assistant 消息不打空头，running/completed 状态行不打印（工具行与 done 摘要保留）', async () => {
+    const { io, printed } = makeIo(['read test.ts', null]);
+    const { provider } = capturingProvider([
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { content: 'Task complete.' },
+    ]);
+    await runRepl({ config, buildAgentLoop: buildTestLoop(provider), io });
+    const out = printed.join('\n');
+    // 纯工具调用的 assistant 消息（无文本）不再打空头。
+    expect(printed.filter((l) => l.trim() === '[assistant]')).toHaveLength(0);
+    // running/completed 状态行是噪音（done 摘要已含终态）——不打印。
+    expect(out).not.toContain('[session] running');
+    expect(out).not.toContain('[session] completed');
+    // 工具执行行保留（过程可见性），done 摘要保留（含终态）。
+    expect(out).toContain('[tool:read_file]');
+    expect(out).toContain('status=completed');
   });
 
   it('a new instruction after completion is injected into the NEXT run with full context', async () => {
@@ -169,9 +188,9 @@ describe('runRepl', () => {
     ]);
     await runRepl({ config, buildAgentLoop: buildTestLoop(provider), io });
     const out = printed.join('\n');
-    expect(out).toContain('[user] first task');
+    expect(out).not.toContain('[user] first task');
     expect(out).toContain('First done.');
-    expect(out).toContain('[user] second instruction');
+    expect(out).not.toContain('[user] second instruction');
     expect(out).toContain('Second done.');
     // Both runs completed (streaming order: run 1 done line before run 2).
     expect(out.match(/status=completed/g) ?? []).toHaveLength(2);
@@ -255,16 +274,17 @@ describe('runRepl', () => {
         interruptHandler = handler;
       },
     });
-    // The run is in flight once the first user message is streamed (the LLM
-    // call is still gated).
-    await waitFor(() => printed.some((l) => l.includes('[user] long task')));
+    // The run is in flight once the first LLM call is issued (the call is
+    // still gated). [user] 回声已降噪（readline 回显），不能用作在途信号——
+    // calls 在 gate 之前递增，等待不依赖任何打印行。
+    await waitFor(() => calls >= 1);
     interruptHandler?.();
     releaseFirst?.();
     await done;
     const out = printed.join('\n');
     expect(out).toContain('[session] interrupted');
     expect(out).toContain('status=paused');
-    expect(out).toContain('[user] continue after interrupt');
+    expect(out).not.toContain('[user] continue after interrupt');
     expect(out).toContain('After interrupt.');
     expect(out).toContain('status=completed');
   });
@@ -417,6 +437,7 @@ describe('runRepl', () => {
     const out = printed.join('\n');
     expect(asked).toHaveLength(1); // asked exactly once — no re-ask
     expect(out).not.toContain('[session] error');
+    expect(out).toContain('[session] paused'); // 状态行保留（非 running/completed 的中间态）
     expect(out).toContain('status=paused'); // the upgrade pause, cleanly reported
   });
 
@@ -586,7 +607,8 @@ describe('program wiring', () => {
     );
     const result = await parseCaptured(program, []);
     expect(printed.some((l) => l.includes('CodeHarness REPL'))).toBe(true);
-    expect(printed.some((l) => l.includes('[user] read test.ts'))).toBe(true);
+    // REPL 降噪：readline 已回显输入，[user] 回声不打印（但 done 摘要仍在）。
+    expect(printed.some((l) => l.includes('[user] read test.ts'))).toBe(false);
     expect(printed.some((l) => l.includes('status=completed'))).toBe(true);
     expect(result.err).toBe('');
   });

@@ -123,6 +123,8 @@ export interface RunStartTaskOptions {
   hitl?: HITLManager;
   /** Interactive decision prompt (CLI default reads stdin; tests inject). */
   promptApproval?: (question: string) => Promise<boolean>;
+  /** 标签着色开关。默认 process.stdout.isTTY（管道/重定向自动纯文本）；测试可注入。 */
+  color?: boolean;
 }
 
 /** Read a y/n decision from stdin (CLI human-in-the-loop default). */
@@ -136,10 +138,34 @@ export function cliPromptApproval(question: string): Promise<boolean> {
   });
 }
 
-export function formatMessageLine(data: HarnessEventMap['message:added']): string {
+// CLI 输出降噪（KNOWN_ISSUES 用户反馈）：对话内容（user/assistant）用亮色
+// 标签与系统消息区分，工具/系统消息用灰色退后；着色只在 TTY 下启用，
+// 管道/重定向输出保持纯文本（脚本捕获不受转义码污染）。
+export const ANSI_GREEN = '\x1b[32m';
+export const ANSI_CYAN = '\x1b[36m';
+export const ANSI_GRAY = '\x1b[90m';
+export const ANSI_RESET = '\x1b[0m';
+const ROLE_COLORS: Record<string, string> = {
+  user: ANSI_GREEN,
+  assistant: ANSI_CYAN,
+  tool: ANSI_GRAY,
+  system: ANSI_GRAY,
+};
+
+/** 消息行格式化。返回 null 表示该消息无需打印（空内容且无工具标注——纯
+ *  工具调用的 assistant 消息不打空头，降噪）。`color` 开启时标签带 ANSI 色。 */
+export function formatMessageLine(
+  data: HarnessEventMap['message:added'],
+  color = false,
+): string | null {
   const toolName =
     typeof data.metadata?.toolName === 'string' ? `:${data.metadata.toolName}` : '';
-  return `[${data.role}${toolName}] ${data.content}`;
+  if (data.content === '' && toolName === '') {
+    return null;
+  }
+  const tag = `[${data.role}${toolName}]`;
+  const displayTag = color ? `${ROLE_COLORS[data.role] ?? ''}${tag}${ANSI_RESET}` : tag;
+  return `${displayTag} ${data.content}`;
 }
 
 /**
@@ -269,12 +295,23 @@ export async function executeApprovedActionImpl(
 export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> {
   const print = opts.print ?? console.log;
   const events = opts.events ?? createEventBus();
+  // 着色只对真实 TTY 生效（process.stdout.isTTY 在管道下为 undefined）。
+  const color = opts.color ?? process.stdout.isTTY === true;
 
   const onMessage = (data: HarnessEventMap['message:added']): void => {
-    print(formatMessageLine(data));
+    const line = formatMessageLine(data, color);
+    if (line !== null) {
+      print(line);
+    }
   };
   const onStatus = (data: HarnessEventMap['session:status']): void => {
-    print(`[session] ${data.status}`);
+    // 降噪：running/completed 无信息量（done 摘要已含终态）；paused/failed
+    // 等中间态保留（暂停指引、异常提示需要前置行）。
+    if (data.status === 'running' || data.status === 'completed') {
+      return;
+    }
+    const tag = color ? `${ANSI_GRAY}[session]${ANSI_RESET}` : '[session]';
+    print(`${tag} ${data.status}`);
   };
 
   events.on('message:added', onMessage);

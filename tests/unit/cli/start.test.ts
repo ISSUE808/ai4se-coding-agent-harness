@@ -30,6 +30,7 @@ import {
   createStartCommand,
   runStartTask,
   createLLMProvider,
+  formatMessageLine,
 } from '../../../src/cli/commands/start.js';
 import { createProgram } from '../../../src/cli/index.js';
 import { mockBackend, parseCaptured } from './helpers.js';
@@ -282,6 +283,35 @@ describe('runStartTask', () => {
     events.emit('session:status', { sessionId: 'post-run', status: 'completed' });
     expect(printed.length).toBe(before);
     expect(printed.some((l) => l.includes('leaked line'))).toBe(false);
+  });
+});
+
+describe('formatMessageLine', () => {
+  it('着色模式给标签加 ANSI 色（user 绿 / assistant 青 / tool 灰），正文不着色', () => {
+    expect(formatMessageLine({ id: 'm1', role: 'user', content: 'hello', timestamp: 't' }, true)).toBe(
+      '\x1b[32m[user]\x1b[0m hello',
+    );
+    expect(
+      formatMessageLine({ id: 'm2', role: 'assistant', content: 'hi', timestamp: 't' }, true),
+    ).toBe('\x1b[36m[assistant]\x1b[0m hi');
+    expect(
+      formatMessageLine(
+        { id: 'm3', role: 'tool', content: 'out', metadata: { toolName: 'run_shell' }, timestamp: 't' },
+        true,
+      ),
+    ).toBe('\x1b[90m[tool:run_shell]\x1b[0m out');
+  });
+
+  it('无色模式输出纯文本（默认；管道/重定向与测试注入场景）', () => {
+    expect(formatMessageLine({ id: 'm1', role: 'user', content: 'hello', timestamp: 't' })).toBe(
+      '[user] hello',
+    );
+  });
+
+  it('空内容消息（纯工具调用的 assistant 消息）返回 null——不打印空头', () => {
+    expect(
+      formatMessageLine({ id: 'm1', role: 'assistant', content: '', timestamp: 't' }),
+    ).toBeNull();
   });
 });
 
