@@ -133,6 +133,54 @@ describe('run_test tool', () => {
     expect(runTestTool.parameters).toBeDefined();
   });
 
+  // Real vitest v2.1.9 output captured on Windows (pipe): per-file lines and
+  // summary lines are interleaved with ANSI color codes — e.g.
+  // `\x1b[32m✓\x1b[39m path` and `\x1b[1m\x1b[32m48 passed\x1b[39m`. The parser
+  // must strip them before matching, otherwise EVERY real invocation resolves
+  // to `{passed:false, results:[]}` (KNOWN_ISSUES 9.6).
+  const ANSI_FILE_LINES =
+    '\x1b[32m✓\x1b[39m tests/unit/cli/prompt.test.ts \x1b[2m(\x1b[22m\x1b[2m12 tests\x1b[22m\x1b[2m)\x1b[22m\x1b[90m 11\x1b[2mms\x1b[22m\x1b[39m\n' +
+    '\x1b[32m✓\x1b[39m tests/unit/tools/run-test.test.ts \x1b[2m(\x1b[22m\x1b[2m8 tests\x1b[22m\x1b[2m)\x1b[22m\x1b[90m 31\x1b[2mms\x1b[22m\x1b[39m\n';
+  const ANSI_SUMMARY =
+    '\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[32m2 passed\x1b[39m\x1b[22m\x1b[90m (2)\x1b[39m\n' +
+    '\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m20 passed\x1b[39m\x1b[22m\x1b[90m (20)\x1b[39m\n';
+
+  it('parses per-file lines containing ANSI color codes (KNOWN_ISSUES 9.6)', async () => {
+    mockedExecSync.mockReturnValue(ANSI_FILE_LINES + '\n' + ANSI_SUMMARY);
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.passed).toBe(true);
+    expect(p.results).toHaveLength(2);
+    expect(p.results[0].name).toContain('prompt.test.ts');
+    expect(p.results[0].status).toBe('passed');
+  });
+
+  it('does not report failure when only the ANSI-colored summary matched (KNOWN_ISSUES 9.6)', async () => {
+    // No per-file lines at all (e.g. quiet reporter) — summary alone must
+    // yield passed:true, not the old fallback `{passed:false, results:[]}`.
+    mockedExecSync.mockReturnValue('\n' + ANSI_SUMMARY);
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.passed).toBe(true);
+    expect(p.results).toHaveLength(0);
+  });
+
+  it('includes the raw stdout in output.rawOutput when parsing fails (KNOWN_ISSUES 9.6)', async () => {
+    // A vitest version/locale change could defeat the parser — the agent must
+    // still see the original stdout instead of an empty `{passed:false}`.
+    const weirdOutput = 'garbled nonsense without any recognizable marker';
+    mockedExecSync.mockReturnValue(weirdOutput);
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.rawOutput).toContain(weirdOutput);
+  });
+
   it('fails clearly without triggering an npx download when vitest is not installed (KNOWN_ISSUES 3)', async () => {
     const bareRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-rt-bare-'));
     const bareContext: ToolContext = { workspaceRoot: bareRoot };
