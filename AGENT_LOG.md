@@ -790,3 +790,20 @@
   - **真实会话记录是最好的 bug 报告**：用户一句"回复了三次"背后，`/api/sessions/:id` 的完整消息序列直接展示了根因链条（含 feedback 的 failureCategory/strategy 元数据）——先拉数据再猜
   - **启发式判定的关键特征是"位置"不是"存在"**：`[` 在 Markdown 里无处不在（链接、引用代码），只有以 `{`/`[` **开头**的文本才可能是内联 JSON——同理可推广到其他"contains → startsWith"型启发式
   - **升级暂停与 warn 暂停的恢复路径不同**：warn 暂停有 pending command（stdin y/n 交互）；升级暂停无（只能 WebUI 恢复或重跑）——指引文案必须对应真实可用的恢复路径，评审逐条核实了 `--web` 恢复语义后才算数
+
+## 2026-08-04 14:30 KNOWN_ISSUES 2 修复：read_file BOM 驱动的编码探测
+
+- **触发技能**：`test-driven-development`（红 7 → 绿）、`requesting-code-review`（派发评审 ade4b3e5 之前轮）——本轮评审 a5b1c472 发现 2 Important + 3 Minor，全部修复
+- **Subagent**：评审 a5b1c472；方案调研 claude-code-guide a4f627c5（Claude Code 官方编码处理对比）
+- **Prompt 要点**：用户三个连续设计问题——①"不能支持所有编码吗"（无 BOM 时编码不可判定，GB18030 会把 UTF-8 解成乱码且无报错，实验验证）②"Claude Code 是怎么做的"（调研结论：官方零编码探测，裸 UTF-8 宽容解码 + 静默 U+FFFD，BOM 都不处理；社区镜像曾有 BOM→fatal→ICU 同构实现后被 revert，证明路线可行）③"不支持的编码会让 LLM 用 Bash 兜底吗"（设计决策：错误提示显式给 `file`/`iconv` 兜底路径——把 Claude Code 里"模型自己悟"的策略变成 harness 写明的确定性指引）
+- **产出**：
+  - 修复（`src/tools/read-file.ts`）：`decodeFileBuffer`——UTF-8 BOM 剥 3 字节；UTF-16LE/BE 剥 BOM + `TextDecoder(..., {fatal:true})`（奇数长度、孤立代理 → per-file error）；UTF-32LE/BE 手写解码（Node TextDecoder 无 utf-32 标签，%4 长度校验 + 码点范围校验，代理区显式拒绝——`String.fromCodePoint` 对 U+D800–DFFF 不抛错）；无 BOM → UTF-8 fatal 严格校验，失败返回带 `file`/`iconv` 指引的明确错误
+  - 测试: 红 7 → 绿 + 评审补 6 = 21/21（UTF-16LE/BE、UTF-32LE/BE、UTF-8 BOM 剥离、GBK 无 BOM → iconv 提示、batch per-file 容错、奇数长度 ×2、UTF-32 截断/非法码点/孤立代理、BOM-only）
+  - 评审修复：Important×2（UTF-16 奇数长度静默丢字节——`Buffer.toString('utf16le')` 不报错；UTF-32 尾部 1-3 字节静默丢弃——统一 fatal + 长度校验）、Minor×3（代理区码点显式检查、UTF-32 错误消息带 `file` 指引、补边界测试）
+  - 全量：主套件 573/573（+13）、client 199/199、双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **"支持所有编码"在信息论上不可能**：无 BOM 时同一字节序列在 UTF-8/GBK/Shift-JIS 下都合法（实测：GB18030 把 UTF-8"你好"解成"浣犲ソ"无报错）——启发式猜编码会把乱码合法化，比乱码更糟。正确策略："BOM 全覆盖 + 无 BOM 明确失败"
+  - **对标 Claude Code 反而印证了我们的设计**：官方零编码探测（静默 U+FFFD 不可逆、BOM 不处理、Edit 还破坏 BOM），社区同构实现（BOM→fatal→ICU）被 revert——"正确或明确失败优先"是我们比业界标杆更优的取舍，也是"机制由代码而非提示词/模型判断"命题的实例
+  - **解码器边界要实测，不能凭 API 直觉**：`Buffer.from(str, 'utf16be')` 抛 ERR_UNKNOWN_ENCODING（Buffer 编码表没有 utf16be）；`String.fromCodePoint(0xD800)` 不抛错（代理区静默通过）；`TextDecoder` fatal 模式才是统一严格路径——评审的 2 个 Important 全是"静默数据损坏"路径，都是 Node API 的隐蔽行为
+  - **测试构造要自校验**：UTF-32 截断测试第一次红在测试自身（'好' 只有 4 字节，subarray(0,6) 截不出 6 字节）——测试 fixture 的字节数要先心算验证
