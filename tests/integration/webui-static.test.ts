@@ -101,8 +101,10 @@ describe('WebUI 生产模式静态服务', () => {
 describe('start --web 生产模式接线', () => {
   it('resolveStaticDir：显式参数 > CODEHARNESS_WEBUI_DIR env > 项目默认路径', () => {
     const root = 'C:/fake/project';
+    // expected 必须 resolve（实现内部 path.resolve）：POSIX CI 上 'C:/fake/project' 是相对路径，
+    // 直接 path.join 会与实现结果（cwd 前缀）不相等导致必红
     expect(resolveStaticDir(undefined, {}, root)).toBe(
-      path.join('C:/fake/project', 'src', 'webui', 'client', 'dist'),
+      path.resolve('C:/fake/project', 'src', 'webui', 'client', 'dist'),
     );
     expect(resolveStaticDir(undefined, { CODEHARNESS_WEBUI_DIR: 'D:/packed/webui' }, root)).toBe(
       path.resolve('D:/packed/webui'),
@@ -110,6 +112,13 @@ describe('start --web 生产模式接线', () => {
     expect(resolveStaticDir('E:/explicit', { CODEHARNESS_WEBUI_DIR: 'D:/packed/webui' }, root)).toBe(
       path.resolve('E:/explicit'),
     );
+  });
+
+  it('resolveStaticDir 缺省 projectRoot → import.meta.url 上溯默认路径（src/webui/client/dist 结尾，不依赖 cwd）', () => {
+    const dir = resolveStaticDir(undefined, {});
+    // env 显式传 {} 避免开发环境 CODEHARNESS_WEBUI_DIR 干扰默认分支；
+    // endsWith(path.join(...)) 在 win/posix 分隔符下均稳定
+    expect(dir.endsWith(path.join('src', 'webui', 'client', 'dist'))).toBe(true);
   });
 
   it('createWebHarness 用 staticDir 提供静态页面（GET / 返回 fixture index.html）', async () => {

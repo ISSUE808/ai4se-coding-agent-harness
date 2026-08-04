@@ -15,17 +15,26 @@ export function resolveBackendDir(options: {
   return options.projectRoot;
 }
 
-/** 后端 spawn 命令：生产模式（静态目录由 env 指向打包布局 webui/）。 */
-export function buildBackendCommand(backendDir: string): {
+/**
+ * 后端 spawn 命令：生产模式（静态目录由 env 指向打包布局 webui/）。
+ * nodePath 指定运行后端的可执行文件：Electron 打包环境传 process.execPath
+ * （electron.exe + ELECTRON_RUN_AS_NODE=1 以纯 Node 模式运行——keytar.node
+ * 等原生模块按 electron ABI 重编译，系统 Node ABI 不匹配无法加载）；
+ * 默认 'node' 保留开发/测试语义。
+ */
+export function buildBackendCommand(backendDir: string, nodePath = 'node'): {
   cmd: string;
   args: string[];
   env: Record<string, string>;
   cwd: string;
 } {
   return {
-    cmd: 'node',
+    cmd: nodePath,
     args: [path.join(backendDir, 'dist', 'cli', 'index.js'), 'start', '--web'],
-    env: { CODEHARNESS_WEBUI_DIR: path.join(backendDir, 'webui') },
+    env: {
+      CODEHARNESS_WEBUI_DIR: path.join(backendDir, 'webui'),
+      ELECTRON_RUN_AS_NODE: '1',
+    },
     cwd: backendDir,
   };
 }
@@ -74,6 +83,8 @@ export interface DesktopLifecycleDeps {
   createWindow: (url: string) => void;
   /** spawn 后端进程，返回 pid 或 null（spawn 失败）。 */
   spawnBackend: (cmd: { cmd: string; args: string[]; env: Record<string, string>; cwd: string }) => number | null;
+  /** 后端运行时可执行文件（buildBackendCommand 的 nodePath）：打包后传 process.execPath（ELECTRON_RUN_AS_NODE）。 */
+  nodePath?: string;
   /** 端口探测（默认 waitForPort）；测试注入序列。 */
   waitForPort?: (url: string, timeoutMs: number) => Promise<void>;
   /** 杀进程树（默认 killProcessTree）。 */
@@ -115,11 +126,13 @@ export async function runDesktopLifecycle(deps: DesktopLifecycleDeps): Promise<D
 
   if (!ready) {
     const backendDir = resolveBackendDir({ resourcesPath: deps.resourcesPath, projectRoot: deps.projectRoot });
-    const cmd = buildBackendCommand(backendDir);
+    const cmd = buildBackendCommand(backendDir, deps.nodePath);
     backendPid = deps.spawnBackend(cmd);
     if (backendPid === null) {
-      // spawn 失败（如 node 不存在）：立即报错，不空等 30s 轮询
+      // spawn 失败（如 node 不存在）：立即报错，不空等 30s 轮询。
+      // 错误路径不开窗 → window-all-closed 不触发，close() 不可达：主动触发退出回调防僵尸应用
       deps.showError('后端进程启动失败（spawn 返回 null）');
+      deps.onExit?.();
       return { close: () => { /* 后端从未成功 spawn，无进程可杀 */ } };
     }
     try {
@@ -127,14 +140,16 @@ export async function runDesktopLifecycle(deps: DesktopLifecycleDeps): Promise<D
       ready = true;
     } catch (err) {
       deps.showError(`后端启动失败：${err instanceof Error ? err.message : String(err)}`);
-      return {
-        close: () => {
-          // 进程已 spawn 但未就绪：仍需清理（没开窗时 window-all-closed 不触发）
-          if (backendPid !== null) {
-            kill(backendPid);
-          }
-        },
+      // 错误路径不开窗 → window-all-closed 不触发，close() 不可达：
+      // 复用 close 清理（杀已 spawn 的后端进程），再触发退出回调防僵尸应用/孤儿后端
+      const cleanup = () => {
+        if (backendPid !== null) {
+          kill(backendPid);
+        }
       };
+      cleanup();
+      deps.onExit?.();
+      return { close: cleanup };
     }
   }
 

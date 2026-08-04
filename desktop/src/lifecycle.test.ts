@@ -19,7 +19,14 @@ describe('buildBackendCommand', () => {
     expect(cmd.cmd).toBe('node');
     expect(cmd.args).toEqual([path.join('C:/app/backend', 'dist', 'cli', 'index.js'), 'start', '--web']);
     expect(cmd.env.CODEHARNESS_WEBUI_DIR).toBe(path.join('C:/app/backend', 'webui'));
+    expect(cmd.env.ELECTRON_RUN_AS_NODE).toBe('1');
     expect(cmd.cwd).toBe('C:/app/backend');
+  });
+  it('nodePath 参数化：Electron 打包传 electron.exe（ELECTRON_RUN_AS_NODE 纯 Node 模式，ABI 匹配）', () => {
+    const cmd = buildBackendCommand('C:/app/backend', 'C:/x/electron.exe');
+    expect(cmd.cmd).toBe('C:/x/electron.exe');
+    expect(cmd.args).toEqual([path.join('C:/app/backend', 'dist', 'cli', 'index.js'), 'start', '--web']);
+    expect(cmd.env.ELECTRON_RUN_AS_NODE).toBe('1');
   });
 });
 
@@ -108,6 +115,8 @@ describe('runDesktopLifecycle', () => {
     expect(createWindow).not.toHaveBeenCalled();
     expect(showError).toHaveBeenCalled();
     expect(showError.mock.calls[0][0]).toContain('timeout');
+    // 错误路径不开窗 → window-all-closed 不触发：必须主动触发退出回调，防僵尸应用
+    expect(deps.onExit).toHaveBeenCalled();
   });
 
   it('spawnBackend 返回 null（spawn 失败）→ 立即 showError，不再空等轮询', async () => {
@@ -131,6 +140,8 @@ describe('runDesktopLifecycle', () => {
     expect(showError).toHaveBeenCalled();
     expect(createWindow).not.toHaveBeenCalled();
     expect(waitForPort).toHaveBeenCalledTimes(1); // 仅探测一次，spawn 失败后不轮询
+    // 错误路径不开窗 → window-all-closed 不触发：必须主动触发退出回调，防僵尸应用
+    expect(deps.onExit).toHaveBeenCalled();
   });
 
   it('后端启动失败（超时）→ close() 仍会杀掉已 spawn 的后端进程', async () => {

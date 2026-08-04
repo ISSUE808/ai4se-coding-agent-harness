@@ -27,6 +27,11 @@ app.whenReady().then(async () => {
   const lifecycle = await runDesktopLifecycle({
     projectRoot,
     resourcesPath: app.isPackaged ? process.resourcesPath : undefined,
+    // 打包内没有系统 Node：electron.exe 以 ELECTRON_RUN_AS_NODE=1 纯 Node 模式
+    // 运行后端（keytar.node 等原生模块按 electron ABI 重编译，ABI 天然匹配）
+    nodePath: process.execPath,
+    // 启动失败等错误路径不开窗 → window-all-closed 不触发：onExit 兜底退出
+    onExit: () => app.quit(),
     createWindow,
     spawnBackend: (cmd) => {
       const { spawn } = require('node:child_process') as typeof import('node:child_process');
