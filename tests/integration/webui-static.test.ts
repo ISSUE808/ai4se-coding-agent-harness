@@ -13,8 +13,6 @@ import { DEFAULT_CONFIG } from '../../src/config/schema.js';
 import type { CredentialBackend } from '../../src/types.js';
 import { createWebHarness } from '../../src/cli/commands/start.js';
 import { resolveStaticDir } from '../../src/cli/commands/start.js';
-import { MockProvider } from '../../src/llm/mock-provider.js';
-import type { LLMProvider } from '../../src/types.js';
 
 /** 内存凭据后端（同 webui-api.test.ts 模式）——零 keychain、零网络。 */
 function memoryBackend(): CredentialBackend {

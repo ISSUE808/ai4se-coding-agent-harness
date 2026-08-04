@@ -165,6 +165,8 @@ interface Fixture {
 
 const openHarnesses: WebHarness[] = [];
 const openSockets: WebSocket[] = [];
+/** Fixture 静态目录（CR 2026-08-04：makeHarness 自给自足，不依赖真实构建产物）。 */
+const fixtureStaticDirs: string[] = [];
 
 afterEach(async () => {
   for (const ws of openSockets) {
@@ -175,6 +177,10 @@ afterEach(async () => {
     await harness.close();
   }
   openHarnesses.length = 0;
+  for (const dir of fixtureStaticDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  fixtureStaticDirs.length = 0;
 });
 
 async function makeHarness(
@@ -188,11 +194,18 @@ async function makeHarness(
   const events = createEventBus();
   const credentialStore = new CredentialStore([memoryBackend()]);
   const sessionStore = new InMemorySessionStore(config.agent.maxRounds, config.agent.workspaceRoot);
+  // CR 2026-08-04: fixture 静态目录（同 webui-static.test.ts 模式）。createWebHarness
+  // 生产接线会校验 staticDir 存在（缺失抛错）——测试必须自给自足，不能依赖真实
+  // client/dist 构建产物（CI 的 unit-test job 不构建 client，dist 被 gitignore）。
+  const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-fullloop-dist-'));
+  fs.writeFileSync(path.join(staticDir, 'index.html'), '<!doctype html><title>CodeHarness</title>');
+  fixtureStaticDirs.push(staticDir);
   const harness = await createWebHarness({
     config,
     events,
     credentialStore,
     sessionStore,
+    staticDir,
     buildAgentLoop: async (opts) => {
       onBuild?.(opts);
       return buildLoopFactory(provider, validators, guardOverrides)(opts);
