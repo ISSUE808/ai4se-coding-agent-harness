@@ -1046,3 +1046,20 @@
 - **教训**：
   - **文档里的产物路径要与实现同步**：Task 5 改 `directories.output: build` 时 Task 6 的 README 代码块还写 desktop/dist——跨任务的一致性靠 implementer 报告顾虑 + 主 agent 修正；写计划时文档与配置的路径引用应一次写对
   - **文档任务也走完整评审**：README 的命令核验（npm link bin 指向、vite 代理配置）由评审独立复核——文档错误同样误导用户
+
+
+## 2026-08-05 01:40 分发功能最终全分支评审 + 修复波
+
+- **触发技能**：`subagent-driven-development`（最终评审 ada79550 + fix afdce2a1 + 复评审 abab43d8）
+- **Subagent**：评审 ada79550（opus）+ fix afdce2a1（sonnet）+ 复评审 abab43d8（sonnet）
+- **Prompt 要点**：最终评审用最强大模型（opus）；评审包覆盖全部 21 commits（spec/plan/6 tasks）；triage ledger 全部 deferred minors；修复波 ONE fix subagent 带完整 findings
+- **产出**：
+  - Commit: `51b9996`（4 findings）
+  - 修复内容：A（Critical）免 Node 硬约束——`ELECTRON_RUN_AS_NODE: '1'` + `process.execPath`（electron.exe 纯 Node 模式运行后端，零下载、ABI 与 electron-builder rebuild 的原生模块天然匹配）；B（Critical）webui-static POSIX 断言 path.resolve；C（Important）错误路径 cleanup + onExit → app.quit() 防僵尸应用；#4 resolveStaticDir 默认分支测试
+  - 测试: desktop 12/12、webui-static 8/8、双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **「免 Node 打包」从 Electron 主进程 spawn 'node' 是个隐蔽的反模式**：Electron 自带 Node 运行时，但 process.execPath 指向 GUI 版 electron.exe——正确用法是 `ELECTRON_RUN_AS_NODE=1`（官方机制）把它当纯 Node 用。评审给的方向是"下载 node.exe 打进包"（+30MB），我否决后给出 run-as-node 方案：零下载 + ABI 天然匹配（electron-builder 的 @electron/rebuild 已按 electron ABI 重编译 keytar 等原生模块）——**熟悉框架的内置机制比外部下载更优**
+  - **最终评审能抓到单 task 评审漏掉的跨层缺陷**：A（免 Node）是 spec §5.4 的判定标准，Task 3-5 的单 task 评审都看了局部正确（cmd:'node' 在开发机测试全绿）——最终评审以"用户验收标准"为透镜才暴露。验收标准（"对方机器无需装 Node"）必须贯穿每个 task 的实现验证
+  - **Windows 与 POSIX 的路径断言差异直到 CI 视角才暴露**：`path.join('C:/fake/project', ...)` 在 Windows 上恰好等于 resolve 结果——本地全绿掩盖了 CI 必红。测试期望值用 path.resolve 构造（与实现同一表达式）是稳定写法
+  - **错误路径必须显式退出**：无窗口场景 window-all-closed 不触发——showError 后不 onExit 就是僵尸应用。错误分支的退出接线（cleanup → onExit → app.quit）与正常路径同样重要
