@@ -268,13 +268,17 @@ describe('Dashboard', () => {
     expect(createSessionMock).not.toHaveBeenCalled();
   });
 
-  it('deletes a completed session from the row actions and refreshes the list (KNOWN_ISSUES 9)', async () => {
+  it('deletes a completed session after a two-step confirm and refreshes the list (KNOWN_ISSUES 9 + acceptance feedback)', async () => {
     fetchSessionsMock.mockResolvedValue([COMPLETED]);
     deleteSessionMock.mockResolvedValue({ removed: true });
     renderDashboard();
 
     const user = userEvent.setup();
     await user.click(await screen.findByLabelText('删除 s_5a91cd'));
+    // First click only arms the confirm — the API is untouched.
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('确认删除 s_5a91cd')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('确认删除 s_5a91cd'));
     await waitFor(() => expect(deleteSessionMock).toHaveBeenCalledWith('s_5a91cd'));
     expect(fetchSessionsMock).toHaveBeenCalledTimes(2);
   });
@@ -293,6 +297,7 @@ describe('Dashboard', () => {
 
     const user = userEvent.setup();
     await user.click(await screen.findByLabelText('删除 s_5a91cd'));
+    await user.click(screen.getByLabelText('确认删除 s_5a91cd'));
     expect(await screen.findByRole('alert')).toHaveTextContent('删除会话失败');
     // The list stays — no refresh was triggered by the failed delete.
     expect(fetchSessionsMock).toHaveBeenCalledTimes(1);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ChevronRight, FolderOpen, Loader2, Pause, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import designTokens from '../design-tokens';
@@ -54,6 +54,18 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<Filter>('all');
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
+  // Acceptance feedback: deletion is destructive — first click arms the row's
+  // confirm state, a second click actually deletes (auto-disarms after 3s).
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (confirmTimerRef.current !== null) {
+        clearTimeout(confirmTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     setPhase('loading');
@@ -471,11 +483,34 @@ export default function Dashboard() {
                             </button>
                             <button
                               type="button"
-                              title={s.status === 'running' ? '运行中会话需先停止再删除' : '删除会话'}
-                              aria-label={`删除 ${s.id}`}
+                              title={
+                                s.status === 'running'
+                                  ? '运行中会话需先停止再删除'
+                                  : confirmDeleteId === s.id
+                                    ? '再次点击确认删除'
+                                    : '删除会话'
+                              }
+                              aria-label={confirmDeleteId === s.id ? `确认删除 ${s.id}` : `删除 ${s.id}`}
                               disabled={rowBusy !== null || s.status === 'running'}
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (confirmDeleteId !== s.id) {
+                                  // First click: arm the two-step confirm.
+                                  if (confirmTimerRef.current !== null) {
+                                    clearTimeout(confirmTimerRef.current);
+                                  }
+                                  setConfirmDeleteId(s.id);
+                                  confirmTimerRef.current = setTimeout(
+                                    () => setConfirmDeleteId(null),
+                                    3000,
+                                  );
+                                  return;
+                                }
+                                // Second click: actually delete.
+                                if (confirmTimerRef.current !== null) {
+                                  clearTimeout(confirmTimerRef.current);
+                                }
+                                setConfirmDeleteId(null);
                                 void removeRow(s);
                               }}
                               style={{
@@ -483,9 +518,25 @@ export default function Dashboard() {
                                 color: s.status === 'running'
                                   ? designTokens.colors.textFaint
                                   : designTokens.colors.danger,
+                                background:
+                                  confirmDeleteId === s.id && s.status !== 'running'
+                                    ? designTokens.colors.dangerSoft
+                                    : undefined,
                               }}
                             >
-                              <Trash2 size={13} />
+                              {confirmDeleteId === s.id && s.status !== 'running' ? (
+                                <span
+                                  style={{
+                                    fontSize: designTokens.typography.codeSize.sm,
+                                    fontWeight: 600,
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  确认删除
+                                </span>
+                              ) : (
+                                <Trash2 size={13} />
+                              )}
                             </button>
                           </span>
                         </td>

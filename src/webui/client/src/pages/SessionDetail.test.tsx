@@ -723,6 +723,35 @@ describe('SessionDetail', () => {
     expect(screen.getByText('1.5K')).toBeInTheDocument();
   });
 
+  it('re-fetches the session when it completes via WS so billed token usage appears without refresh (acceptance feedback)', async () => {
+    const completed = {
+      ...SESSION,
+      status: 'completed' as const,
+      tokenUsage: { prompt: 1200, completion: 340, cached: 900 },
+    };
+    fetchSessionMock.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(completed);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+    // First snapshot: running session, no tokenUsage yet — no breakdown.
+    expect(fetchSessionMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('输入')).not.toBeInTheDocument();
+
+    // The WS flips the session to completed — no page refresh.
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    // The detail re-fetches the REST snapshot once, and the breakdown renders.
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('输入')).toBeInTheDocument();
+    expect(screen.getByText('1.2K')).toBeInTheDocument();
+    expect(screen.getByText('340')).toBeInTheDocument();
+    // Exactly one refetch — no refresh loop.
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+  });
+
   it('renders live terminal frames under the 终端 tab (KNOWN_ISSUES 9)', async () => {
     renderDetail();
     const user = userEvent.setup();

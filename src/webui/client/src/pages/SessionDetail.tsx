@@ -90,13 +90,22 @@ export default function SessionDetail() {
 
   const displayStatus: SessionStatus | null = events.status ?? session?.status ?? null;
 
+  // Status of the session the CURRENT snapshot reflects (set inside load).
+  // Acceptance feedback: the WS streams status/rounds but NOT tokenUsage (it
+  // is finalized only when the loop ends), so the REST snapshot — which does
+  // carry it — is re-fetched exactly once when the session flips to completed.
+  // Without this, the Token 使用 breakdown appears only after a manual refresh.
+  const snapshotStatusRef = useRef<SessionStatus | null>(null);
+
   const load = useCallback(async () => {
     if (sessionId === '') {
       return;
     }
     setPhase('loading');
     try {
-      setSession(await fetchSession(sessionId));
+      const fresh = await fetchSession(sessionId);
+      snapshotStatusRef.current = fresh.status;
+      setSession(fresh);
       setPhase('ready');
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : '无法加载会话');
@@ -107,6 +116,23 @@ export default function SessionDetail() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Refetch exactly once per completion: the guard is set BEFORE the await so
+  // a second effect run during the in-flight fetch cannot double-fire, and
+  // re-armed when the session leaves completed (a resumed session may complete
+  // again). A history view already completed at mount never refetches.
+  useEffect(() => {
+    const s = events.status;
+    if (s === null || session === null) {
+      return;
+    }
+    if (s === 'completed' && snapshotStatusRef.current !== 'completed') {
+      snapshotStatusRef.current = 'completed';
+      void load();
+    } else if (s !== 'completed' && snapshotStatusRef.current === 'completed') {
+      snapshotStatusRef.current = null;
+    }
+  }, [events.status, session, load]);
 
   // Model + guardrail chips come from the (masked) backend config.
   useEffect(() => {
