@@ -151,15 +151,16 @@ node dist/cli/index.js start "读取 test-verify/u16.txt 并用 write_file 复�
 **② Token 明细**
 | | |
 |---|---|
-| 操作 | 同一会话完成后，看上下文栏「Token 使用」 |
-| 预期 | 显示 输入/输出/缓存命中/总计（真实计费数字）+ 上下文估计（两者并存，数值可不同——计费 vs 估算语义） |
+| 操作 | 同一会话完成后，看上下文栏「Token 使用」——**无需刷新页面**（验收修复：会话转 completed/failed 时自动重取快照） |
+| 预期 | 显示 输入/输出/缓存命中/总计（真实计费数字）+ 上下文估计（两者并存，数值可不同——计费 vs 估算语义）。完成态转瞬间出现，不必 F5 |
+| 失败定位 | `src/webui/client/src/pages/SessionDetail.test.tsx`（重取恰好一次 + 挂载终态不取 + 失败保活） |
 
-**③ 单会话删除**
+**③ 单会话删除（两步确认）**
 | | |
 |---|---|
-| 操作 | Dashboard 会话列表 → 悬停行尾 → 点垃圾桶 |
-| 预期 | ① completed/paused 会话：直接删除、列表刷新消失 ② **running 会话：按钮禁用**（悬停提示"运行中会话需先停止再删除"）③ 打开一个被删会话的旧链接 → 显示"会话不存在" |
-| 失败定位 | `src/webui/client/src/pages/Dashboard.test.tsx`（删除 + running 禁用 + 失败提示）+ `tests/integration/webui-api.test.ts`（DELETE 端点 4 测试） |
+| 操作 | Dashboard 会话列表 → 悬停行尾 → 点垃圾桶 → **按钮变「确认删除」，再点一次** |
+| 预期 | ① **第一次点击不发请求**、按钮变「确认删除」（红底，3 秒后自动还原）② 再点 → 删除、列表刷新消失 ③ **running 会话：按钮禁用**（悬停提示"运行中会话需先停止再删除"）④ 打开一个被删会话的旧链接 → 显示"会话不存在" |
+| 失败定位 | `src/webui/client/src/pages/Dashboard.test.tsx`（两步 + running 禁用 + 失败提示 + 单行 armed）+ `tests/integration/webui-api.test.ts`（DELETE 端点 4 测试） |
 
 **④ 清空会话（批量）**
 | | |
