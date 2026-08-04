@@ -483,7 +483,7 @@ describe('killProcessTree', () => {
   it('win32 用 taskkill /T /F 杀进程树', () => {
     const spawnFn = vi.fn();
     killProcessTree(1234, spawnFn);
-    expect(spawnFn).toHaveBeenCalledWith('taskkill', ['/pid', '1234', '/T', '/F']);
+    expect(spawnFn).toHaveBeenCalledWith('taskkill', ['/pid', '1234', '/T', '/F'], { stdio: 'ignore' });
   });
 });
 ```
