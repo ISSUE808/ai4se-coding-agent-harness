@@ -117,12 +117,24 @@ export async function runDesktopLifecycle(deps: DesktopLifecycleDeps): Promise<D
     const backendDir = resolveBackendDir({ resourcesPath: deps.resourcesPath, projectRoot: deps.projectRoot });
     const cmd = buildBackendCommand(backendDir);
     backendPid = deps.spawnBackend(cmd);
+    if (backendPid === null) {
+      // spawn 失败（如 node 不存在）：立即报错，不空等 30s 轮询
+      deps.showError('后端进程启动失败（spawn 返回 null）');
+      return { close: () => { /* 后端从未成功 spawn，无进程可杀 */ } };
+    }
     try {
       await waitFor(`${BACKEND_URL}/api/sessions/`, START_TIMEOUT_MS);
       ready = true;
     } catch (err) {
       deps.showError(`后端启动失败：${err instanceof Error ? err.message : String(err)}`);
-      return { close: () => { /* 后端从未就绪，无进程可杀 */ } };
+      return {
+        close: () => {
+          // 进程已 spawn 但未就绪：仍需清理（没开窗时 window-all-closed 不触发）
+          if (backendPid !== null) {
+            kill(backendPid);
+          }
+        },
+      };
     }
   }
 

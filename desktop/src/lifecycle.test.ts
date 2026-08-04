@@ -109,4 +109,48 @@ describe('runDesktopLifecycle', () => {
     expect(showError).toHaveBeenCalled();
     expect(showError.mock.calls[0][0]).toContain('timeout');
   });
+
+  it('spawnBackend 返回 null（spawn 失败）→ 立即 showError，不再空等轮询', async () => {
+    const createWindow = vi.fn();
+    const spawnBackend = vi.fn(() => null);
+    // 探测失败后若实现继续轮询，此 mock 会 resolve（会被误判为就绪并开窗）
+    const waitForPort = vi.fn()
+      .mockRejectedValueOnce(new Error('not ready'))
+      .mockResolvedValueOnce(undefined);
+    const showError = vi.fn();
+    const deps = {
+      projectRoot: 'C:/dev/codeharness',
+      createWindow,
+      spawnBackend,
+      waitForPort,
+      killProcessTree: vi.fn(),
+      showError,
+      onExit: vi.fn(),
+    };
+    await runDesktopLifecycle(deps);
+    expect(showError).toHaveBeenCalled();
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(waitForPort).toHaveBeenCalledTimes(1); // 仅探测一次，spawn 失败后不轮询
+  });
+
+  it('后端启动失败（超时）→ close() 仍会杀掉已 spawn 的后端进程', async () => {
+    const createWindow = vi.fn();
+    const spawnBackend = vi.fn(() => 999);
+    const waitForPort = vi.fn().mockRejectedValue(new Error('timeout'));
+    const killProcessTree = vi.fn();
+    const deps = {
+      projectRoot: 'C:/dev/codeharness',
+      createWindow,
+      spawnBackend,
+      waitForPort,
+      killProcessTree,
+      showError: vi.fn(),
+      onExit: vi.fn(),
+    };
+    const lifecycle = await runDesktopLifecycle(deps);
+    expect(createWindow).not.toHaveBeenCalled();
+    expect(deps.showError).toHaveBeenCalled();
+    lifecycle.close();
+    expect(killProcessTree).toHaveBeenCalledWith(999);
+  });
 });
