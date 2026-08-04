@@ -980,3 +980,20 @@
   - **生产默认分支是最容易被测试绕开的路径**：所有测试都传显式 projectRoot/staticDir，唯二生产路径（默认解析、npm link 任意目录运行）零自动化——评审 Minor 2 提醒加默认分支断言，防 off-by-one 类回归
   - **CI 与开发机环境差异是测试确定性的一部分**：本机有真实 client/dist 掩盖了 full-loop 对构建产物的隐式依赖——CI 不构建 client 时红。测试 fixture 必须自给自足（评审透镜）
   - **3000 端口旧实例（PID 202428）**：非本会话进程，不杀；`start --web` 手动验证前需用户决策
+
+
+## 2026-08-04 22:20 分发功能 Task 3：desktop 脚手架 + 主进程纯函数
+
+- **触发技能**：`subagent-driven-development`（implementer a1319734）、`test-driven-development`、`requesting-code-review`（评审 a0f73d0d）
+- **Subagent**：implementer a1319734（haiku）
+- **Prompt 要点**：需求源 = task-3-brief.md；明确 .gitignore 只加批准两条；killProcessTree 延迟 require 保持 brief 原样；desktop 独立 package 的 npm install 在 desktop/ 内执行
+- **产出**：
+  - Commit: `cbe0a40`
+  - 涉及文件: desktop/（package.json + lockfile、tsconfig.json、vitest.config.ts、src/lifecycle.ts + lifecycle.test.ts）、根 .gitignore（+2 条）
+  - 测试: 6/6（desktop vitest，先红后绿）、tsc 干净
+- **人工干预**：无（评审 9 Minor 全 defer，含 electron-builder 输出目录与 tsc dist 冲突的 plan 级提醒——Task 5 处理）
+- **教训**：
+  - **独立 package 的 vitest 会被根配置"向上捡走"**：根 vitest.config include 是 `tests/**/*.test.ts`，desktop 的 `npx vitest run` 找不到 src 测试——需要自己的 vitest.config.ts（include: ['src/**/*.test.ts']）。写计划时没预料到配置继承
+  - **Windows 路径分隔符是断言层面最容易踩的差异**：测试期望字面量 `C:/app/resources/backend` 在 path.join 输出反斜杠时必败——期望值用 path.join 构造（implementer 实测修正，语义不变）
+  - **electron 二进制下载在国内网络需镜像**：官方源 TLS 证书错误 → --use-system-ca 卡死 → npmmirror 镜像成功。环境处理，无代码影响；Task 4 单测不依赖该二进制
+  - **tsc 的 include:["src"] 会把 *.test.ts 编入 dist**（无 exclude）——打包时会携带测试产物，Task 4/5 需加 exclude
