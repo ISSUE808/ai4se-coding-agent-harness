@@ -947,3 +947,19 @@
   - **"readline 已回显"是 TTY 假设**：node readline 不回显管道输入——回声过滤的正确判据是 `input.isTTY`（echoInput），评审 Minor 2 抓的正是这个边界；脚本捕获（`echo ... | codeharness | tee log`）场景 [user] 行是唯一指令可见性
   - **着色只在 TTY 启用是硬规则**：管道/重定向输出带 ANSI 码会污染脚本捕获——`isTTY === true` 两处（输出着色、输入回显）分开检测，语义不同不能共用一个标志
   - **REPL 测试等待在途信号不能依赖被降噪的行**：Ctrl+C 测试原来 waitFor `[user] long task` 打印——降噪后改用 provider calls 计数（gate 前递增），等待信号与输出解耦
+
+
+## 2026-08-04 21:00 分发功能 Task 1：server 生产模式静态服务（staticDir + SPA fallback）
+
+- **触发技能**：`subagent-driven-development`（派发 implementer a1561fb2）、`test-driven-development`（红→绿）、`requesting-code-review`（评审 a476d121）
+- **Subagent**：implementer a1561fb2（haiku，机械转写——计划含完整代码）
+- **Prompt 要点**：需求源 = task-1-brief.md（计划提取，含逐字测试与实现代码）；纪律 = /test-driven-development 红→绿→重构 + CLAUDE.md commit 格式（subagent 标注）。implementer 顾虑：环境无显式 agent ID，用会话 ID 前 8 位 `2e36ca82` 标注（主 agent 确认可接受）；未提交的 repl.ts 变更与任务无关未纳入 commit
+- **产出**：
+  - Commit: `006d448`
+  - 涉及文件: src/webui/server.ts（WebUIServerDeps.staticDir + 静态挂载 + SPA fallback）、tests/integration/webui-static.test.ts（新建 4 测试）
+  - 测试: 4/4 新（先红后绿），全量 627/627（623 + 4），双 tsc 干净
+- **人工干预**：① 补提交遗漏的解构统一（`715aad1`，repl.ts echoInput——b58f1e5 文档 commit 时漏 add，属上一批次遗留）② pre-flight 修计划 killProcessTree 断言参数不一致（`009ee49`）
+- **教训**：
+  - **sdd 派发前必须确认工作区干净**：implementer 报告提示 repl.ts 未提交变更——是我上次解构统一后文档 commit 只 add 了 3 个文档文件，代码改动漏掉了。评审包 BASE 记录在派发前，遗漏变更会混入 diff 或污染后续 commit
+  - **express 路由顺序即安全边界**：/api 404 兜底 → static → SPA fallback → error handler——`/api/*` 被兜底终结，即使 build 产物含 api/ 目录也不受影响
+  - **app.get('*') 只匹配 GET/HEAD**：方法检查 `req.method !== 'GET'` 对 GET 永不生效（brief 原样代码，评审确认行为符合需求）
