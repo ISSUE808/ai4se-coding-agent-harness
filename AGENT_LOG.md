@@ -1014,3 +1014,20 @@
   - **失败分支的 close 空操作 = 孤儿进程**：spawn 成功但超时未就绪时没有窗口（window-all-closed 不触发）→ 进程无清理路径。评审 Minor 提醒后修复：超时分支 close 也 kill
   - **spawn 返回 null 应立即报错**：原实现空等 30s 才说"未就绪"，真相是 spawn 失败——错误语义要匹配失败点
   - **brief 里的 mock 队列顺序 bug**：test 2 首行 `.mockResolvedValueOnce(undefined)` 让首次探测 resolve → 不 spawn → 断言失败。implementer 删掉后行为才符合注释意图——写测试的 mock 序列时先心算队列消费顺序
+
+
+## 2026-08-05 00:50 分发功能 Task 5：electron-builder 打包 + TESTING 验收（人工协作）
+
+- **触发技能**：`subagent-driven-development`（派发被用户中断 → 转人工协作）、`requesting-code-review`（评审 af36b0c3 + 复评审 a1ca7a66）
+- **Subagent**：无（用户手动实现 + 主 agent 修复）
+- **Prompt 要点**：Task 5 派发时用户中断——safety classifier 持续不可用影响 subagent 的 Bash 操作，用户主动提出手动执行命令。分工：文件编辑（主 agent Edit/Write）+ 命令执行（用户终端）
+- **产出**：
+  - Commits: `b28dc04`（build 字段 + prepare-resources.mjs + TESTING B11，用户实现）、`cb1975c`（textFaint token，用户独立改动）、`918ac18`（CR 修复：backend-pack gitignore + npm prune）、`chore`（死导入清理）
+  - 产物: win-unpacked + NSIS Setup exe + portable exe（82MB），backend/node_modules 73MB→20MB（prune）
+- **人工干预**：用户在中断期间手动完成：package.json build 字段（含 directories.output）、prepare-resources.mjs、TESTING B11、design-tokens textFaint；打包遇到 winCodeSign 符号链接权限错误（Windows 无管理员）→ `signAndEditExecutable: false` 跳过（无签名/无自定义图标零损失）；主 agent 修 Important-1/2
+- **教训**：
+  - **Windows 无管理员时 7za 解压符号链接必败**（`Cannot create symbolic link: 客户端没有所需的特权`）——electron-builder 的 winCodeSign 包里含 darwin symlink，无管理员/开发者模式时解压失败重试 4 次才放弃。`win.signAndEditExecutable: false` 直接跳过该环节（无自定义图标/签名时零损失）——比让用户开管理员/开发者模式更稳，且对分发机器无影响
+  - **PowerShell 不认 `VAR=value cmd` 前缀**——用户第一次跑报 CommandNotFoundException；`$env:VAR="..."; cmd` 才对。给用户命令要按他们的 shell（PowerShell 5.1）写
+  - **分发体积的隐藏膨胀在 devDependencies**：electron-builder 对 extraResources 不剪枝，原样复制 73MB node_modules（typescript 23MB + vitest 3MB 进用户分发包）。npm prune --omit=dev 在组装目录跑（需先复制 package.json+lockfile）→ 73→20MB
+  - **extraResources 布局验证点**：win-unpacked/resources 下应只有 app.asar + backend/（无 node_modules 顶层混入）；keytar.node 在 build/Release/ 里 = 原生模块正确出 asar
+  - **分类器不可用的协作模式**：文件编辑（Edit/Write）不需要分类器——主 agent 可以继续改代码；只有 Bash 命令需要用户终端。分工清晰即可推进
