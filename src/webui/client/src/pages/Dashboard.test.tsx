@@ -285,4 +285,16 @@ describe('Dashboard', () => {
     await screen.findByLabelText('删除 s_8f3a21');
     expect(screen.getByLabelText('删除 s_8f3a21')).toBeDisabled();
   });
+
+  it('shows an inline error when row deletion fails (reviewer Important)', async () => {
+    fetchSessionsMock.mockResolvedValue([COMPLETED]);
+    deleteSessionMock.mockRejectedValue(new Error('Cannot delete a running session'));
+    renderDashboard();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText('删除 s_5a91cd'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('删除会话失败');
+    // The list stays — no refresh was triggered by the failed delete.
+    expect(fetchSessionsMock).toHaveBeenCalledTimes(1);
+  });
 });

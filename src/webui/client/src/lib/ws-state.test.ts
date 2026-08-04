@@ -200,3 +200,24 @@ describe('reduceTerminalEvent — KNOWN_ISSUES 9 终端 tab', () => {
     expect(lines[0].text).toContain('5/1000');
   });
 });
+
+describe('reduceTerminalEvent — reviewer fixes', () => {
+  it('keeps line ids unique past the 500-line cap (reviewer Important)', () => {
+    let lines: TerminalLine[] = [];
+    for (let i = 0; i < 505; i += 1) {
+      lines = reduceTerminalEvent(lines, frame('round:changed', { currentRound: i, maxRounds: 1000 }));
+    }
+    expect(lines).toHaveLength(500);
+    const ids = new Set(lines.map((l) => l.id));
+    expect(ids.size).toBe(500);
+  });
+
+  it('stamps lines with the injected now timestamp (reviewer Important)', () => {
+    const next = reduceTerminalEvent(
+      [],
+      frame('tool:executed', { toolName: 'read_file', duration_ms: 1, success: true }),
+      '2026-08-04T08:00:00.000Z',
+    );
+    expect(next[0].timestamp).toBe('2026-08-04T08:00:00.000Z');
+  });
+});

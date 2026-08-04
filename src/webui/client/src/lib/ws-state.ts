@@ -138,27 +138,32 @@ const TERMINAL_MAX = 500;
  * Reduce WS frames into terminal lines for the session's live "terminal" tab.
  * Kept separate from `reduceSessionEvent` — the message feed and the
  * operational log have different consumers and retention policies.
+ * `now` (ISO) is injected by the caller: the mapped frame types carry NO
+ * timestamp on the wire (HarnessEventMap has none), so the receive-time stamp
+ * is the only true "when it happened" the client has (reviewer Important).
  */
 export function reduceTerminalEvent(
   lines: TerminalLine[],
   event: SessionEventFrame,
+  now = '',
 ): TerminalLine[] {
   if (!isRecord(event.data)) {
     return lines;
   }
-  const line = terminalLine(event.type, event.data);
+  const line = terminalLine(event.type, event.data, now);
   if (line === null) {
     return lines;
   }
-  // Sequential index as the stable key — WS frames carry no id of their own
-  // and multiple frames can share a timestamp.
-  line.id = String(lines.length);
+  // Monotonic key: WS frames carry no id, and `lines.length` alone would
+  // repeat once the 500-line cap kicks in (duplicate React keys). Pure max+1
+  // keeps the reducer deterministic (reviewer Important).
+  line.id = lines.length === 0 ? '0' : String(Math.max(...lines.map((l) => Number(l.id))) + 1);
   const next = [...lines, line];
   return next.length > TERMINAL_MAX ? next.slice(next.length - TERMINAL_MAX) : next;
 }
 
-function terminalLine(type: string, data: Record<string, unknown>): TerminalLine | null {
-  const stamp = typeof data.timestamp === 'string' ? data.timestamp : '';
+function terminalLine(type: string, data: Record<string, unknown>, now = ''): TerminalLine | null {
+  const stamp = now !== '' ? now : typeof data.timestamp === 'string' ? data.timestamp : '';
   switch (type) {
     case 'tool:executed': {
       const toolName = typeof data.toolName === 'string' ? data.toolName : '?';

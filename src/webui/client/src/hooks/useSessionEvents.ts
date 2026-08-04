@@ -121,7 +121,9 @@ export function useSessionEvents(
           modelFrameSeenRef.current = true;
         }
         setState((prev) => reduceSessionEvent(prev, frame));
-        setTerminal((prev) => reduceTerminalEvent(prev, frame));
+        // The wire frames carry no timestamp — stamp at receive time so the
+        // terminal lines show a real "when" (reviewer Important).
+        setTerminal((prev) => reduceTerminalEvent(prev, frame, new Date().toISOString()));
       },
       onConnectionChange: (connected) => {
         if (!disposed) {

@@ -1756,7 +1756,15 @@ function DangerZone() {
         <div style={{ fontSize: designTokens.typography.fontSize.sm, color: designTokens.colors.textMuted, marginTop: 2 }}>
           永久删除全部会话历史与日志，不可恢复。运行中的会话会被保留。
           {message !== null && (
-            <span style={{ display: 'block', marginTop: 4, color: designTokens.colors.danger }}>
+            <span
+              style={{
+                display: 'block',
+                marginTop: 4,
+                color: message.startsWith('已')
+                  ? designTokens.colors.success
+                  : designTokens.colors.danger,
+              }}
+            >
               {message}
             </span>
           )}

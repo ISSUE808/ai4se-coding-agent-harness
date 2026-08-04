@@ -53,6 +53,7 @@ export default function Dashboard() {
   const [modalOpen, setModalOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
   const [rowBusy, setRowBusy] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setPhase('loading');
@@ -85,15 +86,22 @@ export default function Dashboard() {
   }
 
   /** Delete a session row (KNOWN_ISSUES 9). Running sessions are disabled —
-   *  the backend refuses them with 409; stop them first. */
+   *  the backend refuses them with 409; stop them first. A stale list (the
+   *  session resumed in another tab) or a network failure surfaces inline
+   *  instead of an unhandled rejection (reviewer Important). */
   async function removeRow(s: SessionSummary): Promise<void> {
     if (rowBusy !== null) {
       return;
     }
     setRowBusy(s.id);
+    setRowError(null);
     try {
       await deleteSession(s.id);
       await load();
+    } catch (err) {
+      setRowError(
+        `删除会话失败：${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setRowBusy(null);
     }
@@ -283,6 +291,26 @@ export default function Dashboard() {
               </div>
 
               {visible.length > 0 ? (
+                <>
+                {rowError !== null && (
+                  <div
+                    role="alert"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: designTokens.spacing[2],
+                      padding: `${designTokens.spacing[2]} ${designTokens.spacing[3]}`,
+                      marginBottom: designTokens.spacing[3],
+                      borderRadius: designTokens.radius.md,
+                      background: designTokens.colors.dangerSoft,
+                      color: designTokens.colors.danger,
+                      fontSize: designTokens.typography.fontSize.sm,
+                    }}
+                  >
+                    <AlertTriangle size={13} />
+                    {rowError}
+                  </div>
+                )}
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
@@ -465,6 +493,7 @@ export default function Dashboard() {
                     ))}
                   </tbody>
                 </table>
+                </>
               ) : (
                 <EmptyState
                   title={sessions.length === 0 ? '还没有会话' : '当前筛选下没有会话'}
