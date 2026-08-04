@@ -172,13 +172,13 @@ async function runInstruction(opts: {
   echoInput: boolean;
 }): Promise<Session> {
   const { config, events, hitl } = opts;
-  const { color } = opts;
+  const { color, echoInput } = opts;
 
   const onMessage = (data: HarnessEventMap['message:added']): void => {
     // 降噪：交互 TTY 下 readline 已在 prompt 行回显输入——[user] 回声与
     // 回显完全重复，不再打印（CR Minor 2：管道输入无回显时 echoInput=false，
     // 保留 [user] 行，脚本捕获可见；start 单次模式始终保留 [user] 行）。
-    if (data.role === 'user' && opts.echoInput) {
+    if (data.role === 'user' && echoInput) {
       return;
     }
     const line = formatMessageLine(data, color);
