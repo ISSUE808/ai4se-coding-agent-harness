@@ -93,43 +93,66 @@ export default function SessionDetail() {
   // Status of the session the CURRENT snapshot reflects (set inside load).
   // Acceptance feedback: the WS streams status/rounds but NOT tokenUsage (it
   // is finalized only when the loop ends), so the REST snapshot — which does
-  // carry it — is re-fetched exactly once when the session flips to completed.
-  // Without this, the Token 使用 breakdown appears only after a manual refresh.
+  // carry it — is re-fetched exactly once when the session reaches a terminal
+  // status (completed/failed). Without this, the Token 使用 breakdown appears
+  // only after a manual refresh.
   const snapshotStatusRef = useRef<SessionStatus | null>(null);
+  // Fetch generation (same pattern as treeRequestRef): a refresh superseded
+  // while in flight (e.g. the session resumed mid-fetch) must not overwrite
+  // the guard with a stale result (reviewer Minor).
+  const fetchGenRef = useRef(0);
 
-  const load = useCallback(async () => {
-    if (sessionId === '') {
-      return;
-    }
-    setPhase('loading');
-    try {
-      const fresh = await fetchSession(sessionId);
-      snapshotStatusRef.current = fresh.status;
-      setSession(fresh);
-      setPhase('ready');
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : '无法加载会话');
-      setPhase('error');
-    }
-  }, [sessionId]);
+  const load = useCallback(
+    async (mode: 'initial' | 'refresh' = 'initial') => {
+      if (sessionId === '') {
+        return;
+      }
+      const gen = ++fetchGenRef.current;
+      if (mode === 'initial') {
+        setPhase('loading');
+      }
+      try {
+        const fresh = await fetchSession(sessionId);
+        if (gen !== fetchGenRef.current) {
+          return; // superseded by a newer fetch — drop the stale result
+        }
+        snapshotStatusRef.current = fresh.status;
+        setSession(fresh);
+        if (mode === 'initial') {
+          setPhase('ready');
+        }
+      } catch (err) {
+        if (mode === 'initial') {
+          setLoadError(err instanceof Error ? err.message : '无法加载会话');
+          setPhase('error');
+        }
+        // Refresh failure keeps the stale-but-alive cockpit (reviewer
+        // Important): no full-screen error from a background refetch.
+      }
+    },
+    [sessionId],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  // Refetch exactly once per completion: the guard is set BEFORE the await so
-  // a second effect run during the in-flight fetch cannot double-fire, and
-  // re-armed when the session leaves completed (a resumed session may complete
-  // again). A history view already completed at mount never refetches.
+  // Refetch exactly once per terminal status: the guard is set BEFORE the
+  // await so a second effect run during the in-flight fetch cannot double-fire,
+  // and re-armed when the session leaves the terminal state (a resumed session
+  // may complete again). A history view already terminal at mount never
+  // refetches. `failed` is the same class — its final snapshot also carries
+  // the accumulated tokenUsage (reviewer Minor).
   useEffect(() => {
     const s = events.status;
     if (s === null || session === null) {
       return;
     }
-    if (s === 'completed' && snapshotStatusRef.current !== 'completed') {
-      snapshotStatusRef.current = 'completed';
-      void load();
-    } else if (s !== 'completed' && snapshotStatusRef.current === 'completed') {
+    const terminal = s === 'completed' || s === 'failed';
+    if (terminal && snapshotStatusRef.current !== s) {
+      snapshotStatusRef.current = s;
+      void load('refresh');
+    } else if (!terminal && snapshotStatusRef.current !== null) {
       snapshotStatusRef.current = null;
     }
   }, [events.status, session, load]);

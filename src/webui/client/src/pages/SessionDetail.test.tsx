@@ -752,6 +752,113 @@ describe('SessionDetail', () => {
     await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
   });
 
+  it('keeps the cockpit alive when the completion refetch fails (reviewer Important)', async () => {
+    fetchSessionMock
+      .mockResolvedValueOnce(SESSION)
+      .mockRejectedValueOnce(new Error('network down'));
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+    // No full-screen error, no spinner tear-down — the stale-but-alive view stays.
+    expect(screen.queryByText('无法加载会话')).not.toBeInTheDocument();
+    expect(screen.getByText('把认证模块改成刷新令牌')).toBeInTheDocument();
+    // And no refresh loop after the failure.
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+  });
+
+  it('refetches when the session fails via WS too (its final snapshot carries tokenUsage)', async () => {
+    const failed = {
+      ...SESSION,
+      status: 'failed' as const,
+      tokenUsage: { prompt: 100, completion: 20 },
+    };
+    fetchSessionMock.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(failed);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+    expect(screen.queryByText('输入')).not.toBeInTheDocument();
+
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'failed' },
+      }),
+    );
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('100')).toBeInTheDocument();
+    expect(screen.getByText('20')).toBeInTheDocument();
+  });
+
+  it('does not refetch a session already completed in the initial snapshot', async () => {
+    const completed = {
+      ...SESSION,
+      status: 'completed' as const,
+      tokenUsage: { prompt: 1200, completion: 340, cached: 900 },
+    };
+    renderDetail(completed);
+    await screen.findByText('输入');
+    expect(fetchSessionMock).toHaveBeenCalledTimes(1);
+
+    // A redundant completed frame (e.g. re-broadcast) must not refetch either.
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    expect(fetchSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-arms the completion refetch after a resume (completed → running → completed)', async () => {
+    const done1 = {
+      ...SESSION,
+      status: 'completed' as const,
+      tokenUsage: { prompt: 500, completion: 100 },
+    };
+    const done2 = {
+      ...SESSION,
+      status: 'completed' as const,
+      tokenUsage: { prompt: 600, completion: 110 },
+    };
+    fetchSessionMock
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValueOnce(done1)
+      .mockResolvedValueOnce(done2);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('500')).toBeInTheDocument();
+
+    // Resumed (e.g. from another tab/CLI) then completed again — must refetch.
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'running' },
+      }),
+    );
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText('600')).toBeInTheDocument();
+  });
+
   it('renders live terminal frames under the 终端 tab (KNOWN_ISSUES 9)', async () => {
     renderDetail();
     const user = userEvent.setup();

@@ -515,6 +515,17 @@ export default function Dashboard() {
                               }}
                               style={{
                                 ...iconBtnStyle,
+                                // The 确认删除 label is wider than the fixed
+                                // 28px icon button — expand it while armed
+                                // (reviewer Minor).
+                                width:
+                                  confirmDeleteId === s.id && s.status !== 'running'
+                                    ? 'auto'
+                                    : undefined,
+                                padding:
+                                  confirmDeleteId === s.id && s.status !== 'running'
+                                    ? '0 8px'
+                                    : undefined,
                                 color: s.status === 'running'
                                   ? designTokens.colors.textFaint
                                   : designTokens.colors.danger,

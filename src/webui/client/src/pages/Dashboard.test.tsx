@@ -290,6 +290,22 @@ describe('Dashboard', () => {
     expect(screen.getByLabelText('删除 s_8f3a21')).toBeDisabled();
   });
 
+  it('arms only the clicked row — arming another row disarms the first (acceptance feedback)', async () => {
+    const second = { ...COMPLETED, id: 's_2nd', task: '第二个会话' };
+    fetchSessionsMock.mockResolvedValue([COMPLETED, second]);
+    renderDashboard();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText('删除 s_5a91cd'));
+    expect(screen.getByLabelText('确认删除 s_5a91cd')).toBeInTheDocument();
+    expect(screen.queryByLabelText('确认删除 s_2nd')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('删除 s_2nd')).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('删除 s_2nd'));
+    expect(screen.queryByLabelText('确认删除 s_5a91cd')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('确认删除 s_2nd')).toBeInTheDocument();
+  });
+
   it('shows an inline error when row deletion fails (reviewer Important)', async () => {
     fetchSessionsMock.mockResolvedValue([COMPLETED]);
     deleteSessionMock.mockRejectedValue(new Error('Cannot delete a running session'));
