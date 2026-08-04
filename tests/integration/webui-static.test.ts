@@ -11,6 +11,10 @@ import { CredentialStore } from '../../src/credentials/store.js';
 import { HITLManager } from '../../src/guardrail/hitl-manager.js';
 import { DEFAULT_CONFIG } from '../../src/config/schema.js';
 import type { CredentialBackend } from '../../src/types.js';
+import { createWebHarness } from '../../src/cli/commands/start.js';
+import { resolveStaticDir } from '../../src/cli/commands/start.js';
+import { MockProvider } from '../../src/llm/mock-provider.js';
+import type { LLMProvider } from '../../src/types.js';
 
 /** 内存凭据后端（同 webui-api.test.ts 模式）——零 keychain、零网络。 */
 function memoryBackend(): CredentialBackend {
@@ -93,5 +97,60 @@ describe('WebUI 生产模式静态服务', () => {
     const res = await request(web.app).get('/');
     // API-only：无静态服务 → express 默认 404（无 HTML）
     expect(res.status).toBe(404);
+  });
+});
+
+describe('start --web 生产模式接线', () => {
+  it('resolveStaticDir：显式参数 > CODEHARNESS_WEBUI_DIR env > 项目默认路径', () => {
+    const root = 'C:/fake/project';
+    expect(resolveStaticDir(undefined, {}, root)).toBe(
+      path.join('C:/fake/project', 'src', 'webui', 'client', 'dist'),
+    );
+    expect(resolveStaticDir(undefined, { CODEHARNESS_WEBUI_DIR: 'D:/packed/webui' }, root)).toBe(
+      path.resolve('D:/packed/webui'),
+    );
+    expect(resolveStaticDir('E:/explicit', { CODEHARNESS_WEBUI_DIR: 'D:/packed/webui' }, root)).toBe(
+      path.resolve('E:/explicit'),
+    );
+  });
+
+  it('createWebHarness 用 staticDir 提供静态页面（GET / 返回 fixture index.html）', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-harness-dist-'));
+    fs.writeFileSync(path.join(root, 'index.html'), '<!doctype html><title>Harness WebUI</title>');
+    const events = createEventBus();
+    // 端口用 0（临时端口，同 full-loop.test.ts 的 makeHarness 模式）——本测试
+    // 只经 supertest 驱动 express app，不依赖真实端口；生产默认 3000 可能被
+    // 真实运行的 `codeharness start --web` 实例占用，固定端口会 EADDRINUSE。
+    const harness = await createWebHarness({
+      config: { ...DEFAULT_CONFIG, webui: { ...DEFAULT_CONFIG.webui, port: 0 } },
+      events,
+      credentialStore: new CredentialStore(memoryBackend()),
+      // 本测试不创建会话——buildAgentLoop 不会被调用，抛错即可满足类型。
+      buildAgentLoop: async () => { throw new Error('unused'); },
+      staticDir: root,
+    });
+    try {
+      const res = await request(harness.web.app).get('/');
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('Harness WebUI');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('staticDir 不存在 → createWebHarness 拒绝，错误含构建指引', async () => {
+    const missing = path.join(os.tmpdir(), `ch-missing-${Date.now()}`);
+    const events = createEventBus();
+    await expect(
+      createWebHarness({
+        config: DEFAULT_CONFIG,
+        events,
+        credentialStore: new CredentialStore(memoryBackend()),
+        buildAgentLoop: async () => {
+          throw new Error('unused');
+        },
+        staticDir: missing,
+      }),
+    ).rejects.toThrow(/请先构建前端/);
   });
 });

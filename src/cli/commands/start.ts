@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import type { Config, LLMProvider, Message, Session, ToolResult, Validator } from '../../types.js';
 import { AgentLoop } from '../../core/main-loop.js';
@@ -521,6 +522,12 @@ export interface CreateWebHarnessOptions {
   sessionStore?: SessionStore;
   /** Config persistence for PUT /api/config (defaults to the project file). */
   persistConfig?: (config: Config) => Promise<void>;
+  /**
+   * 生产模式静态目录（vite build 产物）。解析顺序：显式参数 →
+   * CODEHARNESS_WEBUI_DIR 环境变量 → 项目根 src/webui/client/dist。
+   * 不依赖 process.cwd()（全局 codeharness 命令在任意目录运行）。
+   */
+  staticDir?: string;
 }
 
 export interface WebHarness {
@@ -528,6 +535,27 @@ export interface WebHarness {
   /** Actual listening port (0 = ephemeral). */
   port: number;
   close(): Promise<void>;
+}
+
+/**
+ * 生产模式静态目录解析（spec 2026-08-04 第 1 层）：显式参数优先，其次
+ * CODEHARNESS_WEBUI_DIR（Electron 打包布局用它指向 resources/backend/webui），
+ * 缺省为项目根 src/webui/client/dist。projectRoot 由调用方解析（默认
+ * import.meta.url 上溯），绝不依赖 process.cwd()。
+ */
+export function resolveStaticDir(
+  staticDir: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..'),
+): string {
+  if (staticDir !== undefined && staticDir !== '') {
+    return path.resolve(staticDir);
+  }
+  const envDir = env.CODEHARNESS_WEBUI_DIR;
+  if (envDir !== undefined && envDir !== '') {
+    return path.resolve(envDir);
+  }
+  return path.resolve(projectRoot, 'src', 'webui', 'client', 'dist');
 }
 
 export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<WebHarness> {
@@ -661,6 +689,15 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     approved: { tool: string; params: Record<string, unknown>; id?: string },
   ): Promise<void> => executeApprovedActionImpl(session, approved, events);
 
+  // 生产模式（spec 2026-08-04）：静态目录缺失 → 启动失败并给构建指引，
+  // 避免用户打开 3000 看到裸 404 困惑。
+  const staticDir = resolveStaticDir(opts.staticDir);
+  if (!fs.existsSync(staticDir)) {
+    throw new Error(
+      `WebUI 前端构建产物不存在：${staticDir}。请先构建前端：npm run build && cd src/webui/client && npm run build`,
+    );
+  }
+
   const web = createWebUIServer({
     sessionStore,
     events,
@@ -668,6 +705,7 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     config,
     hitl,
     persistConfig,
+    staticDir,
     // Real-test fix: switching the provider/endpoint makes every running
     // loop's provider stale — restart them all (same abort+restart path as a
     // model switch). Other config fields (maxRounds etc.) do not restart.
