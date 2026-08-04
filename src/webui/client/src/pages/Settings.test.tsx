@@ -211,6 +211,9 @@ describe('Settings', () => {
     });
     render(<Settings />);
     const editor = await screen.findByLabelText('配置编辑器');
+    // 等 load() 完成（编辑器被 fetchConfig 内容填充）——否则保存可能读到被
+    // 异步 load 覆盖的完整 config（CI 竞态：参数变成 maxRounds:3 的完整 config）
+    await waitFor(() => expect(editor.value).toContain('deepseek'));
 
     fireEvent.change(editor, { target: { value: '{"agent":{"maxRounds":10}}' } });
     await user.click(screen.getByRole('button', { name: '保存配置' }));
