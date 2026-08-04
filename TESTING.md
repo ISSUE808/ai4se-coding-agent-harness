@@ -178,6 +178,15 @@ node dist/cli/index.js start "读取 test-verify/u16.txt 并用 write_file 复�
 | 修复前行为 | REPL 每条输入重复显示两遍（prompt 回显 + `[user]` 行）；纯工具轮次打空 `[assistant]` 头；`[session] running`/`completed` 状态行刷屏；所有消息同色无区分 |
 | 失败定位 | `tests/unit/cli/repl.test.ts`（降噪 / echoInput 管道保留 / 着色 e2e）+ `tests/unit/cli/start.test.ts`（formatMessageLine 单元 ×5） |
 
+### B11. 桌面应用 + CLI 全局命令（分发）
+
+| | |
+|---|---|
+| 操作 1 | 终端 `codeharness --version`（任意目录）；`codeharness start --web` → 浏览器 http://localhost:3000 完整 WebUI |
+| 操作 2 | 双击打包产物（portable exe）→ 独立窗口自动加载 WebUI（无需先启动任何东西） |
+| 预期 | ① `codeharness` 全局可用（版本号输出）② 浏览器 3000 完整 WebUI（静态页面 + API 并存）③ 桌面窗口 1-2 秒内加载 WebUI ④ 关闭窗口 → 任务管理器无残留 node 进程 ⑤ 已开着后端时再启动桌面应用 → 直接连上不重复 spawn ⑥ 人为占用 3000（起一个假服务）→ 桌面应用显示错误对话框而非白屏 |
+| 失败定位 | `tests/integration/webui-static.test.ts`（静态服务）+ `desktop/src/lifecycle.test.ts`（生命周期纯函数） |
+
 ---
 
 ## C. 快速核对表（验收完打勾）
@@ -193,6 +202,7 @@ node dist/cli/index.js start "读取 test-verify/u16.txt 并用 write_file 复�
 - [ ] B8：CLI 升级暂停输出恢复指引
 - [ ] B9：终端带时间戳、Token 四项明细、单删（running 禁用）、清空两步确认
 - [ ] B10：REPL 无 `[user]` 重复行、无空头、无 running/completed 状态行；TTY 下对话标签着色、管道纯文本
+- [ ] B11：`codeharness` 全局可用；portable exe 双击 1-2 秒内自载 WebUI；关窗无残留 node 进程；后端已开时直连不重复 spawn；3000 被占用时错误对话框而非白屏
 
 ## 失败报告格式
 

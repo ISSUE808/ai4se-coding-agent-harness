@@ -7,7 +7,20 @@
     "build": "tsc",
     "test": "vitest run",
     "dev": "tsc && electron .",
-    "dist": "npm run build && electron-builder"
+    "dist": "node prepare-resources.mjs && npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.codeharness.desktop",
+    "productName": "CodeHarness",
+    "directories": {
+      "output": "build"
+    },
+    "files": ["dist/**"],
+    "extraResources": [
+      { "from": "backend-pack", "to": "backend" }
+    ],
+    "win": { "target": ["nsis", "portable"], "signAndEditExecutable": false },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
   },
   "devDependencies": {
     "electron": "^33.0.0",
