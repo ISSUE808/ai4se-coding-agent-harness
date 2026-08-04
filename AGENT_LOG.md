@@ -928,3 +928,22 @@
   - **终态重取的防双发守卫必须在 await 之前置位**，否则 effect 二次运行（fetch 期间状态未变）会重复请求——评审关注点，测试用 waitFor(callTimes(2)) 钉死
   - **后台刷新不得复用会翻转 phase 的加载函数**：评审 Important 抓的是"修复本身引入了新失败模式"（重取失败 → 全屏错误页），模式复用要检查副作用边界
   - **测试基建的隐藏坑**：`renderDetail()` 内部会重新 `mockResolvedValue(SESSION)`，手动先设的 mock 被覆盖——fixture 必须走 renderDetail 参数传
+
+
+## 2026-08-04 20:25 KNOWN_ISSUES 验收反馈：CLI 输出降噪 + 对话视觉区分
+
+- **触发技能**：`test-driven-development`（红 → 绿）、`requesting-code-review`（评审 a630ea49 + 复核 ace7b1f1）
+- **Subagent**：评审 a630ea49（两阶段初审）+ ace7b1f1（修复后复核）
+- **Prompt 要点**：用户在 REPL 真实对话中发现输出杂乱：① `codeharness> 运行命令：…`（readline 回显）之后 `[user] 运行命令：…` 又重复一遍 ② 除 user/assistant 外还有 `[session] running`、`[assistant]`（空头）、`[tool:run_shell]`、`[session] completed` 等行。用户问"只显示用户消息和 AI 回复是否更好？"——方案评审后定「智能降噪 + 视觉区分」（不删 tool 行：删了运行中全静默；[user] 只在 REPL 滤：start 单跑模式无回显必须保留）。
+- **产出**：
+  - `formatMessageLine(data, color?)` 返回 `string | null`：空 content 且无 toolName → null（不打空头）；TTY 下标签着色（user 绿 / assistant 青 / tool·system·feedback·[session] 灰，正文不着色防多行污染）
+  - REPL onMessage 滤 `role==='user'`（echoInput 门控：`io.echoInput ?? true`，createTerminalReplIO 按 `input.isTTY === true` 设置——管道输入保留 [user] 行）；onStatus 只打非 running/completed 状态（paused/failed 保留，暂停指引前导行）
+  - start 单跑模式：只滤状态行 + 空头（[user] 保留）
+  - 测试 +6（起始 618 → 623）；全量主套件 623/623、双 tsc 干净
+  - Commits：`009ee38`（降噪+着色）、`2d8cd4e`（评审修复 4 Minor）
+- **人工干预**：评审 5 Minor 修 4（feedback 灰 / echoInput 管道可见 / 着色 e2e / 单跑空头断言），Minor 4（ANSI 常量归属）按评审认可保留；复核新 Minor ×2：解构统一（顺手做掉）、管道续接覆盖（共用同一过滤分支风险极低，跳过）
+- **教训**：
+  - **"是否只显示 X 和 Y"的直觉需求要拆开分析**：用户觉得乱的三类行里，只有两类是真噪音（重复回声、空头、终态状态行），tool 行是高价值过程可见性——全删会引入"运行中全静默"的新问题。逐行问"删掉后失去什么"再决定
+  - **"readline 已回显"是 TTY 假设**：node readline 不回显管道输入——回声过滤的正确判据是 `input.isTTY`（echoInput），评审 Minor 2 抓的正是这个边界；脚本捕获（`echo ... | codeharness | tee log`）场景 [user] 行是唯一指令可见性
+  - **着色只在 TTY 启用是硬规则**：管道/重定向输出带 ANSI 码会污染脚本捕获——`isTTY === true` 两处（输出着色、输入回显）分开检测，语义不同不能共用一个标志
+  - **REPL 测试等待在途信号不能依赖被降噪的行**：Ctrl+C 测试原来 waitFor `[user] long task` 打印——降噪后改用 provider calls 计数（gate 前递增），等待信号与输出解耦

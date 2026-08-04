@@ -169,6 +169,15 @@ node dist/cli/index.js start "读取 test-verify/u16.txt 并用 write_file 复�
 | 预期 | ① 第一次点击**不发请求**（必须两次确认）② 确认后非运行中会话全删，显示「已清空 N 个会话」③ 若有运行中会话：显示「N 个运行中会话已保留」且它们仍在列表 |
 | 失败定位 | `src/webui/client/src/pages/Settings.test.tsx`（两步确认 + kept-running 提示） |
 
+### B10. CLI 输出降噪 + 视觉区分
+
+| | |
+|---|---|
+| 操作 | 终端 C 跑 `node dist/cli/index.js`（无参数进 REPL），输入一个任务（如 `运行命令：git log --oneline -3`） |
+| 预期 | ① **prompt 行回显后不再出现 `[user] 运行命令：…` 重复行** ② 运行中**无** `[session] running` 行、完成后**无** `[session] completed` 行（done 摘要 `[session] done: … status=… rounds=…` 保留，含终态）③ 纯工具调用轮次**无空 `[assistant]` 头** ④ `[tool:…]` 执行行保留（过程可见性）⑤ **TTY 下标签着色**：`[user]` 绿、`[assistant]` 青、`[tool:…]`/`[session]` 灰——对话内容一眼区别于系统消息 ⑥ 管道模式（`echo "任务" \| node dist/cli/index.js`）输出**纯文本无 ANSI 码**，且 `[user]` 行**保留**（脚本捕获不丢指令） |
+| 修复前行为 | REPL 每条输入重复显示两遍（prompt 回显 + `[user]` 行）；纯工具轮次打空 `[assistant]` 头；`[session] running`/`completed` 状态行刷屏；所有消息同色无区分 |
+| 失败定位 | `tests/unit/cli/repl.test.ts`（降噪 / echoInput 管道保留 / 着色 e2e）+ `tests/unit/cli/start.test.ts`（formatMessageLine 单元 ×5） |
+
 ---
 
 ## C. 快速核对表（验收完打勾）
@@ -183,6 +192,7 @@ node dist/cli/index.js start "读取 test-verify/u16.txt 并用 write_file 复�
 - [ ] B7：symlink 逃逸读取触发批准而非直读
 - [ ] B8：CLI 升级暂停输出恢复指引
 - [ ] B9：终端带时间戳、Token 四项明细、单删（running 禁用）、清空两步确认
+- [ ] B10：REPL 无 `[user]` 重复行、无空头、无 running/completed 状态行；TTY 下对话标签着色、管道纯文本
 
 ## 失败报告格式
 
