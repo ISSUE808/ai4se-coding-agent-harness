@@ -20,7 +20,7 @@ import type { Validator } from '../../src/types.js';
 import type { LLMResponse } from '../../src/types.js';
 import { PatternGuard } from '../../src/guardrail/pattern-guard.js';
 import { ScopeFence } from '../../src/guardrail/scope-fence.js';
-import { HITLManager } from '../../src/guardrail/hitl-manager.js';
+import { HITLManager, HITLState } from '../../src/guardrail/hitl-manager.js';
 import { SessionMemory } from '../../src/memory/session-memory.js';
 import { createEventBus } from '../../src/events.js';
 import { DEFAULT_CONFIG } from '../../src/config/schema.js';
@@ -36,7 +36,7 @@ function createMockExec() {
 function createTestHarness(
   mockResponses: LLMResponse[],
   workspaceRoot: string,
-  overrides?: { maxRounds?: number },
+  overrides?: { maxRounds?: number; hitl?: HITLManager },
 ) {
   const mockLLM = new MockProvider(mockResponses);
   const tools = new ToolRegistry();
@@ -57,7 +57,9 @@ function createTestHarness(
   const guard = {
     patternGuard: new PatternGuard(),
     scopeFence: new ScopeFence(),
-    hitl: new HITLManager(),
+    // KNOWN_ISSUES 6: the WebUI harness shares ONE HITLManager across loops —
+    // injectable so a multi-session concurrency test can mirror production.
+    hitl: overrides?.hitl ?? new HITLManager(),
   };
 
   const mockExec = createMockExec();
@@ -291,6 +293,57 @@ describe('Agent Main Loop (integration)', () => {
     // Initial user message (store-appended) + assistant + tool + assistant.
     expect(stored.messages.length).toBeGreaterThan(1);
     expect(stored.messages.some((m) => m.role === 'tool' && m.metadata?.toolName === 'read_file')).toBe(true);
+  });
+
+  it('共享 HITLManager 的两个 loop：各会话 warn 独立 pending，互不阻塞（KNOWN_ISSUES 6）', async () => {
+    // Production shape: one HITLManager injected into every loop. Before
+    // keying, session B's warn hit "HITL busy" (global single state) and was
+    // silently blocked instead of pausing for a human decision.
+    const sharedHitl = new HITLManager();
+    const outsideA = path.join(os.tmpdir(), `codeharness-outside-${process.pid}-a.txt`);
+    const outsideB = path.join(os.tmpdir(), `codeharness-outside-${process.pid}-b.txt`);
+    try {
+      const harnessA = createTestHarness(
+        [
+          { toolCalls: [{ name: 'write_file', arguments: { path: outsideA, content: 'x' } }] },
+          { content: 'done' },
+        ],
+        workspaceRoot,
+        { hitl: sharedHitl },
+      );
+      const harnessB = createTestHarness(
+        [
+          { toolCalls: [{ name: 'write_file', arguments: { path: outsideB, content: 'x' } }] },
+          { content: 'done' },
+        ],
+        workspaceRoot,
+        { hitl: sharedHitl },
+      );
+
+      const sessionA = await harnessA.run('写工作区外 A');
+      // Session B triggers its own warn while A's decision is still pending.
+      const sessionB = await harnessB.run('写工作区外 B');
+
+      expect(sessionA.status).toBe('paused');
+      expect(sessionB.status).toBe('paused'); // NOT silently blocked as "HITL busy"
+      expect(sharedHitl.getState(sessionA.id)).toBe(HITLState.AWAITING_APPROVAL);
+      expect(sharedHitl.getState(sessionB.id)).toBe(HITLState.AWAITING_APPROVAL);
+      expect(fs.existsSync(outsideA)).toBe(false);
+      expect(fs.existsSync(outsideB)).toBe(false);
+
+      // Approving A must not resolve B's pending decision.
+      sharedHitl.approve(sessionA.id);
+      expect(sharedHitl.getState(sessionA.id)).toBe(HITLState.EXECUTING);
+      expect(sharedHitl.getState(sessionB.id)).toBe(HITLState.AWAITING_APPROVAL);
+    } finally {
+      for (const p of [outsideA, outsideB]) {
+        try {
+          fs.rmSync(p, { force: true });
+        } catch {
+          // Windows may hold handles
+        }
+      }
+    }
   });
 
   it('scope-fence 越界基准跟随会话 workspaceRoot（Task 19）', async () => {

@@ -653,12 +653,12 @@ export class AgentLoop {
       // decision even for a command PatternGuard already approved.
       const configReason = this.matchConfigGuardrails(command);
       if (configReason !== null) {
-        return this.requestApprovalFromConfig(action, configReason, command);
+        return this.requestApprovalFromConfig(action, configReason, command, session.id);
       }
       if (guardResult.level === 'warn') {
         // The LLM may re-issue an already-approved command (it does not always
         // realize the harness executed it) — pass it without a second prompt.
-        if (this.guard.hitl.isApprovedCommand(command)) {
+        if (this.guard.hitl.isApprovedCommand(session.id, command)) {
           return { blocked: false, needsApproval: false };
         }
         this.events.emit('guardrail:triggered', {
@@ -668,7 +668,7 @@ export class AgentLoop {
         });
         // Trigger HITL
         try {
-          this.guard.hitl.requestApproval(command, {
+          this.guard.hitl.requestApproval(session.id, command, {
             tool: action.tool,
             params: action.params,
             id: action.id,
@@ -788,10 +788,11 @@ export class AgentLoop {
     action: Action,
     reason: string,
     command: string,
+    sessionId: string,
   ): { blocked: boolean; needsApproval: boolean; reason: string } {
     this.events.emit('guardrail:triggered', { rule: reason, command, level: 'warn' });
     try {
-      this.guard.hitl.requestApproval(command, {
+      this.guard.hitl.requestApproval(sessionId, command, {
         tool: action.tool,
         params: action.params,
         id: action.id,
@@ -812,7 +813,7 @@ export class AgentLoop {
     command: string,
   ): { blocked: boolean; needsApproval: boolean; reason: string } {
     // Already-approved command → execute directly (see warn branch above).
-    if (command !== '' && this.guard.hitl.isApprovedCommand(command)) {
+    if (command !== '' && this.guard.hitl.isApprovedCommand(session.id, command)) {
       return { blocked: false, needsApproval: false, reason: `approved: ${reason}` };
     }
     this.events.emit('guardrail:triggered', {
@@ -822,6 +823,7 @@ export class AgentLoop {
     });
     try {
       this.guard.hitl.requestApproval(
+        session.id,
         command || `${action.tool}: ${reason}`,
         { tool: action.tool, params: action.params, id: action.id },
       );

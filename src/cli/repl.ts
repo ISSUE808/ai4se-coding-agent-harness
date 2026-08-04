@@ -120,13 +120,14 @@ function handleSlashCommand(
       ctx.io.print(`[session] model → ${arg}（下一次运行生效）`);
       return session;
     case '/clear':
-      // M5 CR (documented decision): hitl.reset() clears the pending decision
-      // but KEEPS the session-level approved-command cache (HITLManager:
-      // "cleared only on a fresh HITLManager, not on reset") — a /clear'd
-      // conversation still lets a re-issued identical command pass without a
-      // second confirmation. Accepted: the cache is per-HITLManager lifetime,
-      // /clear is a conversation reset, not a security reset.
-      ctx.hitl.reset();
+      // M5 CR (documented decision, KNOWN_ISSUES 6 update): the pending
+      // decision is cleared; the approved-command cache survives in the
+      // session's keyed entry — but the NEXT session gets a fresh id, so a
+      // re-issued identical command is confirmed again (keyed isolation is
+      // strictly safer than the old shared-instance cache).
+      if (session !== null) {
+        ctx.hitl.removeSession(session.id);
+      }
       ctx.io.print('[session] cleared — 开始新会话');
       return null;
     default:
@@ -167,7 +168,9 @@ async function runInstruction(opts: {
     // C1 (WebUI): a fresh decision context per instruction — otherwise the
     // post-decision HITL state (EXECUTING/BLOCKED) silently swallows every
     // later warn as "HITL busy". The approved-command cache survives reset.
-    hitl.reset();
+    if (opts.session !== null) {
+      hitl.reset(opts.session.id);
+    }
     // Task 26: hand the stored session to the factory so the provider is
     // built with `session.model` when the session overrides the config.
     const loop = await opts.buildAgentLoop({
@@ -215,22 +218,25 @@ async function runInstruction(opts: {
     // pending command is retained (EXECUTING/BLOCKED), so a later pause that
     // is NOT a fresh approval (e.g. maxRounds upgrade) must not re-ask about
     // the already-decided command (approve() would throw in EXECUTING state).
-    while (session.status === 'paused' && hitl.getState() === HITLState.AWAITING_APPROVAL) {
+    while (
+      session.status === 'paused' &&
+      hitl.getState(session.id) === HITLState.AWAITING_APPROVAL
+    ) {
       if (opts.signal.aborted) {
         break;
       }
-      const pending = hitl.getPendingCommand() ?? 'unknown operation';
+      const pending = hitl.getPendingCommand(session.id) ?? 'unknown operation';
       const approved = await opts.ask(
         `[HITL] 需要人工确认 — 批准执行该操作？\n  ${pending}\n  (y=批准执行 / n=拒绝)`,
       );
       if (approved) {
-        hitl.approve();
-        const action = hitl.getApprovedAction();
+        hitl.approve(session.id);
+        const action = hitl.getApprovedAction(session.id);
         if (action) {
           await executeApprovedActionImpl(session, action, events);
         }
       } else {
-        hitl.deny();
+        hitl.deny(session.id);
         const deniedMsg: Message = {
           id: crypto.randomUUID(),
           role: 'system',

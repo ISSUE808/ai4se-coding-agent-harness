@@ -478,25 +478,25 @@ describe('REST /api/sessions', () => {
 describe('REST /api/approvals', () => {
   it('approve moves HITL to EXECUTING and records the approved command', async () => {
     const { web, hitl, sessionStore } = await makeFixture();
-    hitl.requestApproval('rm -rf /');
     const created = await request(web.app).post('/api/sessions').send({ task: 'hitl' });
     const id = created.body.id as string;
+    hitl.requestApproval(id, 'rm -rf /');
     const res = await request(web.app)
       .post(`/api/approvals/${id}`)
       .send({ decision: 'approve' });
     expect(res.status).toBe(200);
     expect(res.body.decision).toBe('approve');
     expect(res.body.state).toBe(HITLState.EXECUTING);
-    expect(hitl.getState()).toBe(HITLState.EXECUTING);
+    expect(hitl.getState(id)).toBe(HITLState.EXECUTING);
     const session = sessionStore.get(id);
     expect(session?.messages.some((m) => m.content.includes('rm -rf /'))).toBe(true);
   });
 
   it('modify requires modifiedCommand and records it', async () => {
     const { web, hitl, sessionStore } = await makeFixture();
-    hitl.requestApproval('rm -rf /');
     const created = await request(web.app).post('/api/sessions').send({ task: 'hitl' });
     const id = created.body.id as string;
+    hitl.requestApproval(id, 'rm -rf /');
     const noCommand = await request(web.app)
       .post(`/api/approvals/${id}`)
       .send({ decision: 'modify' });
@@ -506,24 +506,39 @@ describe('REST /api/approvals', () => {
       .send({ decision: 'modify', modifiedCommand: 'rm -rf /tmp/scratch' });
     expect(res.status).toBe(200);
     expect(res.body.state).toBe(HITLState.EXECUTING_MODIFIED);
-    expect(hitl.getState()).toBe(HITLState.EXECUTING_MODIFIED);
+    expect(hitl.getState(id)).toBe(HITLState.EXECUTING_MODIFIED);
     const session = sessionStore.get(id);
     expect(session?.messages.some((m) => m.content.includes('/tmp/scratch'))).toBe(true);
   });
 
   it('deny blocks the pending command and records the denial', async () => {
     const { web, hitl, sessionStore } = await makeFixture();
-    hitl.requestApproval('rm -rf /');
     const created = await request(web.app).post('/api/sessions').send({ task: 'hitl' });
     const id = created.body.id as string;
+    hitl.requestApproval(id, 'rm -rf /');
     const res = await request(web.app)
       .post(`/api/approvals/${id}`)
       .send({ decision: 'deny' });
     expect(res.status).toBe(200);
     expect(res.body.state).toBe(HITLState.BLOCKED);
-    expect(hitl.getState()).toBe(HITLState.BLOCKED);
+    expect(hitl.getState(id)).toBe(HITLState.BLOCKED);
     const session = sessionStore.get(id);
     expect(session?.messages.some((m) => m.content.toLowerCase().includes('denied'))).toBe(true);
+  });
+
+  it('409 when the session is NOT the one holding the pending decision (KNOWN_ISSUES 6)', async () => {
+    const { web, hitl } = await makeFixture();
+    const a = await request(web.app).post('/api/sessions').send({ task: 'hitl-a' });
+    const b = await request(web.app).post('/api/sessions').send({ task: 'hitl-b' });
+    // Session B's command is pending; resolving it through session A's id
+    // must fail with 409 instead of approving B's command under A's name.
+    hitl.requestApproval(b.body.id, 'rm -rf /');
+    const res = await request(web.app)
+      .post(`/api/approvals/${a.body.id}`)
+      .send({ decision: 'approve' });
+    expect(res.status).toBe(409);
+    // B's pending decision is untouched.
+    expect(hitl.getState(b.body.id)).toBe(HITLState.AWAITING_APPROVAL);
   });
 
   it('rejects an invalid decision with 400', async () => {
@@ -547,8 +562,7 @@ describe('REST /api/approvals', () => {
   });
 
   it('returns 404 for an unknown session', async () => {
-    const { web, hitl } = await makeFixture();
-    hitl.requestApproval('rm -rf /');
+    const { web } = await makeFixture();
     const res = await request(web.app)
       .post('/api/approvals/ghost')
       .send({ decision: 'approve' });

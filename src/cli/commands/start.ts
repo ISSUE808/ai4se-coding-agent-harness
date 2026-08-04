@@ -292,19 +292,22 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
     // is NOT a fresh approval (e.g. maxRounds upgrade) must not re-ask about
     // the already-decided command (approve() would throw in EXECUTING state).
     const ask = opts.promptApproval ?? cliPromptApproval;
-    while (session.status === 'paused' && hitl.getState() === HITLState.AWAITING_APPROVAL) {
-      const pending = hitl.getPendingCommand() ?? 'unknown operation';
+    while (
+      session.status === 'paused' &&
+      hitl.getState(session.id) === HITLState.AWAITING_APPROVAL
+    ) {
+      const pending = hitl.getPendingCommand(session.id) ?? 'unknown operation';
       const approved = await ask(
         `[HITL] 需要人工确认 — 批准执行该操作？\n  ${pending}\n  (y=批准执行 / n=拒绝)`,
       );
       if (approved) {
-        hitl.approve();
-        const action = hitl.getApprovedAction();
+        hitl.approve(session.id);
+        const action = hitl.getApprovedAction(session.id);
         if (action) {
           await executeApprovedActionImpl(session, action, events);
         }
       } else {
-        hitl.deny();
+        hitl.deny(session.id);
         const deniedMsg: Message = {
           id: crypto.randomUUID(),
           role: 'system',
@@ -522,10 +525,9 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     // C1: restore HITL to IDLE before each run so a NEW warn-level command can
     // request approval again — otherwise the post-decision state (EXECUTING /
     // EXECUTING_MODIFIED / BLOCKED) silently swallows every later warn as
-    // "HITL busy". Known limitation (I3): single-session concurrency — this
-    // reset may clear ANOTHER session's pending approval; multi-session HITL
-    // keying is future work.
-    hitl.reset();
+    // "HITL busy". Keyed per session (KNOWN_ISSUES 6): only THIS session's
+    // decision is reset; other sessions' pending approvals are untouched.
+    hitl.reset(session.id);
     const controller = new AbortController();
     activeRuns.set(session.id, controller);
     try {
@@ -597,7 +599,7 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     // HITL approval authorizes the operation — the harness executes it directly
     // (SPEC §3.4: approval = authorization to run, never a hint for the LLM
     // to re-issue it; real LLMs do not re-issue after "[HITL] approved").
-    const approved = hitl.getApprovedAction();
+    const approved = hitl.getApprovedAction(session.id);
     if (approved !== null) {
       session.status = 'running';
       events.emit('session:status', { sessionId: session.id, status: 'running' });
