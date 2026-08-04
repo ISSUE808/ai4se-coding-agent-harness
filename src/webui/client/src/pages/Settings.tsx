@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import designTokens from '../design-tokens';
 import {
+  clearSessions,
   deleteKey,
   fetchAvailableModels,
   fetchConfig,
@@ -1700,7 +1701,39 @@ function SettingField({
 
 // ─── Danger zone (prototype .danger-zone) ────────────────────────────────────
 
+/**
+ * KNOWN_ISSUES 9: bulk clear. Two-step confirm — the first click arms the
+ * button (the action is irreversible), the second click deletes. Running
+ * sessions are kept by the backend and reported back.
+ */
 function DangerZone() {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function handleClear(): Promise<void> {
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await clearSessions();
+      setMessage(
+        result.keptRunning.length > 0
+          ? `已删除 ${result.deleted} 个会话（${result.keptRunning.length} 个运行中会话已保留）`
+          : `已清空 ${result.deleted} 个会话`,
+      );
+      setConfirming(false);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+      setConfirming(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div
       style={{
@@ -1721,12 +1754,22 @@ function DangerZone() {
           清空所有会话
         </div>
         <div style={{ fontSize: designTokens.typography.fontSize.sm, color: designTokens.colors.textMuted, marginTop: 2 }}>
-          永久删除全部会话历史与日志，不可恢复。该操作将在 Task 19 集成主循环后提供。
+          永久删除全部会话历史与日志，不可恢复。运行中的会话会被保留。
+          {message !== null && (
+            <span style={{ display: 'block', marginTop: 4, color: designTokens.colors.danger }}>
+              {message}
+            </span>
+          )}
         </div>
       </div>
-      <button type="button" disabled style={{ ...dangerButtonStyle, cursor: 'not-allowed', opacity: 0.55 }}>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void handleClear()}
+        style={confirming ? { ...dangerButtonStyle, background: designTokens.colors.danger, color: designTokens.colors.onPrimary } : dangerButtonStyle}
+      >
         <Trash2 size={12} />
-        清空会话
+        {busy ? '清空中…' : confirming ? '确认清空？' : '清空会话'}
       </button>
     </div>
   );

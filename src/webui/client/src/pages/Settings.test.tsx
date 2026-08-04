@@ -11,6 +11,7 @@ vi.mock('../lib/api', () => ({
   saveKey: vi.fn(),
   deleteKey: vi.fn(),
   fetchKeys: vi.fn(),
+  clearSessions: vi.fn(),
 }));
 
 vi.mock('@monaco-editor/react', () => ({
@@ -24,6 +25,7 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 import {
+  clearSessions,
   deleteKey,
   fetchAvailableModels,
   fetchConfig,
@@ -41,6 +43,7 @@ const getKeyStatusMock = vi.mocked(getKeyStatus);
 const saveKeyMock = vi.mocked(saveKey);
 const deleteKeyMock = vi.mocked(deleteKey);
 const fetchKeysMock = vi.mocked(fetchKeys);
+const clearSessionsMock = vi.mocked(clearSessions);
 
 function row(provider: string): HTMLElement {
   return screen.getByTestId(`key-row-${provider}`);
@@ -55,6 +58,7 @@ describe('Settings', () => {
     saveKeyMock.mockReset();
     deleteKeyMock.mockReset();
     fetchKeysMock.mockReset();
+    clearSessionsMock.mockReset();
     // Model list: default to empty so existing tests are unaffected; tests
     // that exercise the list mock it explicitly.
     fetchAvailableModelsMock.mockResolvedValue({ models: [] });
@@ -674,5 +678,34 @@ describe('Settings', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/https:\/\/nju-mirror\.example\/v1/).length).toBeGreaterThanOrEqual(2);
     });
+  });
+
+  it('clears all sessions after a two-step confirm (KNOWN_ISSUES 9)', async () => {
+    clearSessionsMock.mockResolvedValue({ deleted: 2, keptRunning: [] });
+    render(<Settings />);
+
+    const user = userEvent.setup();
+    const button = await screen.findByRole('button', { name: '清空会话' });
+    // First click arms the confirm state; nothing is sent yet.
+    await user.click(button);
+    expect(clearSessionsMock).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole('button', { name: '确认清空？' });
+    // Second click performs the deletion.
+    await user.click(confirm);
+    await waitFor(() => expect(clearSessionsMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('已清空 2 个会话')).toBeInTheDocument();
+  });
+
+  it('reports kept running sessions after clearing (KNOWN_ISSUES 9)', async () => {
+    clearSessionsMock.mockResolvedValue({ deleted: 1, keptRunning: ['live-1'] });
+    render(<Settings />);
+
+    const user = userEvent.setup();
+    const button = await screen.findByRole('button', { name: '清空会话' });
+    await user.click(button);
+    await user.click(await screen.findByRole('button', { name: '确认清空？' }));
+    expect(
+      await screen.findByText(/1 个运行中会话已保留/),
+    ).toBeInTheDocument();
   });
 });

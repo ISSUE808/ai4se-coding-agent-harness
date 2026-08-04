@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   createInitialRuntimeState,
   reduceSessionEvent,
+  reduceTerminalEvent,
   type SessionEventFrame,
+  type TerminalLine,
 } from './ws-state';
 import type { SessionMessage } from './session-messages';
 
@@ -144,5 +146,57 @@ describe('reduceSessionEvent — malformed input', () => {
     const state = createInitialRuntimeState({ messages: [], status: 'running' });
     const next = reduceSessionEvent(state, { type: 'session:status', data: 'paused' as unknown as Record<string, unknown> });
     expect(next).toBe(state);
+  });
+});
+
+describe('reduceTerminalEvent — KNOWN_ISSUES 9 终端 tab', () => {
+  it('renders a tool:executed line with result and duration', () => {
+    const next = reduceTerminalEvent([], frame('tool:executed', {
+      toolName: 'read_file', duration_ms: 12, success: true,
+    }));
+    expect(next).toHaveLength(1);
+    expect(next[0].kind).toBe('tool');
+    expect(next[0].text).toContain('read_file');
+    expect(next[0].text).toContain('12ms');
+  });
+
+  it('renders failed tools with ✗ and feedback failures with the category', () => {
+    let next = reduceTerminalEvent([], frame('tool:executed', {
+      toolName: 'run_shell', duration_ms: 3, success: false,
+    }));
+    expect(next[0].text).toContain('✗');
+    next = reduceTerminalEvent(next, frame('feedback:completed', {
+      passed: false, validator: 'tsc', failureCategory: 'type',
+    }));
+    expect(next[1].kind).toBe('feedback');
+    expect(next[1].text).toContain('tsc');
+    expect(next[1].text).toContain('type');
+  });
+
+  it('renders guardrail, round and status lines', () => {
+    let next = reduceTerminalEvent([], frame('guardrail:triggered', {
+      rule: 'prod-mutation', command: 'npm run migrate:prod', level: 'warn',
+    }));
+    expect(next[0].text).toContain('prod-mutation');
+    next = reduceTerminalEvent(next, frame('round:changed', { currentRound: 2, maxRounds: 5 }));
+    expect(next[1].text).toContain('2/5');
+    next = reduceTerminalEvent(next, frame('session:status', { sessionId: 's1', status: 'running' }));
+    expect(next[2].text).toContain('running');
+  });
+
+  it('ignores message:added frames (the message feed owns those)', () => {
+    const next = reduceTerminalEvent([], frame('message:added', {
+      id: 'm1', role: 'user', content: 'hi', timestamp: 't',
+    }));
+    expect(next).toHaveLength(0);
+  });
+
+  it('caps the stream at 500 lines', () => {
+    let lines: TerminalLine[] = [];
+    for (let i = 0; i < 505; i += 1) {
+      lines = reduceTerminalEvent(lines, frame('round:changed', { currentRound: i, maxRounds: 1000 }));
+    }
+    expect(lines).toHaveLength(500);
+    expect(lines[0].text).toContain('5/1000');
   });
 });

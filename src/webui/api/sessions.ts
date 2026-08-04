@@ -185,6 +185,46 @@ export function createSessionsRouter(deps: SessionsRouterDeps): Router {
     res.json(session);
   });
 
+  /**
+   * KNOWN_ISSUES 9: delete ONE session. A running session is refused (409) —
+   * a live loop owns it; stop it first. Deleting a completed/paused session
+   * is permanent (the store is in-memory today).
+   */
+  router.delete('/:id', (req, res) => {
+    const session = sessionStore.get(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: `Session not found: ${req.params.id}` });
+      return;
+    }
+    if (session.status === 'running') {
+      res.status(409).json({
+        error: `Cannot delete a running session — stop it first (POST /api/sessions/${session.id}/stop)`,
+      });
+      return;
+    }
+    sessionStore.remove(session.id);
+    res.json({ removed: true, id: session.id });
+  });
+
+  /**
+   * KNOWN_ISSUES 9: bulk clear (Settings "清空会话"). Deletes every
+   * non-running session; running sessions are kept and reported so the client
+   * can tell the user why the list is not empty.
+   */
+  router.delete('/', (_req, res) => {
+    const keptRunning: string[] = [];
+    let deleted = 0;
+    for (const session of sessionStore.list()) {
+      if (session.status === 'running') {
+        keptRunning.push(session.id);
+        continue;
+      }
+      sessionStore.remove(session.id);
+      deleted += 1;
+    }
+    res.json({ deleted, keptRunning });
+  });
+
   router.post('/:id/message', (req, res) => {
     const { role, content, metadata } = req.body ?? {};
     if (!MESSAGE_ROLES.includes(role)) {

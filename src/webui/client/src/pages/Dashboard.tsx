@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, FolderOpen, Loader2, Pause, Play, Plus, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, ChevronRight, FolderOpen, Loader2, Pause, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import designTokens from '../design-tokens';
-import { createSession, fetchConfig, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
+import { createSession, deleteSession, fetchConfig, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
 import { formatDuration, formatTokens } from '../lib/format';
 import StatusBadge from '../components/StatusBadge';
 import DirectoryPicker from '../components/DirectoryPicker';
@@ -78,6 +78,21 @@ export default function Dashboard() {
     setRowBusy(s.id);
     try {
       await sessionControl(s.id, s.status === 'running' ? 'pause' : 'resume');
+      await load();
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
+  /** Delete a session row (KNOWN_ISSUES 9). Running sessions are disabled —
+   *  the backend refuses them with 409; stop them first. */
+  async function removeRow(s: SessionSummary): Promise<void> {
+    if (rowBusy !== null) {
+      return;
+    }
+    setRowBusy(s.id);
+    try {
+      await deleteSession(s.id);
       await load();
     } finally {
       setRowBusy(null);
@@ -425,6 +440,24 @@ export default function Dashboard() {
                               style={iconBtnStyle}
                             >
                               <ChevronRight size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              title={s.status === 'running' ? '运行中会话需先停止再删除' : '删除会话'}
+                              aria-label={`删除 ${s.id}`}
+                              disabled={rowBusy !== null || s.status === 'running'}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void removeRow(s);
+                              }}
+                              style={{
+                                ...iconBtnStyle,
+                                color: s.status === 'running'
+                                  ? designTokens.colors.textFaint
+                                  : designTokens.colors.danger,
+                              }}
+                            >
+                              <Trash2 size={13} />
                             </button>
                           </span>
                         </td>

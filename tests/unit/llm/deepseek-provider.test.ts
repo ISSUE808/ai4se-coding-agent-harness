@@ -556,4 +556,24 @@ describe('DeepSeekProvider', () => {
       arguments: { filePath: '/src/b.ts', content: '// code' },
     });
   });
+
+  it('surfaces billing usage including the cached-prompt count (KNOWN_ISSUES 9)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok', tool_calls: [] } }],
+      usage: { prompt_tokens: 1200, completion_tokens: 340, prompt_cache_hit_tokens: 900 },
+    });
+    const provider = new DeepSeekProvider(defaultConfig);
+    const result = await provider.complete(dummyMessages, []);
+    expect(result.usage).toEqual({ prompt: 1200, completion: 340, cached: 900 });
+  });
+
+  it('omits usage when the API response carries none (KNOWN_ISSUES 9)', async () => {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: 'ok', tool_calls: [] } }],
+      // No usage object at all — some OpenAI-compatible endpoints omit it.
+    });
+    const provider = new DeepSeekProvider(defaultConfig);
+    const result = await provider.complete(dummyMessages, []);
+    expect(result.usage).toBeUndefined();
+  });
 });

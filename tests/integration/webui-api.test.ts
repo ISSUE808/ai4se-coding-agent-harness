@@ -461,6 +461,53 @@ describe('REST /api/sessions', () => {
     expect(onModelChanged).toHaveBeenCalledTimes(1);
   });
 
+  it('DELETE /api/sessions/:id removes a non-running session (KNOWN_ISSUES 9)', async () => {
+    const { web } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 'to delete' });
+    const id = created.body.id as string;
+    await request(web.app).post(`/api/sessions/${id}/stop`).send({});
+    const del = await request(web.app).delete(`/api/sessions/${id}`);
+    expect(del.status).toBe(200);
+    expect(del.body.removed).toBe(true);
+    const list = await request(web.app).get('/api/sessions');
+    expect(list.body.some((s: { id: string }) => s.id === id)).toBe(false);
+    // Second DELETE is 404 — the session is really gone.
+    const again = await request(web.app).delete(`/api/sessions/${id}`);
+    expect(again.status).toBe(404);
+  });
+
+  it('DELETE /api/sessions/:id rejects a running session with 409', async () => {
+    const { web } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 'running' });
+    const res = await request(web.app).delete(`/api/sessions/${created.body.id}`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('stop');
+  });
+
+  it('DELETE /api/sessions clears all non-running sessions and reports kept running ones (KNOWN_ISSUES 9)', async () => {
+    const { web } = await makeFixture();
+    const a = await request(web.app).post('/api/sessions').send({ task: 'done-a' });
+    await request(web.app).post(`/api/sessions/${a.body.id}/stop`).send({});
+    const b = await request(web.app).post('/api/sessions').send({ task: 'done-b' });
+    await request(web.app).post(`/api/sessions/${b.body.id}/stop`).send({});
+    const running = await request(web.app).post('/api/sessions').send({ task: 'live' });
+
+    const res = await request(web.app).delete('/api/sessions');
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(2);
+    expect(res.body.keptRunning).toEqual([running.body.id]);
+
+    const list = await request(web.app).get('/api/sessions');
+    expect(list.body).toHaveLength(1);
+    expect(list.body[0].id).toBe(running.body.id);
+  });
+
+  it('DELETE /api/sessions returns 404 for an unknown session id', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).delete('/api/sessions/ghost');
+    expect(res.status).toBe(404);
+  });
+
   it('session:updated frames are filtered by the WS sessionId (Task 26)', async () => {
     const { web, port } = await makeFixture();
     const a = await request(web.app).post('/api/sessions').send({ task: 'a' });

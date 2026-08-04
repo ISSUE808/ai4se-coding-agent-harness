@@ -255,4 +255,33 @@ describe('useSessionEvents', () => {
     act(() => result.current.updateModel(null));
     expect(result.current.model).toBeNull();
   });
+
+  it('collects tool/feedback/guardrail frames into the terminal stream (KNOWN_ISSUES 9)', () => {
+    const source = new FakeSource();
+    const { result } = renderSessionEvents(source);
+
+    act(() =>
+      source.emit({
+        type: 'tool:executed',
+        data: { toolName: 'read_file', duration_ms: 4, success: true },
+      }),
+    );
+    act(() =>
+      source.emit({
+        type: 'round:changed',
+        data: { currentRound: 1, maxRounds: 3 },
+      }),
+    );
+    // message:added frames must NOT pollute the terminal stream.
+    act(() =>
+      source.emit({
+        type: 'message:added',
+        data: { id: 'm1', role: 'assistant', content: 'hi', timestamp: 't' },
+      }),
+    );
+
+    expect(result.current.terminal).toHaveLength(2);
+    expect(result.current.terminal[0].text).toContain('read_file');
+    expect(result.current.terminal[1].text).toContain('1/3');
+  });
 });

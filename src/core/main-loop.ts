@@ -8,6 +8,7 @@ import type {
   LLMResponse,
   Message,
   Session,
+  TokenUsage,
   Tool,
   ToolContext,
   ToolResult,
@@ -308,6 +309,9 @@ export class AgentLoop {
       let response: LLMResponse;
       try {
         response = await this.llm.complete(messages, toolList);
+        // KNOWN_ISSUES 9 Token 明细: accumulate the provider's billed usage
+        // across rounds (tokenCount stays the memory layer's estimate).
+        this.accumulateUsage(session, response.usage);
         // I2-fix: an abort can land DURING the LLM call — the loop only
         // checked at the round boundary above. Without this check a
         // single-round task would complete anyway (session → completed),
@@ -775,6 +779,19 @@ export class AgentLoop {
       }
     }
     return null;
+  }
+
+  /** Add one call's billed usage to the session total (KNOWN_ISSUES 9). */
+  private accumulateUsage(session: Session, usage: TokenUsage | undefined): void {
+    if (usage === undefined) {
+      return;
+    }
+    const prev = session.tokenUsage;
+    session.tokenUsage = {
+      prompt: (prev?.prompt ?? 0) + usage.prompt,
+      completion: (prev?.completion ?? 0) + usage.completion,
+      cached: (prev?.cached ?? 0) + (usage.cached ?? 0),
+    };
   }
 
   /**

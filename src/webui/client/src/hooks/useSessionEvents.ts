@@ -17,9 +17,11 @@ import { createWebSocketEventSource, type SessionEventSource } from '../lib/ws-s
 import {
   createInitialRuntimeState,
   reduceSessionEvent,
+  reduceTerminalEvent,
   type InitialRuntimeState,
   type PendingApproval,
   type SessionRuntimeState,
+  type TerminalLine,
 } from '../lib/ws-state';
 import { mergeMessages, upsertMessage, type SessionMessage } from '../lib/session-messages';
 
@@ -31,6 +33,8 @@ export interface SessionEventsState {
   /** Session-level model override (Task 26); null = config default. */
   model: string | null;
   pendingApproval: PendingApproval | null;
+  /** Live operational log (KNOWN_ISSUES 9 终端 tab) — capped at 500 lines. */
+  terminal: TerminalLine[];
   wsConnected: boolean;
   /** Tear down and re-open the transport (retry after a drop). */
   reconnect(): void;
@@ -58,6 +62,7 @@ export function useSessionEvents(
     () => eventSource ?? createWebSocketEventSource(sessionId),
   );
   const [state, setState] = useState<SessionRuntimeState>(() => createInitialRuntimeState(initial));
+  const [terminal, setTerminal] = useState<TerminalLine[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [connectionKey, setConnectionKey] = useState(0);
 
@@ -116,6 +121,7 @@ export function useSessionEvents(
           modelFrameSeenRef.current = true;
         }
         setState((prev) => reduceSessionEvent(prev, frame));
+        setTerminal((prev) => reduceTerminalEvent(prev, frame));
       },
       onConnectionChange: (connected) => {
         if (!disposed) {
@@ -152,6 +158,7 @@ export function useSessionEvents(
     maxRounds: state.maxRounds,
     model: state.model,
     pendingApproval: state.pendingApproval,
+    terminal,
     wsConnected,
     reconnect,
     dismissApproval,

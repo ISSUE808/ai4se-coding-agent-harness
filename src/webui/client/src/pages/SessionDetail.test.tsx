@@ -709,4 +709,32 @@ describe('SessionDetail', () => {
     });
     expect(await screen.findByText(/全局配置更新失败/)).toBeInTheDocument();
   });
+
+  it('shows billed token usage breakdown when the session carries tokenUsage (KNOWN_ISSUES 9)', async () => {
+    const withUsage = {
+      ...SESSION,
+      tokenUsage: { prompt: 1200, completion: 340, cached: 900 },
+    };
+    renderDetail(withUsage);
+    expect(await screen.findByText('输入')).toBeInTheDocument();
+    expect(screen.getByText('1.2K')).toBeInTheDocument();
+    expect(screen.getByText('340')).toBeInTheDocument();
+    expect(screen.getByText('900')).toBeInTheDocument();
+    expect(screen.getByText('1.5K')).toBeInTheDocument();
+  });
+
+  it('renders live terminal frames under the 终端 tab (KNOWN_ISSUES 9)', async () => {
+    renderDetail();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '终端' }));
+    expect(await screen.findByText(/暂无终端输出/)).toBeInTheDocument();
+
+    act(() =>
+      source.emit({
+        type: 'tool:executed',
+        data: { toolName: 'read_file', duration_ms: 4, success: true },
+      }),
+    );
+    expect(await screen.findByText(/\[tool\] read_file/)).toBeInTheDocument();
+  });
 });

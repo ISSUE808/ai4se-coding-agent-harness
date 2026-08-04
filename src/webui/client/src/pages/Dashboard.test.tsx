@@ -11,15 +11,24 @@ vi.mock('../lib/api', () => ({
   fetchConfig: vi.fn(),
   fetchMachineRoots: vi.fn(),
   fetchFsBrowse: vi.fn(),
+  deleteSession: vi.fn(),
 }));
 
-import { createSession, fetchConfig, fetchFsBrowse, fetchMachineRoots, fetchSessions } from '../lib/api';
+import {
+  createSession,
+  deleteSession,
+  fetchConfig,
+  fetchFsBrowse,
+  fetchMachineRoots,
+  fetchSessions,
+} from '../lib/api';
 
 const fetchSessionsMock = vi.mocked(fetchSessions);
 const createSessionMock = vi.mocked(createSession);
 const fetchConfigMock = vi.mocked(fetchConfig);
 const fetchMachineRootsMock = vi.mocked(fetchMachineRoots);
 const fetchFsBrowseMock = vi.mocked(fetchFsBrowse);
+const deleteSessionMock = vi.mocked(deleteSession);
 
 const RUNNING = {
   id: 's_8f3a21',
@@ -257,5 +266,23 @@ describe('Dashboard', () => {
     await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
     await screen.findByRole('dialog');
     expect(createSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('deletes a completed session from the row actions and refreshes the list (KNOWN_ISSUES 9)', async () => {
+    fetchSessionsMock.mockResolvedValue([COMPLETED]);
+    deleteSessionMock.mockResolvedValue({ removed: true });
+    renderDashboard();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText('删除 s_5a91cd'));
+    await waitFor(() => expect(deleteSessionMock).toHaveBeenCalledWith('s_5a91cd'));
+    expect(fetchSessionsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables deletion for a running session (KNOWN_ISSUES 9)', async () => {
+    fetchSessionsMock.mockResolvedValue([RUNNING]);
+    renderDashboard();
+    await screen.findByLabelText('删除 s_8f3a21');
+    expect(screen.getByLabelText('删除 s_8f3a21')).toBeDisabled();
   });
 });

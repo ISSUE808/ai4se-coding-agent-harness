@@ -33,6 +33,12 @@ export interface SessionStore {
    * stored message, or null when the session is unknown.
    */
   appendMessage(id: string, message: Omit<Message, 'id' | 'timestamp'>): Message | null;
+  /**
+   * Remove a session (KNOWN_ISSUES 9). Returns true when it existed and was
+   * removed; false when the id was unknown. The store does not check status —
+   * the API layer decides which sessions may be deleted.
+   */
+  remove(id: string): boolean;
 }
 
 function generateId(): string {
@@ -116,5 +122,9 @@ export class InMemorySessionStore implements SessionStore {
     session.messages.push(stored);
     session.updatedAt = nowISO();
     return stored;
+  }
+
+  remove(id: string): boolean {
+    return this.sessions.delete(id);
   }
 }

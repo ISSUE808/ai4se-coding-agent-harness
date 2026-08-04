@@ -25,6 +25,14 @@ export interface SessionRuntimeState {
   pendingApproval: PendingApproval | null;
 }
 
+/** One line of the session's live terminal stream (KNOWN_ISSUES 9 终端 tab). */
+export interface TerminalLine {
+  id: string;
+  timestamp: string;
+  kind: 'tool' | 'feedback' | 'guardrail' | 'round' | 'status';
+  text: string;
+}
+
 /** WS frame shape: server serializes every HarnessEventMap event as `{type, data}`. */
 export interface SessionEventFrame {
   type: string;
@@ -119,5 +127,90 @@ export function reduceSessionEvent(state: SessionRuntimeState, event: SessionEve
 
     default:
       return state;
+  }
+}
+
+// ─── Terminal stream (KNOWN_ISSUES 9 终端 tab) ──────────────────────────────
+
+const TERMINAL_MAX = 500;
+
+/**
+ * Reduce WS frames into terminal lines for the session's live "terminal" tab.
+ * Kept separate from `reduceSessionEvent` — the message feed and the
+ * operational log have different consumers and retention policies.
+ */
+export function reduceTerminalEvent(
+  lines: TerminalLine[],
+  event: SessionEventFrame,
+): TerminalLine[] {
+  if (!isRecord(event.data)) {
+    return lines;
+  }
+  const line = terminalLine(event.type, event.data);
+  if (line === null) {
+    return lines;
+  }
+  // Sequential index as the stable key — WS frames carry no id of their own
+  // and multiple frames can share a timestamp.
+  line.id = String(lines.length);
+  const next = [...lines, line];
+  return next.length > TERMINAL_MAX ? next.slice(next.length - TERMINAL_MAX) : next;
+}
+
+function terminalLine(type: string, data: Record<string, unknown>): TerminalLine | null {
+  const stamp = typeof data.timestamp === 'string' ? data.timestamp : '';
+  switch (type) {
+    case 'tool:executed': {
+      const toolName = typeof data.toolName === 'string' ? data.toolName : '?';
+      const success = typeof data.success === 'boolean' ? data.success : true;
+      const ms = typeof data.duration_ms === 'number' ? `${data.duration_ms}ms` : '';
+      return {
+        id: stamp,
+        timestamp: stamp,
+        kind: 'tool',
+        text: `[tool] ${toolName} ${success ? '✓' : '✗'} ${ms}`.trim(),
+      };
+    }
+    case 'feedback:completed': {
+      const validator = typeof data.validator === 'string' ? data.validator : '?';
+      const passed = typeof data.passed === 'boolean' ? data.passed : false;
+      const category =
+        typeof data.failureCategory === 'string' && data.failureCategory !== ''
+          ? ` (${data.failureCategory})`
+          : '';
+      return {
+        id: stamp,
+        timestamp: stamp,
+        kind: 'feedback',
+        text: `[feedback] ${validator} ${passed ? '✓' : `✗${category}`}`,
+      };
+    }
+    case 'guardrail:triggered': {
+      const rule = typeof data.rule === 'string' ? data.rule : '?';
+      const command = typeof data.command === 'string' ? data.command : '';
+      const level = typeof data.level === 'string' ? data.level : 'warn';
+      return {
+        id: stamp,
+        timestamp: stamp,
+        kind: 'guardrail',
+        text: `[guardrail] ${level}: ${rule}${command !== '' ? ` — ${command}` : ''}`,
+      };
+    }
+    case 'round:changed': {
+      const current = typeof data.currentRound === 'number' ? data.currentRound : 0;
+      const max = typeof data.maxRounds === 'number' ? data.maxRounds : 0;
+      return {
+        id: stamp,
+        timestamp: stamp,
+        kind: 'round',
+        text: `[round] ${current}/${max === 0 ? '∞' : max}`,
+      };
+    }
+    case 'session:status': {
+      const status = typeof data.status === 'string' ? data.status : '?';
+      return { id: stamp, timestamp: stamp, kind: 'status', text: `[session] ${status}` };
+    }
+    default:
+      return null;
   }
 }

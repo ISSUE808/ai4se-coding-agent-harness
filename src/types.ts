@@ -38,6 +38,13 @@ export interface Session {
   model?: string;
   messages: Message[];
   tokenCount: number;
+  /**
+   * Actual API token usage accumulated across rounds (KNOWN_ISSUES 9 Token
+   * 明细). `undefined` until a provider reports usage (MockProvider fixtures
+   * may omit it). Distinct from `tokenCount` — that is the memory layer's
+   * estimated context size; this is what the LLM API billed.
+   */
+  tokenUsage?: TokenUsage;
   createdAt: string;
   updatedAt: string;
 }
@@ -80,9 +87,21 @@ export interface LLMProvider {
   complete(messages: Message[], tools: Tool[]): Promise<LLMResponse>;
 }
 
+/** Actual token billing from one LLM call (KNOWN_ISSUES 9 Token 明细). */
+export interface TokenUsage {
+  /** Input (prompt) tokens. */
+  prompt: number;
+  /** Output (completion) tokens. */
+  completion: number;
+  /** Prompt tokens served from the provider's prompt cache, if reported. */
+  cached?: number;
+}
+
 export interface LLMResponse {
   content: string | null;
   toolCalls?: { id?: string; name: string; arguments: Record<string, unknown> }[];
+  /** Billing usage reported by the provider for this call; may be absent. */
+  usage?: TokenUsage;
 }
 
 export interface Validator {

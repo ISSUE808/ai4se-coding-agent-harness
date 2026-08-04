@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  clearSessions,
   createSession,
   deleteKey,
+  deleteSession,
   fetchAvailableModels,
   fetchConfig,
   fetchFsBrowse,
@@ -311,5 +313,23 @@ describe('api client', () => {
     const [url] = fetchMock.mock.calls[0];
     expect(new URL(url).pathname).toBe('/api/fs/browse');
     expect(new URL(url).searchParams.get('path')).toBe('C:\\Users');
+  });
+
+  it('deleteSession DELETEs /api/sessions/:id (KNOWN_ISSUES 9)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ removed: true }));
+    const result = await deleteSession('abc-123');
+    expect(result.removed).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/sessions/abc-123');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('clearSessions DELETEs /api/sessions and reports kept running ids (KNOWN_ISSUES 9)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ deleted: 3, keptRunning: ['live-1'] }));
+    const result = await clearSessions();
+    expect(result).toEqual({ deleted: 3, keptRunning: ['live-1'] });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(new URL(url).pathname).toBe('/api/sessions');
+    expect(init.method).toBe('DELETE');
   });
 });

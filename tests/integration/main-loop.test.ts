@@ -295,6 +295,31 @@ describe('Agent Main Loop (integration)', () => {
     expect(stored.messages.some((m) => m.role === 'tool' && m.metadata?.toolName === 'read_file')).toBe(true);
   });
 
+  it('累积每轮 LLM 的 billed usage 到会话（KNOWN_ISSUES 9 Token 明细）', async () => {
+    const harness = createTestHarness(
+      [
+        {
+          toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }],
+          usage: { prompt: 100, completion: 20, cached: 60 },
+        },
+        { content: 'done', usage: { prompt: 150, completion: 30 } },
+      ],
+      workspaceRoot,
+    );
+    const session = await harness.run('读取 test.ts 文件');
+    expect(session.status).toBe('completed');
+    expect(session.tokenUsage).toEqual({ prompt: 250, completion: 50, cached: 60 });
+  });
+
+  it('provider 无 usage 时不创建 tokenUsage 字段（KNOWN_ISSUES 9）', async () => {
+    const harness = createTestHarness(
+      [{ content: 'done' }, { content: 'done again' }],
+      workspaceRoot,
+    );
+    const session = await harness.run('随便');
+    expect(session.tokenUsage).toBeUndefined();
+  });
+
   it('共享 HITLManager 的两个 loop：各会话 warn 独立 pending，互不阻塞（KNOWN_ISSUES 6）', async () => {
     // Production shape: one HITLManager injected into every loop. Before
     // keying, session B's warn hit "HITL busy" (global single state) and was

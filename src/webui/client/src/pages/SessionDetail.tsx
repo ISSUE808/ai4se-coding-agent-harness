@@ -51,6 +51,7 @@ import {
   type SessionControlAction,
   type SessionDetail,
 } from '../lib/api';
+import type { TerminalLine } from '../lib/ws-state';
 import { formatTokens, type SessionStatus } from '../lib/format';
 import {
   aggregateFiles,
@@ -788,7 +789,7 @@ export default function SessionDetail() {
                   </div>
                 )}
               </>
-            ) : (
+            ) : events.terminal.length === 0 ? (
               <div
                 style={{
                   padding: designTokens.spacing[6],
@@ -798,7 +799,32 @@ export default function SessionDetail() {
                 }}
               >
                 <Terminal size={20} style={{ margin: '0 auto 8px', display: 'block' }} />
-                终端流将在 Task 19 接入 agent 主循环后提供。
+                暂无终端输出 — 运行中产生的工具调用、反馈与护栏事件会实时显示在这里。
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: `${designTokens.spacing[3]} ${designTokens.spacing[4]}`,
+                  fontFamily: designTokens.typography.fontFamily.mono,
+                  fontSize: designTokens.typography.codeSize.sm,
+                  lineHeight: 1.75,
+                  overflowWrap: 'anywhere',
+                }}
+              >
+                {events.terminal.map((line) => (
+                  <div key={line.id} style={{ display: 'flex', gap: designTokens.spacing[2] }}>
+                    <span
+                      style={{
+                        color: designTokens.colors.textFaint,
+                        flexShrink: 0,
+                        userSelect: 'none',
+                      }}
+                    >
+                      {formatDateTime(line.timestamp)}
+                    </span>
+                    <span style={{ color: terminalKindColor(line.kind) }}>{line.text}</span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -1104,18 +1130,35 @@ export default function SessionDetail() {
               )}
             </ContextSection>
 
-            {/* token usage */}
+            {/* token usage — billed totals (KNOWN_ISSUES 9 明细) plus the
+                memory layer's context estimate */}
             <ContextSection label="Token 使用">
-              <span
-                style={{
-                  fontFamily: designTokens.typography.fontFamily.mono,
-                  fontSize: designTokens.typography.fontSize.md,
-                  fontVariantNumeric: 'tabular-nums',
-                  color: designTokens.colors.text,
-                }}
-              >
-                {formatTokens(session?.tokenCount ?? 0)}
-              </span>
+              {session?.tokenUsage !== undefined ? (
+                <>
+                  <ContextKV k="输入" v={formatTokens(session.tokenUsage.prompt)} mono />
+                  <ContextKV k="输出" v={formatTokens(session.tokenUsage.completion)} mono />
+                  {session.tokenUsage.cached !== undefined && (
+                    <ContextKV k="缓存命中" v={formatTokens(session.tokenUsage.cached)} mono />
+                  )}
+                  <ContextKV
+                    k="总计"
+                    v={formatTokens(session.tokenUsage.prompt + session.tokenUsage.completion)}
+                    mono
+                  />
+                  <ContextKV k="上下文估计" v={formatTokens(session?.tokenCount ?? 0)} mono vColor={designTokens.colors.textMuted} />
+                </>
+              ) : (
+                <span
+                  style={{
+                    fontFamily: designTokens.typography.fontFamily.mono,
+                    fontSize: designTokens.typography.fontSize.md,
+                    fontVariantNumeric: 'tabular-nums',
+                    color: designTokens.colors.text,
+                  }}
+                >
+                  {formatTokens(session?.tokenCount ?? 0)}
+                </span>
+              )}
             </ContextSection>
 
             {/* runtime info */}
@@ -1589,6 +1632,22 @@ function formatDurationBetween(fromIso: string, toIso: string): string {
   const m = String(Math.floor(total / 60)).padStart(2, '0');
   const s = String(total % 60).padStart(2, '0');
   return `${m}:${s}`;
+}
+
+/** Terminal line color by event kind (KNOWN_ISSUES 9 终端 tab). */
+function terminalKindColor(kind: TerminalLine['kind']): string {
+  switch (kind) {
+    case 'tool':
+      return designTokens.colors.primary;
+    case 'guardrail':
+      return designTokens.colors.danger;
+    case 'status':
+      return designTokens.colors.success;
+    case 'round':
+      return designTokens.colors.warning;
+    default:
+      return designTokens.colors.textMuted;
+  }
 }
 
 function ContextSection({ label, children }: { label: string; children: ReactNode }) {

@@ -16,6 +16,8 @@ export interface SessionSummary {
   /** Session-level model override (Task 26); absent = follow the config default. */
   model?: string;
   tokenCount: number;
+  /** Billed token usage accumulated across rounds (KNOWN_ISSUES 9). */
+  tokenUsage?: { prompt: number; completion: number; cached?: number };
   createdAt: string;
   updatedAt: string;
 }
@@ -149,6 +151,25 @@ export async function updateSessionModel(sessionId: string, model: string): Prom
     `/api/sessions/${encodeURIComponent(sessionId)}/model`,
     jsonInit('PATCH', { model }),
   );
+}
+
+/** KNOWN_ISSUES 9: delete one session (running sessions are refused with 409). */
+export async function deleteSession(sessionId: string): Promise<{ removed: boolean }> {
+  return request<{ removed: boolean }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}`,
+    jsonInit('DELETE', undefined),
+  );
+}
+
+export interface ClearSessionsResult {
+  deleted: number;
+  /** Running sessions are kept — ids reported so the UI can explain. */
+  keptRunning: string[];
+}
+
+/** KNOWN_ISSUES 9: bulk clear — deletes every non-running session. */
+export async function clearSessions(): Promise<ClearSessionsResult> {
+  return request<ClearSessionsResult>('/api/sessions', jsonInit('DELETE', undefined));
 }
 
 export type SessionControlAction = 'pause' | 'resume' | 'stop';

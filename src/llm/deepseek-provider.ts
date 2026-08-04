@@ -177,9 +177,29 @@ export class DeepSeekProvider implements LLMProvider {
       }));
     }
 
+    // KNOWN_ISSUES 9 Token 明细: surface the provider's billing usage.
+    // DeepSeek answers the OpenAI-compatible `usage` object; the cached-prompt
+    // count is optional (DeepSeek reports `prompt_cache_hit_tokens`).
+    const u = response.usage as {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      prompt_cache_hit_tokens?: number;
+    } | undefined;
+    const usage =
+      u && typeof u.prompt_tokens === 'number' && typeof u.completion_tokens === 'number'
+        ? {
+            prompt: u.prompt_tokens,
+            completion: u.completion_tokens,
+            ...(typeof u.prompt_cache_hit_tokens === 'number'
+              ? { cached: u.prompt_cache_hit_tokens }
+              : {}),
+          }
+        : undefined;
+
     return {
       content: choice?.content ?? null,
       toolCalls,
+      ...(usage !== undefined ? { usage } : {}),
     };
   }
 }
