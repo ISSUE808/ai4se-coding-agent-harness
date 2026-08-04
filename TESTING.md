@@ -15,15 +15,19 @@ cd ".claude/worktrees/enhance"
 # 1) 构建（dist 要包含最新改动）
 npm run build
 
-# 2) 启动 WebUI（终端 A，保持运行）
+# 2) 启动后端（终端 A，保持运行）——只挂 API + WS（/api、/ws），不服务页面
 node dist/cli/index.js start --web
-# → 打开 http://localhost:3000，右上角确认模型为 deepseek
 
-# 3) 准备测试工作区（在项目根下，之后所有测试文件放这里）
+# 3) 启动 client dev server（终端 B，保持运行）——Vite 代理 /api、/ws 到后端
+cd src/webui/client && npm run dev
+# → 打开 http://localhost:5173（Vite 默认端口；若被占用会顺延 5174…），
+#   右上角确认模型为 deepseek。3000 是后端端口，浏览器只访问 5173。
+
+# 4) 准备测试工作区（在项目根下，之后所有测试文件放这里）
 mkdir -p test-verify
 ```
 
-> **CLI 直跑**（B8 需要）：另开终端 B，`cd .claude/worktrees/enhance` 后用
+> **CLI 直跑**（B8 需要）：另开终端 C，`cd .claude/worktrees/enhance` 后用
 > `node dist/cli/index.js start "任务"` 跑单次任务。
 
 ---
