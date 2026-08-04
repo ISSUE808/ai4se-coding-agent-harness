@@ -824,3 +824,20 @@
   - **"无配置跳过"的既有模式有盲区**：eslint/tsc 只查配置文件存在性——tsc 有 tsconfig 但没装 TypeScript 时 `npx tsc` 仍会下载废弃包。环境前提检查要查 **bin 存在性**（配置 + 运行时两层），"统一封装"不是复制模式而是抽象出共享函数（hasLocalBin）
   - **注入参数一律追加在尾部**：3 个 validator 构造器 (exec, hasConfig) → (exec, hasConfig, hasBin)，14 个调用点 grep 确认无遗漏；真实默认值路径（无参构造）由集成测试覆盖（裸临时目录 hasConfig 先短路）
   - **skip 与失败语义分层**：校验器层 skip（passed:true，环境噪音不反馈给 LLM 当代码错误）；工具层明确失败（success:false + 可操作错误）——同一前提检查，两层语义不同，因为消费者不同（校验器结果进反馈闭环、工具结果给 agent 决策）
+
+## 2026-08-04 16:05 KNOWN_ISSUES 5 修复：system prompt 注入平台感知
+
+- **触发技能**：`test-driven-development`（红 → 绿）、`requesting-code-review`（评审 a1e44df8）
+- **Subagent**：评审 a1e44df8
+- **Prompt 要点**：用户"继续"推进 KNOWN_ISSUES 5（Windows 工具差异——agent 调 `xxd` 必失败）。调研发现：harness 原本**无主 system prompt**（只有 HITL 语义说明一条 system 消息），LLM 只能靠踩坑学习平台限制。方向选 KNOWN_ISSUES 建议第一项（system prompt 注入平台感知）而非工具层适配——环境知识由 harness 写死注入，不靠模型经验
+- **产出**：
+  - 新建 `src/utils/platform-guidance.ts`：`platformGuidance(platform)` 纯函数——win32 返回多行提示（`xxd`→`od -A x -t x1z`、`command -v` 确认、Git Bash 存在性限定、PowerShell 5.1 UTF-16LE 重定向、裸 npx 废弃包陷阱），linux/darwin 返回 undefined（零噪音）
+  - main-loop.ts run() 初始化注入 system 消息（HITL 说明之后、round 循环之前）——**幂等守卫**（评审发现）：检查 session.messages 是否已含同条 guidance，防 resume/restart 累积（CLI 恢复、WebUI /resume、模型/供应商切换重启都会二次 run）
+  - 测试: 红 → 绿：platformGuidance 单测 ×4（win32 内容断言 + POSIX undefined）+ 集成 ×2（注入可见性 + 二次 run 幂等回归，skipIf 非 win32 保 CI Linux 可移植）
+  - 评审修复：Important×1（双写 vs HITL memory-only 并不同构 → resume seed 路径重复 → 幂等守卫 + 回归测试）、Minor×4（Git Bash 无条件断言改为条件限定、PowerShell 加 5.1 限定、幂等回归测试、tsbuildinfo 删除）
+  - 全量：主套件 587/587（+5）、client 199/199、双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **"新消息注入"必须考虑 resume 路径的幂等**：run() 有 options.session 重入路径（CLI 恢复 / WebUI 重启 / 模型切换），注入任何 system 消息都要先查 session.messages——否则每次 run 累积一条且 resume seed 后 LLM 看到双份。评审抓的正是"我声称与 HITL 模式一致、实际并不一致"（HITL 是 memory-only 单写，我用了双写）
+  - **环境知识写死进 harness 注入，比让模型踩坑学习便宜**：xxd→od、PowerShell UTF-16LE、npx 废弃包——三条都是真实测试烧过轮次的教训，固化为 platformGuidance 后每条会话首次 LLM 调用即见，零试错成本；纯函数 + 平台参数注入使测试与 CI 平台无关
+  - **文案里的每个事实断言都要有出处**：评审逐条核对了 Git Bash 条件限定（resolveShell 有回退）、PowerShell 5.1 限定（pwsh 7 默认 UTF-8）——给 LLM 的环境说明错了就是新的误导来源，与错误代码同罪
