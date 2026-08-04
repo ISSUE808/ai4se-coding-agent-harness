@@ -1031,3 +1031,18 @@
   - **分发体积的隐藏膨胀在 devDependencies**：electron-builder 对 extraResources 不剪枝，原样复制 73MB node_modules（typescript 23MB + vitest 3MB 进用户分发包）。npm prune --omit=dev 在组装目录跑（需先复制 package.json+lockfile）→ 73→20MB
   - **extraResources 布局验证点**：win-unpacked/resources 下应只有 app.asar + backend/（无 node_modules 顶层混入）；keytar.node 在 build/Release/ 里 = 原生模块正确出 asar
   - **分类器不可用的协作模式**：文件编辑（Edit/Write）不需要分类器——主 agent 可以继续改代码；只有 Bash 命令需要用户终端。分工清晰即可推进
+
+
+## 2026-08-05 01:10 分发功能 Task 6：README（Task 22 顺带落地）
+
+- **触发技能**：`subagent-driven-development`（implementer a09d50b1）、`requesting-code-review`（评审 a139c6f5）
+- **Subagent**：implementer a09d50b1（sonnet）
+- **Prompt 要点**：需求源 = task-6-brief.md；README 正文逐字、目录结构/已知限制从现有文档提取不新造；不写凭据细节
+- **产出**：
+  - Commits: `9d241c8`（README）、`946386c`（产物路径修正）
+  - 涉及文件: README.md（新建 57 行）
+  - 测试: 无（文档任务）；命令逐一核验 + markdown 渲染检查
+- **人工干预**：修正 brief 笔误 desktop/dist → desktop/build（Task 5 已改输出目录，README 代码块漏改——implementer 按"逐字使用"保留并报告，主 agent 修正）
+- **教训**：
+  - **文档里的产物路径要与实现同步**：Task 5 改 `directories.output: build` 时 Task 6 的 README 代码块还写 desktop/dist——跨任务的一致性靠 implementer 报告顾虑 + 主 agent 修正；写计划时文档与配置的路径引用应一次写对
+  - **文档任务也走完整评审**：README 的命令核验（npm link bin 指向、vite 代理配置）由评审独立复核——文档错误同样误导用户
