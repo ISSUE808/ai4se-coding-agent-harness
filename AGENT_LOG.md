@@ -1063,3 +1063,18 @@
   - **最终评审能抓到单 task 评审漏掉的跨层缺陷**：A（免 Node）是 spec §5.4 的判定标准，Task 3-5 的单 task 评审都看了局部正确（cmd:'node' 在开发机测试全绿）——最终评审以"用户验收标准"为透镜才暴露。验收标准（"对方机器无需装 Node"）必须贯穿每个 task 的实现验证
   - **Windows 与 POSIX 的路径断言差异直到 CI 视角才暴露**：`path.join('C:/fake/project', ...)` 在 Windows 上恰好等于 resolve 结果——本地全绿掩盖了 CI 必红。测试期望值用 path.resolve 构造（与实现同一表达式）是稳定写法
   - **错误路径必须显式退出**：无窗口场景 window-all-closed 不触发——showError 后不 onExit 就是僵尸应用。错误分支的退出接线（cleanup → onExit → app.quit）与正常路径同样重要
+
+
+## 2026-08-05 02:15 分发功能收尾：ABI 主张修正 + CI desktop job（合并前）
+
+- **触发技能**：`subagent-driven-development`（收尾 ae23e31f + 评审 aad499ac + fix a3cae12d）
+- **Subagent**：ae23e31f（收尾）、aad499ac（评审）、a3cae12d（fix）
+- **Prompt 要点**：收尾 = resolveNodePath（dev ABI）+ CI desktop job；评审发现 Important（ABI 主张错误）→ fix = docstring 如实化 + env 条件化
+- **产出**：
+  - Commits: `e20d6dd`（resolveNodePath）、`c0a6fdb`（CI desktop job）、`5339d2c`（ABI 主张修正 + ELECTRON_RUN_AS_NODE 条件化）
+  - 测试: desktop 14/14、双 tsc 干净
+- **人工干预**：KNOWN_ISSUES 新增 #12（打包 keytar ABI 缺口 + 两条修复路径）；**本条更正**「最终全分支评审 + 修复波」条目里的错误主张——「@electron/rebuild 已按 electron ABI 重编译原生模块」不成立（见教训）
+- **教训**：
+  - **「electron-builder 会 rebuild 原生模块」是我从打包日志（executing @electron/rebuild）做的过度推断**：实际 @electron/rebuild 只重建 **app 目录**（desktop/，零依赖）的依赖，extraResources 内容是 verbatim 复制。评审用管线事实（prepare-resources 的 cpSync + npm prune）逐层证伪。写 ABI/运行时论证要追到管线每一层的实际行为，日志关键词不等于行为
+  - **修复链要把错误主张同步从文档里清掉**：修 ABI 时我把「天然匹配」写进了 docstring 和 AGENT_LOG——错误论证被固化后要再一轮评审才暴露。论证、docstring、日志三者要同步诚实化
+  - **CI job 的 node 版本选择有隐藏语义**：desktop job 用 Node 20 对齐 electron 33 内嵌 Node 20.18——CI 环境选择也可以成为打包机的 ABI 锚点

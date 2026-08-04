@@ -18,6 +18,11 @@
 - Task 21 分发（`npm install -g` + `docker build && docker run`）
 - Task 22 文档（README）
 
+### 12. 打包产物 keytar ABI 依赖打包机 Node 版本 [设计]
+- **背景**：desktop 打包（分发功能 Task 5）的 backend/node_modules 由 `prepare-resources.mjs` verbatim 复制——keytar 按**打包机系统 Node** ABI 编译（本机 v24/ABI 137）；electron-builder 的 `@electron/rebuild` 只重建 desktop 项目自身依赖（desktop 零 dependencies，无物可重建），不碰 extraResources。打包应用用 electron.exe run-as-node（内嵌 Node 20.18/ABI 115）加载 keytar.node → **版本不符时加载失败 → 按 SPEC §3.7 静默降级 encrypted-file**，用户已有的系统 keychain 密钥读不到（演示机现场 key update 存 encrypted-file 仍可用）。
+- **建议**：① 钉打包机 Node 20.x（ABI 115 与 electron 33 一致）② 或 `prepare-resources.mjs` 对 backend-pack 跑 `@electron/rebuild`（需 VS Build Tools）。
+- **位置**：`desktop/prepare-resources.mjs`、`desktop/src/lifecycle.ts`（docstring 已如实标注，见 commit `5339d2c`）。
+
 ### 11. 目录选择器整机浏览端点放开（安全取舍，接受）[设计]
 - **背景**：用户需求"目录选择器可以选择整台电脑的任何目录"→ 新增 `GET /api/fs/browse` 无授权浏览端点；`/api/fs/tree` 保持授权根不变。
 - **评估**：任何能访问 WebUI 的客户端可枚举本机目录结构（目录/文件名、类型、大小）——仅**元数据**、不返回文件内容，与本地 CLI `ls` 等价的信息暴露；配合用户在场监督模式（创建会话时选中的目录成为授权根），风险可接受。
