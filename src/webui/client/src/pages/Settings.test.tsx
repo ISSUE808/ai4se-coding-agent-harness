@@ -210,7 +210,7 @@ describe('Settings', () => {
       agent: { maxRounds: 10 },
     });
     render(<Settings />);
-    const editor = await screen.findByLabelText('配置编辑器');
+    const editor = (await screen.findByLabelText('配置编辑器')) as HTMLTextAreaElement;
     // 等 load() 完成（编辑器被 fetchConfig 内容填充）——否则保存可能读到被
     // 异步 load 覆盖的完整 config（CI 竞态：参数变成 maxRounds:3 的完整 config）
     await waitFor(() => expect(editor.value).toContain('deepseek'));
