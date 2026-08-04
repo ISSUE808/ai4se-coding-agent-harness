@@ -66,3 +66,76 @@ export function killProcessTree(
 ): void {
   spawnFn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
 }
+
+export interface DesktopLifecycleDeps {
+  projectRoot: string;
+  resourcesPath?: string;
+  /** 打开主窗口（url 就绪后调用）。返回可被 close 的窗口句柄（可为 undefined）。 */
+  createWindow: (url: string) => void;
+  /** spawn 后端进程，返回 pid 或 null（spawn 失败）。 */
+  spawnBackend: (cmd: { cmd: string; args: string[]; env: Record<string, string>; cwd: string }) => number | null;
+  /** 端口探测（默认 waitForPort）；测试注入序列。 */
+  waitForPort?: (url: string, timeoutMs: number) => Promise<void>;
+  /** 杀进程树（默认 killProcessTree）。 */
+  killProcessTree?: (pid: number) => void;
+  /** 后端启动失败/崩溃时显示错误（窗口内错误页）。 */
+  showError: (message: string) => void;
+  /** 后端被主动关闭时回调（退出流程）。 */
+  onExit?: () => void;
+}
+
+export interface DesktopLifecycle {
+  /** 关闭：杀后端进程树 + onExit。窗口关闭事件接线到它。 */
+  close: () => void;
+}
+
+const BACKEND_URL = 'http://localhost:3000';
+const PROBE_TIMEOUT_MS = 1500;
+const START_TIMEOUT_MS = 30000;
+
+/**
+ * 主进程生命周期（spec 2026-08-04 §5.2）：
+ * 1. 短探 :3000——已就绪（既有实例）→ 直接开窗，不重复 spawn
+ * 2. 未就绪 → spawn 后端（生产模式）→ 轮询就绪（30s）→ 开窗
+ * 3. 等待超时 → showError（错误页），不开窗
+ * 4. close() → 杀后端进程树 + onExit
+ */
+export async function runDesktopLifecycle(deps: DesktopLifecycleDeps): Promise<DesktopLifecycle> {
+  const waitFor = deps.waitForPort ?? ((url: string, timeoutMs: number) => waitForPort(url, timeoutMs));
+  const kill = deps.killProcessTree ?? killProcessTree;
+  let backendPid: number | null = null;
+
+  let ready = false;
+  try {
+    await waitFor(`${BACKEND_URL}/api/sessions/`, PROBE_TIMEOUT_MS);
+    ready = true;
+  } catch {
+    // 未就绪 → 启动后端
+  }
+
+  if (!ready) {
+    const backendDir = resolveBackendDir({ resourcesPath: deps.resourcesPath, projectRoot: deps.projectRoot });
+    const cmd = buildBackendCommand(backendDir);
+    backendPid = deps.spawnBackend(cmd);
+    try {
+      await waitFor(`${BACKEND_URL}/api/sessions/`, START_TIMEOUT_MS);
+      ready = true;
+    } catch (err) {
+      deps.showError(`后端启动失败：${err instanceof Error ? err.message : String(err)}`);
+      return { close: () => { /* 后端从未就绪，无进程可杀 */ } };
+    }
+  }
+
+  if (ready) {
+    deps.createWindow(BACKEND_URL);
+  }
+
+  return {
+    close: () => {
+      if (backendPid !== null) {
+        kill(backendPid);
+      }
+      deps.onExit?.();
+    },
+  };
+}
