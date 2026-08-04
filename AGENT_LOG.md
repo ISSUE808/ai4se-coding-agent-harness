@@ -841,3 +841,19 @@
   - **"新消息注入"必须考虑 resume 路径的幂等**：run() 有 options.session 重入路径（CLI 恢复 / WebUI 重启 / 模型切换），注入任何 system 消息都要先查 session.messages——否则每次 run 累积一条且 resume seed 后 LLM 看到双份。评审抓的正是"我声称与 HITL 模式一致、实际并不一致"（HITL 是 memory-only 单写，我用了双写）
   - **环境知识写死进 harness 注入，比让模型踩坑学习便宜**：xxd→od、PowerShell UTF-16LE、npx 废弃包——三条都是真实测试烧过轮次的教训，固化为 platformGuidance 后每条会话首次 LLM 调用即见，零试错成本；纯函数 + 平台参数注入使测试与 CI 平台无关
   - **文案里的每个事实断言都要有出处**：评审逐条核对了 Git Bash 条件限定（resolveShell 有回退）、PowerShell 5.1 限定（pwsh 7 默认 UTF-8）——给 LLM 的环境说明错了就是新的误导来源，与错误代码同罪
+
+## 2026-08-04 15:15 KNOWN_ISSUES 9.6 修复：run_test 剥离 ANSI 后解析
+
+- **触发技能**：`test-driven-development`（红 → 绿）、`requesting-code-review`（评审 af1d1f03）
+- **Subagent**：评审 af1d1f03
+- **Prompt 要点**：用户"继续"推进 KNOWN_ISSUES 9.6（run_test 无 pattern 行为不明确）。根因调查（systematic-debugging）：真实抓取 `npx vitest run` 输出（cat -v 看不可见字符）发现 vitest v2.1.9 **pipe 下仍输出 ANSI SGR 颜色码**（`ESC[32m✓ESC[39m path`、`ESC[1mESC[32m48 passedESC[39m`）——旧正则假设 ✓ 后直接是文件名、summary 数字直接跟在 Test Files 后，全部匹配失败 → fallback 也失败 → 恒返回 `{passed:false, results:[]}`，**587 个测试全过也报失败**。现象"无 pattern 时"最明显只是巧合（summary 行多），实际任何调用都解析失败
+- **产出**：
+  - `src/tools/run-test.ts`：① `stripAnsi()` 解析前剥离 CSI 序列（`/\x1b\[[0-9;?]*[a-zA-Z]/g`，`?` 覆盖私有序列）——根因修复 ② summary 行解析重构：`2 failed | 46 passed (48)` → false、`48 passed (48)` → true、全 failed → false ③ 解析完全失败（新版本/语言/包装器）→ output 附 `rawOutput`（截断 4000 + 显式标记）替代静默 `{passed:false}` ④ output 附 `command` 字段（agent 知道实际执行了什么）
+  - 测试: 红 3 → 绿：真实 ANSI per-file 行 fixture、仅 summary 行、rawOutput 回传；CR 后 +3：skipped 行误报回归（红 → 绿）、全 failed summary、4000 截断边界
+  - 评审：Verdict 正确——fixture 与 vitest 2.1.9 dist 内部渲染（`testPass="✓"`、`suiteFail="❯"`、dim 包裹计数）逐一核实。**Important×1**：`❯ path (5 tests | 1 failed | 2 skipped)` 的 `| 2 skipped` 后缀使正则不匹配失败行——若其他文件 ✓ 行匹配则短路 `passed:true`（有失败文件也报全过）→ 修复：per-file 分支也 consult summary 行 `summaryFailed` 兜底。Minor×3：截断边界补测、all-failed summary 补测、stripAnsi 加 `?`、`(\d+)ms` 降级注释
+  - 全量：主套件 593/593（+6）、client 199/199、双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **解析类工具的 fixture 必须来自真实输出**：旧测试用手写理想格式（无 ANSI）所以全绿，真实世界一行颜色码就打穿。这次 fixture 直接从真实 `npx vitest run | cat -v` 抓取，评审还对照 vitest dist 源码验证了渲染逻辑——测试诚实性的标准是"fixture 与真实输出逐字节同构"，不是"测试覆盖了代码路径"
+  - **聚合判定不能只看单层证据**：per-file 行最详细但正则可能漏（skipped 后缀），summary 行最可靠但无细节——两层都要读，per-file 通过后仍要 summary 兜底防误报。单层短路（`results.length > 0` 就返回）正是旧代码的隐藏缺陷
+  - **execSync 抛错时 stdout/stderr 是 Error 的附加属性**，message 只有 stderr 截断——catch 分支必须拼 `(execError.stdout || '') + (execError.stderr || '')` 才能拿到完整输出喂给解析器，否则失败场景解析永远是空

@@ -32,11 +32,6 @@
 | Settings「清空会话」danger-zone | 按钮 disabled（"Task 19 后提供"） | 新增 DELETE 端点（会话批量清空） |
 | 上下文栏 Token 明细 | 仅总计 | 后端提供输入/输出/缓存命中统计 |
 
-### 9.6 run_test 无 pattern 参数行为不明确（低）[实测]
-- **现象**：`run_test` 无参数调用返回 `{passed:false, results:[]}`（无 pattern 匹配），agent 困惑后自适应改用 `run_shell` 直跑 vitest 成功——工具默认行为（无 pattern 时跑全部？）与反馈信息不清晰。
-- **建议**：`run_test` 无 pattern 时明确跑全部测试并解析结果（或返回可操作的错误信息说明默认行为）；结果解析失败时输出原始 stdout 帮助 agent 理解。
-- **位置**：`src/tools/run-test.ts`。
-
 ### 10. 计划内未完成（Task 20/21/22）[计划内]
 - Task 20 机制演示（§A.6 三项 mock 演示）
 - Task 21 分发（`npm install -g` + `docker build && docker run`）
@@ -94,7 +89,8 @@
 | **CLI 模式 HITL 暂停后无恢复指引**（`start <task>` 直跑触发 maxRounds 升级暂停后进程退出，仅输出 `[session] paused`——升级暂停无 pending command，stdin 交互循环不触发，用户不知如何恢复）[实测] | runStartTask 结束时 status=paused 输出恢复指引：重跑（提高 maxRounds）或改用 `codeharness start --web`（WebUI 批准恢复，`continueSession` 的 `maxRounds += currentRound` 路径已核实）；测试断言指引含 `--web`/`maxRounds` | `07a1111` |
 | **read_file 无编码检测**（UTF-16 含 BOM 文件按 UTF-8 读取乱码——PowerShell 5.1 重定向默认写 UTF-16LE 触发；无 BOM 的 GBK 静默乱码）[实测] | BOM 驱动的编码探测：UTF-8（剥 BOM）/UTF-16LE/BE（TextDecoder fatal，奇数长度与孤立代理 → per-file error）/UTF-32LE/BE（手写解码，%4 校验 + 码点范围校验）全覆盖；无 BOM → `TextDecoder('utf-8', {fatal:true})` 严格校验，失败返回带 `file`/`iconv` 兜底指引的明确错误（"正确或明确失败优先"——无 BOM 编码不可判定，不做猜测；对比 Claude Code 官方是静默 U+FFFD 乱码）。评审发现并修复静默损坏路径：UTF-16 奇数长度丢字节、UTF-32 截断、孤立代理。测试 +12（红→绿） | `81f1aab` |
 | **run_test/testRunner 无环境前提检查**（run_test 工具与 TestResultValidator 在无 vitest 环境触发 `npx vitest` 下载；`npx tsc` 在无本地 TypeScript 时下载废弃同名包 `tsc@2.0.4`、`npx eslint` 同理——环境噪音污染反馈闭环）[实测] | 统一"环境前提检查"模式（`src/utils/env-prereq.ts` `hasLocalBin`，覆盖 POSIX sh / .cmd / .ps1 三种 bin 变体）：① run_test 无本地 vitest → `success:false` + 可操作错误（`npm i -D vitest` 指引）② TestResultValidator 无 vitest → passed:true + skipped ③ eslint/tsc 有配置文件但无本地 bin → skip（`npx tsc` 的废弃包陷阱根除；npx 保留，前置 bin 检查保证 npx 只解析本地）。run_shell 未拦（npx 是 agent 合法工具，守卫只落在确定性代码路径）。测试 +8（4 skip 红→绿 + 4 hasLocalBin 直测）；评审 Minor×4 全部处理（清理 try/finally、.ps1 直测、tsbuildinfo 删除、import 顺序） | `08b5469` |
-| **Windows 工具差异**（agent 调用 `xxd`（Unix 工具）在 Windows 上不存在——真实执行失败并消耗轮次；调查确认 harness 原本无主 system prompt，LLM 只能靠踩坑学习平台限制）[实测] | 新建 `src/utils/platform-guidance.ts`：`platformGuidance(platform)` 纯函数，win32 返回环境提示（xxd→`od -A x -t x1z` 替代、`command -v` 确认、Git Bash 存在性限定、PowerShell 5.1 UTF-16LE、裸 npx 废弃包陷阱），POSIX 返回 undefined 零噪音；main-loop run() 初始化注入 system 消息（幂等守卫防恢复/重启累积——评审发现双写会在 resume 路径每条 guidance 重复 seed 两次）。测试 +5（4 单测 + 2 集成含幂等回归，skipIf 非 win32 保 CI 可移植）；评审 Important×1（幂等守卫）+ Minor×4 全部处理 | `[未提交]` |
+| **Windows 工具差异**（agent 调用 `xxd`（Unix 工具）在 Windows 上不存在——真实执行失败并消耗轮次；调查确认 harness 原本无主 system prompt，LLM 只能靠踩坑学习平台限制）[实测] | 新建 `src/utils/platform-guidance.ts`：`platformGuidance(platform)` 纯函数，win32 返回环境提示（xxd→`od -A x -t x1z` 替代、`command -v` 确认、Git Bash 存在性限定、PowerShell 5.1 UTF-16LE、裸 npx 废弃包陷阱），POSIX 返回 undefined 零噪音；main-loop run() 初始化注入 system 消息（幂等守卫防恢复/重启累积——评审发现双写会在 resume 路径每条 guidance 重复 seed 两次）。测试 +5（4 单测 + 2 集成含幂等回归，skipIf 非 win32 保 CI 可移植）；评审 Important×1（幂等守卫）+ Minor×4 全部处理 | `146cb75` |
+| **run_test 无 pattern 参数行为不明确**（真实抓取 vitest v2.1.9 输出发现根因：**pipe 下仍输出 ANSI SGR 颜色码**——`\x1b[32m✓\x1b[39m path`、`\x1b[1m\x1b[32m48 passed\x1b[39m`，旧正则假设 ✓ 后直接是文件名、summary 数字直接跟在 Test Files 后，全部匹配失败 → 恒返回 `{passed:false, results:[]}`——587 测试全过也报失败，agent 困惑后改用 run_shell 直跑）[实测] | ① 解析前 `stripAnsi()` 剥离 CSI 序列（`\x1b\[[0-9;?]*[a-zA-Z]`，`?` 覆盖私有序列）——根因修复 ② summary 行解析重构（`2 failed \| 46 passed (48)`→false、`48 passed (48)`→true、全 failed→false）③ 完全无法解析（新版本/语言/包装器）→ output 附 `rawOutput`（截断 4000 + 显式标记），不再静默报 `{passed:false}` ④ output 附 `command` 字段（agent 知道实际执行了什么，无 pattern 即跑全部）。测试 +6（fixture 来自真实 `npx vitest run \| cat -v` 抓取 + 评审补 3 边界：**skipped 后缀行误报 passed**（`(5 tests \| 1 failed \| 2 skipped)` 使正则不匹配失败行、其他 ✓ 行短路 passed:true——Important 已修：per-file 分支也 consult summary 行）、全 failed summary、4000 截断）；评审对照 vitest 2.1.9 dist 源码逐一核实 fixture 真实性 | `4da212b` `22cc72a` |
 
 ---
 
