@@ -124,10 +124,16 @@ describe('Agent Main Loop (integration)', () => {
     expect(userMessages[0].content).toContain('读取 test.ts 文件');
   });
 
-  it('解析错误恢复：收到垃圾 JSON 后正确重试', async () => {
+  it.each([
+    // Fixtures must genuinely LOOK like an inline-JSON tool call (start with
+    // '{' or '[') — prose garbage like 'not valid json {{{}' is treated as
+    // plain text, not a JSON attempt (KNOWN_ISSUES 9.5 heuristic).
+    { name: '以 { 开头', malformed: '{"tool": "read_file", "params": {' },
+    { name: '以 [ 开头', malformed: '[{"tool": "read_file", "params": {' },
+  ])('解析错误恢复：收到残缺 JSON（$name）后正确重试', async ({ malformed }) => {
     const harness = createTestHarness(
       [
-        { content: 'not valid json {{{}' },
+        { content: malformed },
         { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
         { content: 'done' },
       ],
@@ -151,6 +157,30 @@ describe('Agent Main Loop (integration)', () => {
     const toolMessages = session.messages.filter((m) => m.role === 'tool');
     expect(toolMessages.length).toBe(1);
     expect(toolMessages[0].metadata?.toolName).toBe('read_file');
+  });
+
+  it('Markdown 含链接（方括号在文本中间）不触发 parse_error（KNOWN_ISSUES 9.5）', async () => {
+    // Real-test regression: a plain Markdown answer with a link
+    // `[文字](URL)` contains `[`, and the old "content includes '{' or '['"
+    // heuristic misjudged it as an attempted inline-JSON tool call →
+    // parse_error feedback → the LLM had to rewrite the same answer 3 times.
+    const markdown =
+      '当然可以！这里是一段用 Markdown 格式写的话：\n\n## 关于 Markdown\n\n' +
+      '- 强调：**加粗** 和 *斜体*\n' +
+      '- [链接](https://www.markdownguide.org)：用 `[文字](URL)` 插入超链接\n' +
+      // A code block puts '{' mid-text too — the ORIGINAL 9.5 repro was a
+      // markdown summary with a TS snippet; both bracket chars must stay inert.
+      '\n```ts\nfunction add(a: number, b: number) { return a + b; }\n```\n\n' +
+      '> 小贴士：Markdown 语法简洁、上手快。';
+    const harness = createTestHarness([{ content: markdown }], workspaceRoot);
+    const session = await harness.run('用md格式写一段话');
+
+    // Plain-text completion: no parse_error feedback, completed on round 1.
+    expect(session.status).toBe('completed');
+    expect(session.currentRound).toBe(1);
+    const feedbackMessages = session.messages.filter((m) => m.role === 'feedback');
+    expect(feedbackMessages.length).toBe(0);
+    expect(session.messages.some((m) => m.role === 'assistant' && m.content.includes('markdownguide'))).toBe(true);
   });
 
   it('MaxRounds 升级：3 轮反馈失败后，第 4 轮进入前触发 HITL', async () => {

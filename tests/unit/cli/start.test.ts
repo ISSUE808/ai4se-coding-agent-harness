@@ -219,6 +219,29 @@ describe('runStartTask', () => {
     expect(session.status).toBe('paused');
   });
 
+  it('prints actionable resume guidance when the run ends paused (KNOWN_ISSUES 1)', async () => {
+    // Upgrade pause (maxRounds reached): no pending command, so no stdin
+    // approval is possible — the run exits paused with only "[session]
+    // paused" today, and the user has no idea how to continue.
+    const printed: string[] = [];
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+    ];
+    const session = await runStartTask({
+      task: 'read test.ts',
+      config: { ...makeConfig(), agent: { ...makeConfig().agent, maxRounds: 1 } },
+      buildAgentLoop: buildMockAgentLoop(responses),
+      hitl: new HITLManager(),
+      print: (line) => printed.push(line),
+    });
+    expect(session.status).toBe('paused');
+    const guidance = printed.find((l) => l.includes('已暂停'));
+    expect(guidance).toBeDefined();
+    expect(guidance ?? '').toContain('--web');
+    expect(guidance ?? '').toContain('maxRounds');
+  });
+
   it('sets exit code 1 when the session ends without completing (I3 CR)', async () => {
     const printed: string[] = [];
     const cmd = createStartCommand({

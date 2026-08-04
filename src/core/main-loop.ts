@@ -570,8 +570,14 @@ export class AgentLoop {
       // Parsed JSON but not a recognizable action format → treat as text completion
       return { actions: [], parseError: false };
     } catch {
-      // JSON.parse failed — check if it looks like an attempted tool call
-      if (content.includes('{') || content.includes('[')) {
+      // JSON.parse failed — an "attempted tool call" only looks like JSON when
+      // the content BEGINS with a brace/bracket (KNOWN_ISSUES 9.5): markdown
+      // links `[文字](URL)` put '[' in the middle of plain text, which the old
+      // "content.includes('{') || content.includes('[')" heuristic misjudged
+      // as JSON → spurious parse_error feedback → the LLM rewrote the same
+      // answer until it produced one without brackets. (`content` is already
+      // trimmed above.)
+      if (content.startsWith('{') || content.startsWith('[')) {
         return {
           actions: [],
           parseError: true,

@@ -326,6 +326,17 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
     print(
       `[session] done: ${session.id} status=${session.status} rounds=${session.currentRound}`,
     );
+    // KNOWN_ISSUES 1: an upgrade pause (maxRounds reached) has no pending
+    // command, so the stdin approval loop above can never resume it — the run
+    // exits paused with only "[session] paused" today. Give the user an
+    // actionable way forward instead of a dead end.
+    if (session.status === 'paused') {
+      print(
+        '[session] 会话已暂停（达到轮次上限升级暂停，无待批准命令可交互确认）。\n' +
+          '  直跑模式下进程退出后内存会话将丢失：请重新运行任务（提高 maxRounds），\n' +
+          '  或改用 `codeharness start --web` 在 WebUI 中创建会话，暂停后可在界面恢复。',
+      );
+    }
     return session;
   } finally {
     events.off('message:added', onMessage);
