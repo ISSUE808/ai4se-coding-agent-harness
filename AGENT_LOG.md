@@ -891,3 +891,21 @@
   - **API 签名变化时测试顺序也是契约**：approvals 测试"先 requestApproval 后建 session"在键控后语义颠倒（pending 归属尚未存在的会话）——重排成真实流程（session 先存在）本身就在验证时序契约
   - **键控让既有"安全折衷"更安全**：M5 的 cache 保留语义在共享实例下是便利性折衷；键控后新会话自然隔离，重确认成本换来的安全增益是设计副产品而非妥协
 
+
+## 2026-08-04 17:10 KNOWN_ISSUES 9 修复：WebUI 三项占位 + 单会话删除
+
+- **触发技能**：`test-driven-development`（红 → 绿）、`requesting-code-review`（评审 a9ad6ede）
+- **Subagent**：评审 a9ad6ede
+- **Prompt 要点**：用户指令——搜索框已删，完成其余三个占位项；新增需求：会话列表支持单会话删除。设计决策：① 删除语义：running 会话 409 拒绝（live loop 拥有会话，先停再删）；批量清空保留 running 并返回 `keptRunning`（200 + 部分保留 > 生硬 409）② Token 明细与既有 `tokenCount` 并存：usage 是 API 实际计费、tokenCount 是 memory 层上下文估算，语义注释区分 ③ 终端 tab 用独立纯函数 reducer（与消息 feed 消费方/保留策略不同）④ wire 帧无 timestamp → 接收时注入（保持 reducer 纯）
+- **产出**：
+  - 后端：`DELETE /api/sessions`（批量）+ `DELETE /api/sessions/:id`（404→409→200）+ `SessionStore.remove`；`TokenUsage` + `LLMResponse.usage` + `Session.tokenUsage`；DeepSeek 提取 `usage.prompt_tokens/completion_tokens/prompt_cache_hit_tokens`（typeof 守卫，无 usage 时 undefined）；main-loop `accumulateUsage` 每轮累积
+  - 前端：Dashboard 行删除按钮（running 禁用 + title 解释）、Settings 两步确认清空（"清空会话" → "确认清空？"）、SessionDetail Token 明细（输入/输出/缓存命中/总计 + 上下文估计）、终端 tab 实时事件流（按 kind 着色：tool=primary、guardrail=danger、status=success、round=warning）
+  - 测试 +19；评审修复 +3 测试（key 唯一、now 注入、删除错误路径）
+  - 全量：主套件 614/614、client 216/216、双 tsc 干净
+- **人工干预**：无
+- **教训**：
+  - **评审抓的"wire 帧无 timestamp"是字段级设计遗漏**：五个事件类型的 HarnessEventMap 定义里本就没有 timestamp（message:added 有），终端 tab 直接用 data.timestamp 恒空。跨组件（events.ts → server 广播 → reducer）的字段契约要先核对再写消费端，纯函数加 `now` 参数比污染 frame 干净
+  - **500 行上限的 key 复用是纯函数里最隐蔽的 bug**：`String(lines.length)` 在 cap 后恒为 500——React 重复 key 不报错只错乱，测试只断言了长度没断言 key 唯一。评审给的 max+1 纯方案避免了模块级计数器破坏 reducer 确定性
+  - **JSX 三元分支插错误横幅要记得包 fragment**：单根限制下 `<table>` 变双兄弟直接 parse error——改 UI 结构时先想根节点数
+  - **jsonInit('DELETE', undefined)** 与 deleteKey 的裸 `{method:'DELETE'}` 并存无碍（stringify(undefined) 无 body），评审只记 nit——一致性整理留给未来
+
