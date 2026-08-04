@@ -909,3 +909,22 @@
   - **JSX 三元分支插错误横幅要记得包 fragment**：单根限制下 `<table>` 变双兄弟直接 parse error——改 UI 结构时先想根节点数
   - **jsonInit('DELETE', undefined)** 与 deleteKey 的裸 `{method:'DELETE'}` 并存无碍（stringify(undefined) 无 body），评审只记 nit——一致性整理留给未来
 
+
+
+## 2026-08-04 19:35 KNOWN_ISSUES 验收反馈：Token 明细实时化 + 单删两步确认
+
+- **触发技能**：`systematic-debugging`（根因调查）、`test-driven-development`（红 → 绿）、`requesting-code-review`（评审 a0c5cf70，复核同 agent）
+- **Subagent**：评审 a0c5cf70（两轮：初审 + 修复后复核）
+- **Prompt 要点**：用户在 B9 手工验收（TESTING.md）中发现两个问题：① 会话完成后 Token 使用区不刷新不更新 ② 单删无确认易误操作。根因调查：WS 帧（session:status/round:changed）只带 status/rounds，tokenUsage 在 loop 结束时才定稿写入 REST 快照（main-loop accumulateUsage），SessionDetail 的 `session` 是**挂载时 fetch 一次**的 REST 快照 → 完成后必须刷新才看到明细。修复 A 设计：终态重取（completed/failed）——评审后迭代出 load('refresh') 模式（不翻转 phase，后台失败静默保活）+ fetch 代际守卫。
+- **产出**：
+  - 修复 A：SessionDetail `snapshotStatusRef` + 终态重取 effect（恰好一次/离开终态 re-arm/挂载终态不取）；`load(mode)` 初始/刷新两模式 + `fetchGenRef` 代际守卫；failed 纳入终态
+  - 修复 B：Dashboard `confirmDeleteId` 两步确认（armed 态按钮变「确认删除」+ dangerSoft 底 + 宽扩展，3s 自动解除，同一时刻仅一行 armed，running 禁用不变）
+  - 测试 +5（SessionDetail ×4：保活/失败态/挂载终态不取/恢复后再取；Dashboard ×1：单行 armed 转移）；既有删除测试 ×2 改两步
+  - 全量：client 222/222、主套件 614/614、双 tsc 干净
+  - Commits：`efad265`（首轮修复）、`5fcdd0b`（评审修复：phase 保活 + failed + 代际 + 按钮宽度）
+- **人工干预**：无（评审 Important×1 + Minor×3 全部处理；Minor 未做：3s 自动解除的 3 秒实时测试（成本>价值）、unmount cleanup 测试）
+- **教训**：
+  - **"刷新才更新"类问题先查数据源归属**：WS 实时流与 REST 快照各自携带不同字段（status 实时、tokenUsage 终态定稿），UI 混用两者时以"哪个字段在哪个通道"画清边界，比无脑全走 WS 或全走 REST 干净
+  - **终态重取的防双发守卫必须在 await 之前置位**，否则 effect 二次运行（fetch 期间状态未变）会重复请求——评审关注点，测试用 waitFor(callTimes(2)) 钉死
+  - **后台刷新不得复用会翻转 phase 的加载函数**：评审 Important 抓的是"修复本身引入了新失败模式"（重取失败 → 全屏错误页），模式复用要检查副作用边界
+  - **测试基建的隐藏坑**：`renderDetail()` 内部会重新 `mockResolvedValue(SESSION)`，手动先设的 mock 被覆盖——fixture 必须走 renderDetail 参数传
