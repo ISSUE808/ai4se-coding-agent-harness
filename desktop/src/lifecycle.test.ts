@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as path from 'node:path';
-import { resolveBackendDir, buildBackendCommand, waitForPort, killProcessTree, runDesktopLifecycle } from './lifecycle.js';
+import { resolveBackendDir, buildBackendCommand, waitForPort, killProcessTree, runDesktopLifecycle, resolveNodePath } from './lifecycle.js';
 
 describe('resolveBackendDir', () => {
   it('打包后：resourcesPath 下 backend 目录', () => {
@@ -10,6 +10,15 @@ describe('resolveBackendDir', () => {
   it('开发：projectRoot', () => {
     expect(resolveBackendDir({ projectRoot: 'C:/dev/codeharness' }))
       .toBe('C:/dev/codeharness');
+  });
+});
+
+describe('resolveNodePath', () => {
+  it('打包（isPackaged=true）：electron.exe run-as-node（keytar.node 按 electron ABI 重编译）', () => {
+    expect(resolveNodePath(true, 'C:/x/electron.exe')).toBe('C:/x/electron.exe');
+  });
+  it('开发（isPackaged=false）：系统 node（root node_modules 的 keytar 按系统 Node ABI 编译，dev 不用 electron 内嵌 Node）', () => {
+    expect(resolveNodePath(false, 'C:/x/electron.exe')).toBe('node');
   });
 });
 

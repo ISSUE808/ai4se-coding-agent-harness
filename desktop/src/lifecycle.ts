@@ -16,11 +16,23 @@ export function resolveBackendDir(options: {
 }
 
 /**
+ * 后端运行时可执行文件解析（spec 2026-08-04 第 3 层）：
+ * - 打包（isPackaged=true）：electron.exe 以 ELECTRON_RUN_AS_NODE=1 纯 Node 模式运行后端——
+ *   keytar.node 等原生模块打包前按 electron ABI 重编译（@electron/rebuild），ABI 天然匹配；
+ * - 开发（isPackaged=false）：系统 node——root node_modules 的 keytar 按系统 Node ABI 编译，
+ *   若用 electron 内嵌 Node（版本不同）则 keytar 加载失败、静默降级 encrypted-file，
+ *   用户已有 keytar 密钥读不到。
+ */
+export function resolveNodePath(isPackaged: boolean, execPath: string): string {
+  return isPackaged ? execPath : 'node';
+}
+
+/**
  * 后端 spawn 命令：生产模式（静态目录由 env 指向打包布局 webui/）。
  * nodePath 指定运行后端的可执行文件：Electron 打包环境传 process.execPath
  * （electron.exe + ELECTRON_RUN_AS_NODE=1 以纯 Node 模式运行——keytar.node
  * 等原生模块按 electron ABI 重编译，系统 Node ABI 不匹配无法加载）；
- * 默认 'node' 保留开发/测试语义。
+ * 默认 'node' 保留开发/测试语义。nodePath 由 resolveNodePath 解析。
  */
 export function buildBackendCommand(backendDir: string, nodePath = 'node'): {
   cmd: string;
@@ -83,7 +95,7 @@ export interface DesktopLifecycleDeps {
   createWindow: (url: string) => void;
   /** spawn 后端进程，返回 pid 或 null（spawn 失败）。 */
   spawnBackend: (cmd: { cmd: string; args: string[]; env: Record<string, string>; cwd: string }) => number | null;
-  /** 后端运行时可执行文件（buildBackendCommand 的 nodePath）：打包后传 process.execPath（ELECTRON_RUN_AS_NODE）。 */
+  /** 后端运行时可执行文件（buildBackendCommand 的 nodePath）：用 resolveNodePath(app.isPackaged, process.execPath) 解析。 */
   nodePath?: string;
   /** 端口探测（默认 waitForPort）；测试注入序列。 */
   waitForPort?: (url: string, timeoutMs: number) => Promise<void>;
