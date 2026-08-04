@@ -128,6 +128,23 @@ describe('ScopeFence', () => {
       fs.symlinkSync(outside, path.join(subLink, 'esc'), process.platform === 'win32' ? 'junction' : 'dir');
       expect(fence.validatePath(path.join(subLink, 'esc', 'secret.txt'), root)).toBe(false);
     });
+
+    it.skipIf(!linksSupported)('symlink 循环（ELOOP）时 fail-closed 拒绝，而非截断接受（reviewer Important）', () => {
+      const fence = new ScopeFence();
+      // Two-way cycle (a→b, b→a) — a self-referential link is rejected by
+      // Windows (EPERM). realpathSync throws ELOOP; the pre-fix walk-up
+      // swallowed the error, dropped the leaf, and ACCEPTED the truncated
+      // path — a later open() on the leaf would resolve the real symlink.
+      const loopA = path.join(root, 'loop-a');
+      const loopB = path.join(root, 'loop-b');
+      try {
+        fs.symlinkSync(loopB, loopA, 'junction');
+        fs.symlinkSync(loopA, loopB, 'junction');
+      } catch {
+        return; // junction to a nonexistent target may be refused — skip
+      }
+      expect(fence.validatePath(path.join(loopA, 'x.txt'), root)).toBe(false);
+    });
   });
 
   describe('filterEnv', () => {

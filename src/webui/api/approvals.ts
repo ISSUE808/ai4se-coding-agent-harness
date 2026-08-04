@@ -48,10 +48,12 @@ export function createApprovalsRouter(deps: ApprovalsRouterDeps): Router {
     // Session ownership (KNOWN_ISSUES 6): HITL state is keyed per session —
     // this endpoint may only resolve THIS session's pending decision. Without
     // the check, a client could resolve a pending command belonging to a
-    // different session through any sessionId.
-    if (hitl.getState(session.id) !== HITLState.AWAITING_APPROVAL) {
+    // different session through any sessionId. (The try/catch below stays as
+    // defense against the decision methods' state guards.)
+    const state = hitl.getState(session.id);
+    if (state !== HITLState.AWAITING_APPROVAL) {
       res.status(409).json({
-        error: `Session ${session.id} has no pending approval (state: ${hitl.getState(session.id)})`,
+        error: `Session ${session.id} has no pending approval (state: ${state})`,
       });
       return;
     }

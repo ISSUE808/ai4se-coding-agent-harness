@@ -32,6 +32,14 @@ const DEFAULT_ENV_SAFELIST = [
 
 export class ScopeFence {
   private readonly envSafelist: string[];
+  /**
+   * Canonical workspace roots keyed by their lexical form. `canonicalize` is
+   * filesystem I/O (possibly a multi-level walk-up) and the root is constant
+   * per session — memoizing it keeps the hot path (every tool action) to a
+   * single realpath. Stale if the root itself is replaced mid-session (a
+   * deleted-and-recreated workspace) — accepted: sessions pin their root.
+   */
+  private readonly canonicalRootCache = new Map<string, string>();
 
   constructor(envSafelist?: string[]) {
     this.envSafelist = envSafelist ?? DEFAULT_ENV_SAFELIST;
@@ -50,11 +58,22 @@ export class ScopeFence {
     // Canonical check: a symlink INSIDE the workspace may point outside it
     // (`root/link → /etc`). Compare canonical forms; Windows realpath may
     // normalize drive-letter case, so fold case before comparing.
+    // `canonicalize` returns null on unreadable paths (ELOOP/EACCES/EMFILE) —
+    // fail closed, never accept a truncated path whose leaf was not checked.
     const norm = (p: string): string =>
       process.platform === 'win32' ? p.toLowerCase() : p;
-    const canonical = norm(canonicalize(resolved));
-    const canonicalRoot = norm(canonicalize(resolvedRoot));
-    return canonical === canonicalRoot || canonical.startsWith(canonicalRoot + path.sep);
+    const canonical = canonicalize(resolved);
+    if (canonical === null) {
+      return false;
+    }
+    let canonicalRoot = this.canonicalRootCache.get(resolvedRoot);
+    if (canonicalRoot === undefined) {
+      canonicalRoot = canonicalize(resolvedRoot) ?? resolvedRoot;
+      this.canonicalRootCache.set(resolvedRoot, canonicalRoot);
+    }
+    const c = norm(canonical);
+    const cr = norm(canonicalRoot);
+    return c === cr || c.startsWith(cr + path.sep);
   }
 
   filterEnv(env: Record<string, string>): Record<string, string> {
@@ -72,23 +91,37 @@ export class ScopeFence {
  * Canonicalize a path without requiring it to exist. `fs.realpathSync` throws
  * ENOENT for targets that do not exist yet (write_file creates new files) —
  * walk up to the nearest existing ancestor, realpath it, and re-attach the
- * lexical tail. Falls back to the lexical path if even the filesystem root is
- * unreachable.
+ * lexical tail. For ENOENT the missing leaf provably cannot be a symlink, so
+ * truncation is safe there. ANY other error (ELOOP symlink cycle, EACCES,
+ * EMFILE/EIO) returns null — the leaf may be a real escaping symlink that a
+ * later open() would resolve, and accepting the truncated path would bypass
+ * the fence (reviewer Important).
  */
-function canonicalize(inputPath: string): string {
+function canonicalize(inputPath: string): string | null {
   const resolved = path.resolve(inputPath);
+  const isMissing = (err: unknown): boolean => {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+  };
   try {
     return fs.realpathSync(resolved);
-  } catch {
+  } catch (err) {
+    if (!isMissing(err)) {
+      return null;
+    }
     let dir = path.dirname(resolved);
     const tail: string[] = [];
     for (;;) {
       try {
         return path.join(fs.realpathSync(dir), ...tail.reverse());
-      } catch {
+      } catch (walkErr) {
+        if (!isMissing(walkErr)) {
+          return null;
+        }
         tail.push(path.basename(dir));
         const parent = path.dirname(dir);
         if (parent === dir) {
+          // Filesystem root itself unreachable — nothing left to resolve.
           return resolved;
         }
         dir = parent;

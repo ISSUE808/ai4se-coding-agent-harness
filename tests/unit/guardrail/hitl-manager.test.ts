@@ -248,3 +248,26 @@ describe('KNOWN_ISSUES 6: 多会话键控', () => {
     expect(hitl.getState('sess-b')).toBe(HITLState.AWAITING_APPROVAL);
   });
 });
+
+describe('removeSession (KNOWN_ISSUES 6)', () => {
+  it('删除会话条目后状态回到 IDLE（新条目）', () => {
+    const hitl = new HITLManager();
+    hitl.requestApproval('s1', 'cmd-a');
+    hitl.approve('s1');
+    expect(hitl.getState('s1')).toBe(HITLState.EXECUTING);
+    hitl.removeSession('s1');
+    expect(hitl.getState('s1')).toBe(HITLState.IDLE);
+    // Approved-command cache is gone with the entry — a re-issued command
+    // must be confirmed again (REPL /clear semantics, KNOWN_ISSUES 6).
+    expect(hitl.isApprovedCommand('s1', 'cmd-a')).toBe(false);
+  });
+
+  it('删除一个会话不影响其他会话', () => {
+    const hitl = new HITLManager();
+    hitl.requestApproval('s1', 'cmd-a');
+    hitl.requestApproval('s2', 'cmd-b');
+    hitl.removeSession('s1');
+    expect(hitl.getState('s2')).toBe(HITLState.AWAITING_APPROVAL);
+    expect(hitl.getPendingCommand('s2')).toBe('cmd-b');
+  });
+});
