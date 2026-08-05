@@ -1134,3 +1134,23 @@
   - **npm ci --ignore-scripts 在 build 阶段也要**：keytar 编译在 alpine 直接失败（无工具链）；编译期不需要原生绑定（动态 import 降级），build/runtime 两阶段都跳过 install scripts 是正确姿势
   - **容器内凭据层先行失败**：`start --web` 无 TTY 时先死在 CredentialStore 主密码提示（非交互 stdin EOF）而非 dist 缺失——验证"镜像完整性"要用挂载配置/交互模式，且报错定位要分清"镜像缺产物"与"运行时交互"两类
   - **分类器不可用期间 subagent 产出要亲自复核**：两次派发（ac7fba14、a37d38ce）期间安全分类器不可用，主 agent 逐一 Read Dockerfile/.dockerignore/ci.yml 全文 + 复跑 docker build/run 实测确认声称
+
+
+---
+
+## 2026-08-05 22:42 B11 桌面验收：后端 spawn 稳定 cwd（backendCwd=userData）修复 baseUrl 重启丢失
+
+- **触发技能**：`systematic-debugging`（两次验收失败 → 全链路证据收集）、`requesting-code-review`（B11 CR REVISE → 门控修复）、TDD 红→绿（lifecycle 单测）
+- **Subagent**：无——B11 是验收阶段补丁（非 PLAN task），主 agent 直接完成
+- **Prompt 要点**：/（bug 由用户实测报告：重启后 nju 的 baseUrl 空、key 还在）
+- **产出**：
+  - Commits: `211048d`（fix: 后端 spawn 稳定 cwd）、`bd6de0e`（chore: spawn 前 mkdir userData 防 ENOENT）、`6909df5`（fix: CR — backendCwd 门控 app.isPackaged）
+  - 涉及文件: desktop/src/lifecycle.ts（`buildBackendCommand` 加 `options.cwd` + `DesktopLifecycleDeps.backendCwd`）、desktop/src/main.ts（isPackaged 传 `app.getPath('userData')` + mkdirSync）、desktop/src/lifecycle.test.ts（新增 2 例 RED→GREEN）
+  - 测试: desktop 16/16；主项目 644/644；tsc 干净
+  - 验收: 21:52 构建 win-unpacked 实测——添加 nju（baseUrl）→ `%APPDATA%\codeharness-desktop\.codeharness.json` 落盘 → 重启后 baseUrl 保留 ✓
+- **人工干预**：全部主 agent 完成；CR 修复门控——backendCwd 无条件传 userData 会改写 dev 语义（dev 后端 cwd=项目根、配置在仓库根），`app.isPackaged` 门控后 dev 行为不变
+- **教训**：
+  - **验收必须先确认被测产物版本与代码指纹**：21:52 重建只出了 Setup 安装器（nsis target），`CodeHarness 0.1.0.exe`（portable）仍是 18:28 旧版——用户启动旧 portable 验收，修复代码从未被测试到，误报"还是空的"。验收第一步应是核对构建产物时间戳 + grep asar 指纹（`backendCwd` 命中数）
+  - **cwd 漂移根因链**：portable 每次自解压到新 `%TEMP%` 目录 → 后端 cwd 漂移 → projectConfigPath/registry 持久化（均基于 cwd）写入临时目录 → 重启即失；keytar 是系统级（%APPDATA% 凭据库）不受影响——"key 还在、baseUrl 空"恰好暴露了凭据（系统级）与配置（cwd 级）的存储分层
+  - **同一 POST 的存储分层可作故障二分**：POST /api/keys 先写 keytar（key）再 persistConfig（baseUrl）——`node dist/cli/index.js key status` 验证 keytar 状态，可快速区分"保存链路失败"与"持久化路径漂移"两类故障（本次 keytar 无 nju 说明旧会话保存从未成功，用户看到的行属 UI 内存态）
+  - **全盘搜索配置文件是高效证据**：`.codeharness.json` 搜索（%TEMP%/%APPDATA%/%USERPROFILE%）一次排除所有候选写入位置——30+ 解压目录全部无文件，直接把怀疑从"哪个 cwd"逼到"写没写入"
