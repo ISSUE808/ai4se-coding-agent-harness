@@ -1174,3 +1174,42 @@
   - **README 的"可复制执行命令"必须逐条实测**：`npm install -g codeharness` 一行——npm registry 上该包名已被无关第三方占用（评审 WebFetch 查证），install 会装上别人家的软件。写安装文档前要查包名占用
   - **派发 subagent 必须显式指定 worktree**：Agent 工具默认在主工作目录跑——不传 isolation 或 cd 指令，subagent 会把 commit 落在 master。纠偏成本（cherry-pick + reset + 用户手动命令）远高于派发时多写一句"在 <worktree 路径> 下操作"
   - **"命令与 CI 实测一致"是内部行话**：README 面向用户，应写事实（多阶段自包含）而非流程（ci.yml 怎么验的）——且断言修复前"实测一致"本身不成立
+
+
+---
+
+## 2026-08-06 02:44 方案 B：config.llm.masterPassword 预置口令（线上部署阻塞修复）
+
+- **触发技能**：`systematic-debugging`（线上容器启动崩溃根因调查）、TDD 红→绿（unit + integration）
+- **Subagent**：无——部署阻塞补丁，主 agent 直接完成（分类器不可用期间按既定预案主 agent 亲自复核）
+- **Prompt 要点**：/（bug 由线上实测报告：`docker run` 后容器 Restarting，日志 `Master password for encrypted key storage:` + `CredentialStore requires at least one backend`——alpine 无 keytar 原生绑定 + 无 TTY 交互）
+- **产出**：
+  - Commits: `6b16c77`（.gitlab-ci.yml 四 job 对等 GitHub Actions）、`cc2366d`（方案 B 核心）、`53c31a3`（README 凭据模型 + KNOWN_ISSUES untrack）、`06aa988`（DESIGN_BRIEF untrack）
+  - 涉及文件: src/types.ts（`Config.llm.masterPassword?`）、src/config/schema.ts（DEFAULT_CONFIG 默认 undefined）、src/credentials/store.ts（buildCredentialStore 转发）、src/cli/store.ts（新增 buildStoreFromConfig）、src/cli/index.ts + src/cli/commands/start.ts（注入点替换）、tests/unit/cli/store.test.ts、tests/unit/config/loader.test.ts、README.md、.gitlab-ci.yml
+  - 测试: 647/647（含新增 encrypted-file 激活无提示 + env 转发用例）
+  - 部署: 阿里云学生机 139.224.16.44（Ubuntu + docker.io），容器 codeharness:3000，挂载 /root/.codeharness，`{"llm":{"masterPassword":"<口令>"}}` 预置后容器 Up、WebUI 正常 listen
+- **人工干预**：全部主 agent；关键决策——初始建议 apiKeySource: env 被用户追问"UI key 设置还能用吗"否决（EnvBackend 只读，UI 写 key 会坏）→ 改为方案 B；用户对"masterPassword 明文存服务器"的疑虑以威胁模型回答（服务器 root 即可读 secrets.enc，主密码防的是服务间/备份泄漏）
+- **教训**：
+  - **keytar 在 alpine 容器里是"静默缺失 + 交互死锁"**：动态 import 失败 → 链上只剩 encrypted-file → 无 TTY 时交互提示直接 EOF → 报"无可用 backend"。容器部署必须预置主密码或显式选择后端，二者缺一必崩
+  - **只读后端（env）会破坏 UI 写路径**：配置层"能用"不等于"功能完整"——env 模式 GET 显示 key、POST 报错，UI 语义残缺。修复方向应保持功能全量可用，而非降级可用
+  - **部署验证必须分「构建验证」与「运行验证」**：docker build 成功只证明镜像完整；`docker run` 挂配置后真实 listen + curl API 才是运行验证。此前 Task 21 的教训在此复现（容器报错先死在凭据层而非 dist）
+  - **GitLab CI 与 GitHub Actions 的对等映射**：unit-test(node:22)/webui-client(node:20)/desktop(node:20)/docker-build(docker:27+dind) 四 job 一一对应，`~/.npm` 缓存；docker-build 含 ENTRYPOINT 拼接注释 + start --web 断言（unknown option / WebUI 产物 grep）
+
+
+---
+
+## 2026-08-06 02:44 线上 bug 修复：DELETE /api/keys/:provider 同步清理 registry（删除供应商刷新后复活）
+
+- **触发技能**：`systematic-debugging`（用户实测报告 → 根因链）、TDD 红→绿（integration，650/650 两连跑稳定）
+- **Subagent**：无——验收阶段线上 bug，主 agent 直接完成
+- **Prompt 要点**：/（bug 由用户线上实测报告：Settings 删除新增供应商 nju 后刷新页面 nju 又出现，仅 apikey 消失）
+- **产出**：
+  - Commit: `2a11aeb`（fix: DELETE /api/keys/:provider 同步清理 registry 并持久化）
+  - 涉及文件: src/webui/api/keys.ts（DELETE 处理：registry 清理 + persistConfig + 活跃 provider 回退 DEFAULT_CONFIG.llm.provider + onConfigChanged 同契约）、tests/integration/webui-api.test.ts（新增 3 例：registry 清理后 GET 不再返回 / registry-only 供应商 DELETE / 活跃 provider 删除后回退 deepseek）
+  - 测试: 650/650（两连跑稳定）
+- **人工干预**：测试编写中修正一个理解错误——POST apiKey-only（无 baseUrl）不写 registry，活跃-provider 删除测试必须带 {apiKey, baseUrl} 才能验证 llm.provider 回退路径
+- **教训**：
+  - **线上 bug 的根因常在"状态分散在两层"**：GET 枚举 = credentialStore.list（keyed）∪ config.llm.providers（registered）——DELETE 只删前者，后者让供应商复活（无 key 状态）。删除操作必须对**枚举来源**做清理，否则"删了"只是 UI 假象
+  - **持久化必须与状态变更同事务**：仅清内存 registry 不 persistConfig，重启后复活（与 B11 的 cwd 漂移同族：状态写到错误/临时层）。DELETE 现在走完整 persistConfig 链路
+  - **活跃供应商删除是悬空引用**：llm.provider 指向已删供应商 → 回退 DEFAULT_CONFIG.llm.provider（deepseek），并触发 onConfigChanged 让运行中会话按新 provider 重启（与 POST 编辑活跃 provider 同一契约）
+  - **线上实例仍跑旧镜像**：2a11aeb 尚未重建/部署，需本地 docker build + save + scp + 服务器 load + run 后验证
