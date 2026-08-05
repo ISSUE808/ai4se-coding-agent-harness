@@ -93,11 +93,12 @@ jobs:
       - name: Build Docker image
         run: docker build -t codeharness .
 
-      - name: Verify --version prints 0.1.0
+      # 版本号非空即可（不硬编码具体版本，避免版本升级导致 CI 挂）
+      - name: Verify --version prints a version
         run: |
           VERSION="$(docker run --rm codeharness --version)"
           echo "version=$VERSION"
-          test "$VERSION" = "0.1.0"
+          test -n "$VERSION"
 
       - name: Verify --help exits 0
         run: docker run --rm codeharness --help
