@@ -1078,3 +1078,20 @@
   - **「electron-builder 会 rebuild 原生模块」是我从打包日志（executing @electron/rebuild）做的过度推断**：实际 @electron/rebuild 只重建 **app 目录**（desktop/，零依赖）的依赖，extraResources 内容是 verbatim 复制。评审用管线事实（prepare-resources 的 cpSync + npm prune）逐层证伪。写 ABI/运行时论证要追到管线每一层的实际行为，日志关键词不等于行为
   - **修复链要把错误主张同步从文档里清掉**：修 ABI 时我把「天然匹配」写进了 docstring 和 AGENT_LOG——错误论证被固化后要再一轮评审才暴露。论证、docstring、日志三者要同步诚实化
   - **CI job 的 node 版本选择有隐藏语义**：desktop job 用 Node 20 对齐 electron 33 内嵌 Node 20.18——CI 环境选择也可以成为打包机的 ABI 锚点
+
+
+## 2026-08-05 03:30 真实测试反馈：WebUI 供应商 registry 持久化（重启后 baseUrl 丢失）
+
+- **触发技能**：`systematic-debugging`（根因：两套持久化不对称）、`subagent-driven-development`（implementer a8ab8ea2 + 评审 a168c665）
+- **Subagent**：implementer a8ab8ea2（sonnet）、评审 a168c665（sonnet）
+- **Prompt 要点**：用户在密钥持久化讨论中暴露新症状——nju 供应商重启后 baseUrl 空（key 在、行在）。根因调查：CLI `key status` 只查当前 provider（非 bug）→ WebUI 与 CLI 读同一 store（key 在 keytar 正常）→ baseUrl 来自 config.llm.providers registry → persistConfig 链路 no-op
+- **产出**：
+  - Commit: `5cb74ce`（createDefaultPersistConfig + runWebAction 接线 + 2 测试：单测 + 集成回归）
+  - 涉及文件: src/cli/commands/start.ts、tests/unit/cli/start.test.ts
+  - 测试: 全量 633/633（631+2）、start.test.ts 25/25、tsc 干净；CI 全绿（3 job）
+- **人工干预**：无（评审 2 LOW defer——webui.token 复制进项目文件与 PUT 既有行为一致；persist 无串行化是既有设计）
+- **教训**：
+  - **"注释说 defaults to project file" 与实现不符是 bug 温床**：`StartCommandDeps.persistConfig` 的注释声明默认写项目文件，但 `runWebAction` 直接透传、`createProgram` 从不提供 → 整个链路 no-op。注释承诺的默认行为必须由实现兑现，或在注释中写明"调用方必须提供"
+  - **两套持久化路径必须同构**：PUT /api/config 的 config 路由自带默认写盘（cwd/.codeharness.json），POST /api/keys 的 registry 走注入回调（无默认）——不对称导致"config 编辑器保存持久、添加供应商不持久"。持久化责任应收敛到单一实现
+  - **用户"密钥为什么持久"的疑问引出真 bug**：用户观察到 deepseek key 持久（keytar）而 nju baseUrl 丢——对比中暴露了 registry 与 key 存储的生命周期差异。用户的疑问往往比表面问题更有诊断价值
+  - **CLI key status 只查当前 provider**：用户以为它列全部——设计上只显示 account=llm.provider。诊断时先确认命令语义再下结论（差点误判 key 丢失）
