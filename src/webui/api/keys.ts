@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { Config } from '../../types.js';
 import type { CredentialStore } from '../../credentials/store.js';
 import { maskSecret } from '../../credentials/mask.js';
+import { DEFAULT_CONFIG } from '../../config/schema.js';
 
 /**
  * API key management REST API (PLAN Task 17 + Task 25, SPEC §4.2/§4.3).
@@ -158,14 +159,41 @@ export function createKeysRouter(deps: KeysRouterDeps): Router {
   router.delete(
     '/:provider',
     asyncRoute(async (req, res) => {
-      const removed = await credentialStore.delete(service, req.params.provider);
-      if (!removed) {
+      const provider = req.params.provider;
+      const removed = await credentialStore.delete(service, provider);
+      const config = deps.getConfig();
+      const registry = config.llm.providers ?? {};
+      const hadRegistry = Object.prototype.hasOwnProperty.call(registry, provider);
+      if (!removed && !hadRegistry) {
         res
           .status(404)
-          .json({ error: `No credential found for provider: ${req.params.provider}` });
+          .json({ error: `No credential found for provider: ${provider}` });
         return;
       }
-      res.json({ provider: req.params.provider, removed: true });
+      // 线上实测 bug：删除供应商必须同步清理 config.llm.providers registry
+      // 条目并持久化——否则 GET /api/keys 的「keyed ∪ registered」枚举会把
+      // 已删除的供应商复活（无 key 状态）。registry-only 供应商（无 key）
+      // 同样在此清理。
+      if (hadRegistry) {
+        const { [provider]: _dropped, ...rest } = registry;
+        const next: Config = {
+          ...config,
+          llm: {
+            ...config.llm,
+            // 删除 ACTIVE provider → 回退默认（llm.provider 不得悬空）
+            ...(provider === config.llm.provider
+              ? { provider: DEFAULT_CONFIG.llm.provider }
+              : {}),
+            providers: rest,
+          },
+        };
+        await deps.persistConfig(next);
+        // 与 POST 编辑活跃 provider 同一契约：运行中会话按新 provider 重启
+        if (provider === config.llm.provider) {
+          deps.onConfigChanged?.(config, next);
+        }
+      }
+      res.json({ provider, removed: true });
     }),
   );
 

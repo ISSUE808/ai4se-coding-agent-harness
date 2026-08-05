@@ -680,6 +680,49 @@ describe('REST /api/keys', () => {
     const again = await request(web.app).delete('/api/keys/deepseek');
     expect(again.status).toBe(404);
   });
+
+  it('DELETE also removes the registry entry — a reload no longer resurrects a deleted provider (线上实测 bug)', async () => {
+    const { web, getPersisted } = await makeFixture();
+    // Settings 添加供应商 nju（registry metadata，无 key 也应出现）
+    await request(web.app).post('/api/keys/nju').send({
+      baseUrl: 'https://api.nju.example',
+      defaultModel: 'nju-chat',
+    });
+    let list = await request(web.app).get('/api/keys');
+    expect(list.body.providers.map((p: { provider: string }) => p.provider)).toContain('nju');
+
+    const del = await request(web.app).delete('/api/keys/nju');
+    expect(del.status).toBe(200);
+    expect(del.body.removed).toBe(true);
+
+    // key 与 registry 都应清理：重新 GET（= 刷新页面）不再返回 nju
+    list = await request(web.app).get('/api/keys');
+    expect(list.body.providers.map((p: { provider: string }) => p.provider)).not.toContain('nju');
+    // registry 持久化层同步清理（persistConfig 收到无 nju 的 config）
+    expect(getPersisted()?.llm.providers?.['nju']).toBeUndefined();
+  });
+
+  it('DELETE of a registry-only provider (no key saved) still clears the registry', async () => {
+    const { web } = await makeFixture();
+    await request(web.app).post('/api/keys/nju').send({ baseUrl: 'https://api.nju.example' });
+    const del = await request(web.app).delete('/api/keys/nju');
+    expect(del.status).toBe(200);
+    const list = await request(web.app).get('/api/keys');
+    expect(list.body.providers.map((p: { provider: string }) => p.provider)).not.toContain('nju');
+  });
+
+  it('deleting the ACTIVE provider resets llm.provider to the default', async () => {
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.llm.provider = 'nju';
+    const { web, getPersisted } = await makeFixture(cfg);
+    // Settings 添加供应商：key + registry metadata（真实场景两者都写）
+    await request(web.app)
+      .post('/api/keys/nju')
+      .send({ apiKey: 'sk-x', baseUrl: 'https://api.nju.example' });
+    const del = await request(web.app).delete('/api/keys/nju');
+    expect(del.status).toBe(200);
+    expect(getPersisted()?.llm.provider).toBe(DEFAULT_CONFIG.llm.provider);
+  });
 });
 
 describe('REST /api/keys enumeration (Task 25: custom providers)', () => {
