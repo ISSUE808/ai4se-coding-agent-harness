@@ -80,3 +80,38 @@ jobs:
       - name: Type-check desktop
         working-directory: desktop
         run: npx tsc --noEmit
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # 多阶段构建自包含（镜像内完成 tsc + WebUI client 构建），无需宿主机预构建
+      - name: Build Docker image
+        run: docker build -t codeharness .
+
+      # 版本号非空即可（不硬编码具体版本，避免版本升级导致 CI 挂）
+      - name: Verify --version prints a version
+        run: |
+          VERSION="$(docker run --rm codeharness --version)"
+          echo "version=$VERSION"
+          test -n "$VERSION"
+
+      - name: Verify --help exits 0
+        run: docker run --rm codeharness --help
+
+      # 容器内 `start --web` 必须能找到 WebUI client 构建产物（resolveStaticDir
+      # 默认 src/webui/client/dist，见 src/cli/commands/start.ts）——不再报
+      # 「WebUI 前端构建产物不存在」即证明镜像完整。服务器会持续监听（等待
+      # SIGINT），timeout 兜底结束运行，仅检查输出。
+      - name: Verify start --web has the WebUI static build in the image
+        run: |
+          OUTPUT="$(timeout 60 docker run --rm codeharness start --web 2>&1 || true)"
+          printf '%s\n' "$OUTPUT"
+          if printf '%s\n' "$OUTPUT" | grep -Fq "WebUI 前端构建产物不存在"; then
+            echo "FAIL: WebUI 前端构建产物缺失（resolveStaticDir 未找到 client dist）" >&2
+            exit 1
+          fi
