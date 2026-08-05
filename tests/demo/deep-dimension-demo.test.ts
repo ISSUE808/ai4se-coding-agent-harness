@@ -52,14 +52,23 @@ interface DeepChainResult {
 
 /** 深链路驱动器——镜像 main-loop runFeedback 的 分类→选器→链→失败分类→策略 全过程。 */
 async function deepChain(action: Action, mode: 'fail_fast' | 'collect_all'): Promise<DeepChainResult> {
-  // RED: 链路尚未接线——返回占位结果
-  return {
-    actionType: 'shell_command',
-    names: [],
-    results: [{ passed: false, validator: 'demo', failureCategory: 'logic', evidence: 'placeholder' }],
-    classification: 'logic',
-    strategy: 'logic_fix',
-  };
+  // 1. ActionClassifier：action → actionType
+  const actionType = new ActionClassifier().classify(action);
+  // 2. ValidatorSelector：actionType → 校验器名单
+  const names = new ValidatorSelector().select(actionType, config);
+  // 3. ValidatorChain：按模式执行（fail_fast 短路 / collect_all 全跑）
+  const validators = names.map((name) => validatorByName(name));
+  const results = await new ValidatorChain(validators, mode).run(
+    action,
+    { success: true, duration_ms: 1 },
+    { workspaceRoot: '/demo' },
+  );
+  // 4. FailureClassifier：首个失败反馈 → 失败类别
+  const first = results[0];
+  const classification = first && !first.passed ? new FailureClassifier().classify(first) : null;
+  // 5. StrategyMatcher：失败类别 → 修复策略
+  const strategy = classification ? new StrategyMatcher().match(classification) : null;
+  return { actionType, names, results, classification, strategy };
 }
 
 const action: Action = { tool: 'write_file', params: { path: 'src/index.ts', content: 'const n = 1;' } };

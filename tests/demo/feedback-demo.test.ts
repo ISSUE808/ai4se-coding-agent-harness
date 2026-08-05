@@ -49,9 +49,19 @@ const demoReviewer: Validator = {
  * 2. 跑 ValidatorChain（mock 评审器）→ FeedbackResult
  */
 async function runFeedbackRound(provider: MockProvider): Promise<FeedbackResult> {
-  // RED: 反馈闭环尚未接线——消耗一个响应但跳过评审（恒返回通过）
-  await provider.complete([], []);
-  return { passed: true, validator: 'demo', evidence: 'ok' };
+  // 1. 从 MockProvider 取下一轮修复代码（确定性注入，零真实 LLM）
+  const response = await provider.complete([], []);
+  const code = response.content ?? '';
+
+  // 2. 把代码当作本轮 write_file 的产物，交给 ValidatorChain（mock 评审器）
+  const action: Action = { tool: 'write_file', params: { path: 'src/index.ts', content: code } };
+  const result: ToolResult = { success: true, output: code, duration_ms: 1 };
+  const [feedback] = await new ValidatorChain([demoReviewer], 'collect_all').run(
+    action,
+    result,
+    { workspaceRoot: '/demo' },
+  );
+  return feedback;
 }
 
 interface RoundRecord {

@@ -31,9 +31,28 @@ async function runGuardrailStep(
   action: Action,
   executor: (a: Action) => Promise<ToolResult>,
 ): Promise<GuardrailDecision> {
-  // RED: 护栏尚未接线——无条件放行并执行（危险命令也会被执行！）
-  const result = await executor(action);
-  return { blocked: false, level: 'allow', result };
+  const command = String(action.params.command ?? '');
+  const guard = new PatternGuard().check(command);
+  if (guard.blocked) {
+    // 绝不执行——直接构造拦截通知（与 main-loop 的 guardMsg 同构）
+    return {
+      blocked: true,
+      level: guard.level,
+      rule: guard.rule,
+      noticeMessage: {
+        id: 'guard-msg',
+        role: 'system',
+        content: `Operation paused for human approval: ${guard.rule}`,
+        metadata: {
+          guardrailRule: guard.rule,
+          guardrailCommand: command,
+        },
+        timestamp: '2026-08-05T00:00:00.000Z',
+      },
+    };
+  }
+  // 放行 → 交给执行器
+  return { blocked: false, level: 'allow', result: await executor(action) };
 }
 
 describe('演示 1：护栏拦截（MockProvider → PatternGuard → 拦截通知）', () => {
