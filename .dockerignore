@@ -1,40 +1,38 @@
 # CodeHarness Docker 构建上下文排除（PLAN Task 21）
-# 镜像只需 package.json + package-lock.json + dist/，其余一律不进上下文。
+# 多阶段构建（Task 21 CR）：镜像内 build 阶段自包含编译（npm ci + tsc + vite），
+# src/ 与客户端源码必须进上下文；runtime 阶段只 COPY 产物。
 
-# 依赖与构建产物（dist/ 必须 COPY 进镜像，不排除）
+# 依赖与本地构建产物（镜像内构建，不进上下文）
 node_modules
 build
 
-# 测试与源码（构建在宿主机完成，镜像不携带）
+# 测试与开发脚本（非镜像内容）
 tests
-src
 scripts
 
 # 文档与规划（非镜像内容）
 docs
 .github
-AGENT_LOG.md
-PLAN.md
-SPEC.md
-SPEC_PROCESS.md
-KNOWN_ISSUES.md
-DESIGN_BRIEF.md
-TESTING.md
+*.md
 
 # 版本控制
 .git
 .gitignore
 
-# 凭据与密钥（绝不进上下文）
+# 凭据与密钥（绝不进上下文；根锚定避免误伤 src/credentials/ 源码）
 .env
 .env.*
-secrets
-credentials
+/secrets
+/credentials
 *.cred
 *.pem
 *.key
 *.p12
 *.pfx
+
+# 个人环境产物与 npm 凭据（可能含密钥）
+/.codeharness.json
+.npmrc
 
 # 其他 worktree（.claude/worktrees/ 内含完整仓库副本，体积大且含历史敏感信息）、桌面应用、日志
 .claude/
