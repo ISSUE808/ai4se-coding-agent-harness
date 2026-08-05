@@ -9,13 +9,26 @@ vi.mock('../lib/api', () => ({
   fetchSessions: vi.fn(),
   createSession: vi.fn(),
   fetchConfig: vi.fn(),
+  fetchMachineRoots: vi.fn(),
+  fetchFsBrowse: vi.fn(),
+  deleteSession: vi.fn(),
 }));
 
-import { createSession, fetchConfig, fetchSessions } from '../lib/api';
+import {
+  createSession,
+  deleteSession,
+  fetchConfig,
+  fetchFsBrowse,
+  fetchMachineRoots,
+  fetchSessions,
+} from '../lib/api';
 
 const fetchSessionsMock = vi.mocked(fetchSessions);
 const createSessionMock = vi.mocked(createSession);
 const fetchConfigMock = vi.mocked(fetchConfig);
+const fetchMachineRootsMock = vi.mocked(fetchMachineRoots);
+const fetchFsBrowseMock = vi.mocked(fetchFsBrowse);
+const deleteSessionMock = vi.mocked(deleteSession);
 
 const RUNNING = {
   id: 's_8f3a21',
@@ -41,6 +54,24 @@ const COMPLETED = {
   updatedAt: '2026-08-02T08:18:27.000Z',
 };
 
+/** Machine root + listings served by the browse endpoints when the picker opens. */
+const MACHINE_ROOTS = ['/repo'];
+
+const REPO_LISTING = {
+  path: '/repo',
+  parent: '/',
+  entries: [
+    { path: '/repo/src', name: 'src', type: 'dir' as const },
+    { path: '/repo/README.md', name: 'README.md', type: 'file' as const, size: 8 },
+  ],
+};
+
+const SRC_LISTING = {
+  path: '/repo/src',
+  parent: '/repo',
+  entries: [{ path: '/repo/src/auth', name: 'auth', type: 'dir' as const }],
+};
+
 function renderDashboard() {
   return render(
     <MemoryRouter initialEntries={['/']}>
@@ -57,7 +88,65 @@ describe('Dashboard', () => {
     fetchSessionsMock.mockReset();
     createSessionMock.mockReset();
     fetchConfigMock.mockReset();
+    fetchMachineRootsMock.mockReset();
+    fetchFsBrowseMock.mockReset();
     fetchConfigMock.mockResolvedValue({}); // no agent.workspaceRoot by default
+  });
+
+  it('browses the whole machine in the directory picker and fills 工作目录 (browse)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    fetchMachineRootsMock.mockResolvedValue(MACHINE_ROOTS);
+    fetchFsBrowseMock.mockResolvedValueOnce(REPO_LISTING).mockResolvedValueOnce(SRC_LISTING);
+    renderDashboard();
+    await screen.findByText(/还没有会话/);
+
+    await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: '浏览…' }));
+
+    // Picker opens on the machine roots (no path arg) and shows the drive.
+    const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
+    expect(fetchMachineRootsMock).toHaveBeenCalledTimes(1);
+    expect(await within(picker).findByRole('button', { name: '选择 /repo' })).toBeInTheDocument();
+
+    // Expanding a directory lazily browses its entries.
+    await userEvent.click(within(picker).getByRole('button', { name: '展开 /repo' }));
+    expect(fetchFsBrowseMock).toHaveBeenCalledWith('/repo');
+    expect(await within(picker).findByText('src')).toBeInTheDocument();
+    expect(within(picker).getByText('README.md')).toBeInTheDocument();
+
+    // Expanding the nested directory fetches one more level.
+    await userEvent.click(within(picker).getByRole('button', { name: '展开 src' }));
+    expect(fetchFsBrowseMock).toHaveBeenCalledWith('/repo/src');
+    expect(await within(picker).findByText('auth')).toBeInTheDocument();
+
+    // Selecting a directory fills the input and closes the picker.
+    await userEvent.click(within(picker).getByRole('button', { name: '选择 src' }));
+    expect(screen.getByLabelText('工作目录')).toHaveValue('/repo/src');
+    expect(screen.queryByRole('dialog', { name: '选择工作目录' })).not.toBeInTheDocument();
+
+    // Manual editing still works after picking.
+    const rootInput = screen.getByLabelText('工作目录');
+    await userEvent.clear(rootInput);
+    await userEvent.type(rootInput, '/repo/manual');
+    expect(rootInput).toHaveValue('/repo/manual');
+  });
+
+  it('closes the directory picker with Escape (M8)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    fetchMachineRootsMock.mockResolvedValue(MACHINE_ROOTS);
+    renderDashboard();
+    await screen.findByText(/还没有会话/);
+
+    await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
+    await screen.findByRole('dialog');
+    await userEvent.click(screen.getByRole('button', { name: '浏览…' }));
+    await screen.findByRole('dialog', { name: '选择工作目录' });
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: '选择工作目录' })).not.toBeInTheDocument();
+    // The new-session modal itself stays open.
+    expect(screen.getByRole('dialog', { name: '新建会话' })).toBeInTheDocument();
   });
 
   it('renders the session list with id, task, badge, rounds, duration and tokens', async () => {
@@ -177,5 +266,56 @@ describe('Dashboard', () => {
     await userEvent.click(screen.getAllByRole('button', { name: '新建会话' })[0]);
     await screen.findByRole('dialog');
     expect(createSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('deletes a completed session after a two-step confirm and refreshes the list (KNOWN_ISSUES 9 + acceptance feedback)', async () => {
+    fetchSessionsMock.mockResolvedValue([COMPLETED]);
+    deleteSessionMock.mockResolvedValue({ removed: true });
+    renderDashboard();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText('删除 s_5a91cd'));
+    // First click only arms the confirm — the API is untouched.
+    expect(deleteSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('确认删除 s_5a91cd')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('确认删除 s_5a91cd'));
+    await waitFor(() => expect(deleteSessionMock).toHaveBeenCalledWith('s_5a91cd'));
+    expect(fetchSessionsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables deletion for a running session (KNOWN_ISSUES 9)', async () => {
+    fetchSessionsMock.mockResolvedValue([RUNNING]);
+    renderDashboard();
+    await screen.findByLabelText('删除 s_8f3a21');
+    expect(screen.getByLabelText('删除 s_8f3a21')).toBeDisabled();
+  });
+
+  it('arms only the clicked row — arming another row disarms the first (acceptance feedback)', async () => {
+    const second = { ...COMPLETED, id: 's_2nd', task: '第二个会话' };
+    fetchSessionsMock.mockResolvedValue([COMPLETED, second]);
+    renderDashboard();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText('删除 s_5a91cd'));
+    expect(screen.getByLabelText('确认删除 s_5a91cd')).toBeInTheDocument();
+    expect(screen.queryByLabelText('确认删除 s_2nd')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('删除 s_2nd')).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('删除 s_2nd'));
+    expect(screen.queryByLabelText('确认删除 s_5a91cd')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('确认删除 s_2nd')).toBeInTheDocument();
+  });
+
+  it('shows an inline error when row deletion fails (reviewer Important)', async () => {
+    fetchSessionsMock.mockResolvedValue([COMPLETED]);
+    deleteSessionMock.mockRejectedValue(new Error('Cannot delete a running session'));
+    renderDashboard();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByLabelText('删除 s_5a91cd'));
+    await user.click(screen.getByLabelText('确认删除 s_5a91cd'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('删除会话失败');
+    // The list stays — no refresh was triggered by the failed delete.
+    expect(fetchSessionsMock).toHaveBeenCalledTimes(1);
   });
 });

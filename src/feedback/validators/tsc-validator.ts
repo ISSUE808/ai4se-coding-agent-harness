@@ -2,6 +2,7 @@ import type { Validator, Action, ToolResult, ValidatorContext, FeedbackResult } 
 import { execSync as nodeExecSync } from 'child_process';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
+import { hasLocalBin } from '../../utils/env-prereq.js';
 
 function defaultHasTsConfig(root: string): boolean {
   return existsSync(path.join(root, 'tsconfig.json'));
@@ -11,10 +12,16 @@ export class TscValidator implements Validator {
   name = 'tsc';
   private _exec: typeof nodeExecSync;
   private _hasConfig: (root: string) => boolean;
+  private _hasBin: (root: string) => boolean;
 
-  constructor(exec?: typeof nodeExecSync, hasConfig?: (root: string) => boolean) {
+  constructor(
+    exec?: typeof nodeExecSync,
+    hasConfig?: (root: string) => boolean,
+    hasBin?: (root: string) => boolean,
+  ) {
     this._exec = exec ?? nodeExecSync;
     this._hasConfig = hasConfig ?? defaultHasTsConfig;
+    this._hasBin = hasBin ?? ((root) => hasLocalBin(root, 'tsc'));
   }
 
   async validate(_action: Action, _result: ToolResult, context: ValidatorContext): Promise<FeedbackResult> {
@@ -26,6 +33,17 @@ export class TscValidator implements Validator {
         passed: true,
         validator: 'tsc',
         evidence: 'tsc skipped: no tsconfig.json in workspace',
+      };
+    }
+
+    // Env prerequisite (KNOWN_ISSUES 4): with a tsconfig but NO local
+    // TypeScript, `npx tsc` resolves to the ABANDONED npm package `tsc@2.0.4`
+    // (not TypeScript) — the download trap. Skip instead.
+    if (!this._hasBin(context.workspaceRoot)) {
+      return {
+        passed: true,
+        validator: 'tsc',
+        evidence: 'tsc skipped: no local tsc binary (node_modules/.bin/tsc missing)',
       };
     }
 

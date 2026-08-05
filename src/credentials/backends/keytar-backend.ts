@@ -42,6 +42,13 @@ export class KeytarBackend implements CredentialBackend {
     const keytar = await loadKeytar();
     return (await keytar.getPassword(service, account)) !== null;
   }
+
+  /** Enumerate accounts via keytar.findCredentials (Task 25). */
+  async list(service: string): Promise<string[]> {
+    const keytar = await loadKeytar();
+    const entries = await keytar.findCredentials(service);
+    return entries.map((entry) => entry.account);
+  }
 }
 
 /** The subset of the keytar API used by this backend. */
@@ -49,6 +56,7 @@ interface KeytarModule {
   getPassword(service: string, account: string): Promise<string | null>;
   setPassword(service: string, account: string, password: string): Promise<void>;
   deletePassword(service: string, account: string): Promise<boolean>;
+  findCredentials(service: string): Promise<Array<{ account: string; password: string }>>;
 }
 
 /**

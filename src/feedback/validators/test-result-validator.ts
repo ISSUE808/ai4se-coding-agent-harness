@@ -1,5 +1,6 @@
 import type { Validator, Action, ToolResult, ValidatorContext, FeedbackResult } from '../../types.js';
 import { execSync as nodeExecSync } from 'child_process';
+import { hasLocalBin } from '../../utils/env-prereq.js';
 
 interface VitestResult {
   numTotalTests: number;
@@ -21,12 +22,25 @@ interface VitestResult {
 export class TestResultValidator implements Validator {
   name = 'testResultParser';
   private _exec: typeof nodeExecSync;
+  private _hasVitest: (root: string) => boolean;
 
-  constructor(exec?: typeof nodeExecSync) {
+  constructor(exec?: typeof nodeExecSync, hasVitest?: (root: string) => boolean) {
     this._exec = exec ?? nodeExecSync;
+    this._hasVitest = hasVitest ?? ((root) => hasLocalBin(root, 'vitest'));
   }
 
   async validate(_action: Action, _result: ToolResult, context: ValidatorContext): Promise<FeedbackResult> {
+    // Env prerequisite (KNOWN_ISSUES 3, same pattern as eslint/tsc): without a
+    // LOCAL vitest, `npx vitest` downloads it — skip instead of feeding the
+    // environment failure back to the LLM as a code error.
+    if (!this._hasVitest(context.workspaceRoot)) {
+      return {
+        passed: true,
+        validator: 'testResultParser',
+        evidence: 'Test runner skipped: vitest not installed (node_modules/.bin/vitest missing)',
+      };
+    }
+
     try {
       const raw = this._exec('npx vitest run --reporter json', {
         cwd: context.workspaceRoot,

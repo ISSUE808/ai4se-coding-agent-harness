@@ -13,7 +13,16 @@ vi.mock('../lib/api', () => ({
   postMessage: vi.fn(),
   sessionControl: vi.fn(),
   resolveApproval: vi.fn(),
-  fetchConfig: vi.fn().mockResolvedValue({ model: 'deepseek-v4-pro', guardrails: { requireApproval: ['prod'], blockOutbound: true } }),
+  // The mock must mirror the REAL config shape (src/types.ts Config): the
+  // model lives at `llm.model`, never at the top level. A top-level `model`
+  // here would silently hide the selector (4.1 real test regression).
+  fetchConfig: vi.fn().mockResolvedValue({ llm: { model: 'deepseek-v4-pro' }, guardrails: { requireApproval: ['prod'], blockOutbound: true } }),
+  fetchFsFile: vi.fn(),
+  fetchFsTree: vi.fn(),
+  fetchSessions: vi.fn(),
+  fetchAvailableModels: vi.fn(),
+  saveConfig: vi.fn(),
+  updateSessionModel: vi.fn(),
 }));
 
 vi.mock('../lib/ws-source', () => ({
@@ -27,10 +36,16 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 import {
+  fetchAvailableModels,
+  fetchFsFile,
+  fetchFsTree,
   fetchSession,
+  fetchSessions,
   postMessage,
   resolveApproval,
+  saveConfig,
   sessionControl,
+  updateSessionModel,
 } from '../lib/api';
 import { createWebSocketEventSource } from '../lib/ws-source';
 
@@ -38,6 +53,12 @@ const fetchSessionMock = vi.mocked(fetchSession);
 const postMessageMock = vi.mocked(postMessage);
 const sessionControlMock = vi.mocked(sessionControl);
 const resolveApprovalMock = vi.mocked(resolveApproval);
+const fetchFsFileMock = vi.mocked(fetchFsFile);
+const fetchFsTreeMock = vi.mocked(fetchFsTree);
+const fetchSessionsMock = vi.mocked(fetchSessions);
+const fetchAvailableModelsMock = vi.mocked(fetchAvailableModels);
+const saveConfigMock = vi.mocked(saveConfig);
+const updateSessionModelMock = vi.mocked(updateSessionModel);
 const createSourceMock = vi.mocked(createWebSocketEventSource);
 
 class FakeSource implements SessionEventSource {
@@ -88,6 +109,44 @@ const SESSION: SessionDetailData = {
   ],
 };
 
+/** Tree WITHOUT src/auth/token.ts (as if the server depth/per-level caps
+ *  truncated it) — for the I2 fallback-list test. */
+const FS_TREE_SHALLOW = {
+  path: '/repo/auth-app',
+  name: 'auth-app',
+  type: 'dir' as const,
+  children: [
+    { path: '/repo/auth-app/src', name: 'src', type: 'dir' as const, children: [] },
+    { path: '/repo/auth-app/package.json', name: 'package.json', type: 'file' as const, size: 300 },
+  ],
+};
+
+/** Workspace tree served by fetchFsTree for SESSION.workspaceRoot. */
+const FS_TREE = {
+  path: '/repo/auth-app',
+  name: 'auth-app',
+  type: 'dir' as const,
+  children: [
+    {
+      path: '/repo/auth-app/src',
+      name: 'src',
+      type: 'dir' as const,
+      children: [
+        {
+          path: '/repo/auth-app/src/auth',
+          name: 'auth',
+          type: 'dir' as const,
+          children: [
+            { path: '/repo/auth-app/src/auth/token.ts', name: 'token.ts', type: 'file' as const, size: 204 },
+          ],
+        },
+        { path: '/repo/auth-app/src/index.ts', name: 'index.ts', type: 'file' as const, size: 60 },
+      ],
+    },
+    { path: '/repo/auth-app/package.json', name: 'package.json', type: 'file' as const, size: 300 },
+  ],
+};
+
 function renderDetail(session = SESSION) {
   fetchSessionMock.mockResolvedValue(session);
   return render(
@@ -108,6 +167,31 @@ describe('SessionDetail', () => {
     postMessageMock.mockReset();
     sessionControlMock.mockReset();
     resolveApprovalMock.mockReset();
+    fetchFsFileMock.mockReset();
+    fetchFsTreeMock.mockReset();
+    // The left column always fetches the workspace tree; default to the
+    // standard fixture so every test renders without stubbing.
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    // Selecting a file fetches its content from /api/fs/file (1.5).
+    fetchFsFileMock.mockResolvedValue({
+      path: '/repo/auth-app/src/auth/token.ts',
+      name: 'token.ts',
+      content: 'export const token = "rotating";\n',
+      size: 33,
+    });
+    // Task 26: the model selector lists models used by other sessions;
+    // default to the current session (no model) so recent models are empty.
+    fetchSessionsMock.mockReset();
+    fetchSessionsMock.mockResolvedValue([SESSION]);
+    updateSessionModelMock.mockReset();
+    updateSessionModelMock.mockResolvedValue(SESSION);
+    // Provider model list: DEFAULT to failure so every existing test runs in
+    // the fallback mode (default + recent + custom input). Tests that exercise
+    // the list mode mock it resolved explicitly.
+    fetchAvailableModelsMock.mockReset();
+    fetchAvailableModelsMock.mockRejectedValue(new Error('未配置 API key'));
+    saveConfigMock.mockReset();
+    saveConfigMock.mockResolvedValue({ llm: { model: 'deepseek-v4-pro' } });
     createSourceMock.mockReset();
     createSourceMock.mockImplementation(() => {
       source = new FakeSource();
@@ -148,17 +232,154 @@ describe('SessionDetail', () => {
     expect(screen.getByText('/repo/auth-app')).toBeInTheDocument();
   });
 
-  it('aggregates the file list in the left column and opens a Monaco diff for the selected file', async () => {
+  it('renders the workspace file tree, marks changed files and opens the diff preview (Task 23)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
     renderDetail();
 
-    const fileItem = await screen.findByText('src/auth/token.ts');
-    expect(fileItem).toBeInTheDocument();
+    // The tree is fetched for the session workspaceRoot; the root is
+    // auto-expanded so the first level is visible immediately.
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledWith('/repo/auth-app');
+    });
+    expect(await screen.findByText('src')).toBeInTheDocument();
+    expect(screen.getByText('package.json')).toBeInTheDocument();
+
+    // Expanding directories reveals deeper levels.
+    await userEvent.click(screen.getByRole('button', { name: '展开 src' }));
+    expect(await screen.findByText('auth')).toBeInTheDocument();
+    expect(screen.getByText('index.ts')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '展开 auth' }));
+    const changed = await screen.findByText('token.ts');
+    expect(changed).toBeInTheDocument();
+
+    // The touched file carries the A mark + line counts; only one mark exists.
     expect(screen.getByText('A')).toBeInTheDocument();
     expect(screen.getByText('+84')).toBeInTheDocument();
     expect(screen.getByText('−32')).toBeInTheDocument();
 
-    await userEvent.click(fileItem);
-    expect(await screen.findByLabelText('diff-editor')).toHaveValue('applied 2 edits · +84 −32');
+    // Selecting the file fetches its CURRENT content (1.5) into the preview.
+    await userEvent.click(changed);
+    expect(await screen.findByLabelText('diff-editor')).toHaveValue('export const token = "rotating";\n');
+    expect(fetchFsFileMock).toHaveBeenCalledWith('/repo/auth-app/src/auth/token.ts');
+  });
+
+  it('shows a content-preview error when the file fetch fails (1.5)', async () => {
+    fetchFsFileMock.mockRejectedValue(new Error('path is outside the allowed workspace roots'));
+    renderDetail();
+
+    await userEvent.click(await screen.findByRole('button', { name: '展开 src' }));
+    await userEvent.click(await screen.findByRole('button', { name: '展开 auth' }));
+    await userEvent.click(await screen.findByText('token.ts'));
+
+    expect(await screen.findByText('无法读取文件内容')).toBeInTheDocument();
+    expect(screen.getByText(/outside the allowed workspace roots/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('diff-editor')).not.toBeInTheDocument();
+  });
+
+  it('lists changed files missing from the fetched tree in a fallback list (I2)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE_SHALLOW);
+    renderDetail();
+
+    // token.ts is not in the tree payload — it appears in the fallback list
+    // with its A mark and stays selectable for the diff preview.
+    const fallback = await screen.findByText('变更文件（未显示在树中）');
+    expect(fallback).toBeInTheDocument();
+    const item = await screen.findByText('src/auth/token.ts');
+    expect(screen.getByText('A')).toBeInTheDocument();
+    expect(screen.getByText('+84')).toBeInTheDocument();
+    expect(screen.getByText('−32')).toBeInTheDocument();
+
+    await userEvent.click(item);
+    expect(await screen.findByLabelText('diff-editor')).toHaveValue('export const token = "rotating";\n');
+    expect(fetchFsFileMock).toHaveBeenCalledWith('/repo/auth-app/src/auth/token.ts');
+  });
+
+  it('shows no fallback list when every changed file is in the fetched tree', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    expect(await screen.findByText('src')).toBeInTheDocument();
+    expect(screen.queryByText('变更文件（未显示在树中）')).not.toBeInTheDocument();
+  });
+
+  it('does not refetch the file tree when only the session status changes (M5)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Pause rebuilds the session object (same workspaceRoot) — the tree
+    // effect must not refetch on that.
+    await userEvent.click(screen.getByRole('button', { name: '暂停' }));
+    act(() => source.emit({ type: 'session:status', data: { sessionId: 's_1', status: 'paused' } }));
+    await screen.findByRole('button', { name: '恢复' });
+    expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches the file tree when a tool message with changed files arrives (new files appear live, 1.4)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+    });
+
+    // A new tool message that changed files lands over the WS stream (the
+    // 1.4 scenario: `运行命令：echo x > notes.md` creates a file the tree
+    // snapshot does not know yet).
+    act(() =>
+      source.emit({
+        type: 'message:added',
+        data: {
+          sessionId: 's_1',
+          id: 'm4',
+          role: 'tool',
+          content: 'created notes.md',
+          timestamp: '2026-08-02T08:07:00.000Z',
+          metadata: {
+            toolName: 'run_command',
+            toolInput: { command: 'echo x > notes.md' },
+            toolResult: { success: true, duration_ms: 10, filesChanged: ['notes.md'] },
+          },
+        },
+      }),
+    );
+
+    // The debounced refetch lands shortly after.
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledTimes(2);
+    });
+    expect(fetchFsTreeMock).toHaveBeenLastCalledWith('/repo/auth-app');
+  });
+
+  it('does not refetch the tree for messages that changed no files (1.4: only file changes trigger)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    await waitFor(() => {
+      expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+    });
+
+    act(() =>
+      source.emit({
+        type: 'message:added',
+        data: { sessionId: 's_1', id: 'm4', role: 'user', content: '继续', timestamp: '2026-08-02T08:07:00.000Z' },
+      }),
+    );
+    // Longer than the refresh debounce — still exactly the initial fetch.
+    await new Promise((r) => setTimeout(r, 350));
+    expect(fetchFsTreeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('collapses expanded directories in the file tree (Task 23)', async () => {
+    fetchFsTreeMock.mockResolvedValue(FS_TREE);
+    renderDetail();
+    expect(await screen.findByText('src')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '展开 src' }));
+    expect(await screen.findByText('auth')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '折叠 src' }));
+    expect(screen.queryByText('auth')).not.toBeInTheDocument();
+    expect(screen.getByText('package.json')).toBeInTheDocument();
   });
 
   it('sends a composer message, appends it locally and dedupes the WS broadcast', async () => {
@@ -301,5 +522,355 @@ describe('SessionDetail', () => {
 
     await userEvent.click(screen.getByRole('link', { name: /返回/ }));
     expect(screen.getByText('回到会话列表')).toBeInTheDocument();
+  });
+
+  it('shows the default model from config in the model selector (Task 26)', async () => {
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    const select = screen.getByLabelText('选择模型');
+    expect(select).toHaveValue('deepseek-v4-pro');
+    expect(screen.getByText('默认模型 · deepseek-v4-pro')).toBeInTheDocument();
+  });
+
+  it('shows the session-level model when the session overrides the default (Task 26)', async () => {
+    renderDetail({ ...SESSION, model: 'deepseek-r1' });
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    const select = screen.getByLabelText('选择模型');
+    expect(select).toHaveValue('deepseek-r1');
+    // The label row distinguishes a session-level override from the default.
+    expect(screen.getByText('会话模型')).toBeInTheDocument();
+    expect(screen.getAllByText('deepseek-r1').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('lists models used by other sessions in the dropdown, deduplicated (Task 26)', async () => {
+    fetchSessionsMock.mockResolvedValue([
+      { ...SESSION, id: 's_old', model: 'deepseek-v3' },
+      { ...SESSION, id: 's_older', model: 'deepseek-v3' },
+      { ...SESSION, id: 's_plain' },
+    ]);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    expect(screen.getByRole('option', { name: 'deepseek-v3' })).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: 'deepseek-v3' })).toHaveLength(1);
+  });
+
+  it('switching the model PATCHes the session and updates the displayed model (Task 26)', async () => {
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: 'deepseek-v3' });
+    fetchSessionsMock.mockResolvedValue([{ ...SESSION, id: 's_old', model: 'deepseek-v3' }]);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-v3');
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', 'deepseek-v3');
+    });
+    // The selector now shows the switched model.
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-v3');
+    });
+  });
+
+  it('selecting the default model clears the override (back to config, Task 26)', async () => {
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: undefined as unknown as string });
+    fetchSessionsMock.mockResolvedValue([]);
+    renderDetail({ ...SESSION, model: 'deepseek-r1' });
+    await screen.findByText('把认证模块改成刷新令牌');
+    expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-r1');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-v4-pro');
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', '');
+    });
+    // Falls back to the config default.
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-v4-pro');
+    });
+  });
+
+  it('supports entering a custom model via the input (Task 26)', async () => {
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: 'my-custom-llm' });
+    fetchSessionsMock.mockResolvedValue([]);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), '__custom__');
+    const input = screen.getByLabelText('自定义模型输入');
+    await userEvent.type(input, 'my-custom-llm');
+    await userEvent.click(screen.getByRole('button', { name: '应用' }));
+
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', 'my-custom-llm');
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('my-custom-llm');
+    });
+  });
+
+  it('updates the model live from the session:updated WS frame (Task 26)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    act(() =>
+      source.emit({
+        type: 'session:updated',
+        data: { sessionId: 's_1', model: 'deepseek-r1', updatedAt: '2026-08-03T00:00:00.000Z' },
+      }),
+    );
+    expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-r1');
+  });
+
+  it('keeps a switched model in the dropdown after returning to default (review M4)', async () => {
+    fetchSessionsMock.mockResolvedValue([]);
+    updateSessionModelMock
+      .mockResolvedValueOnce({ ...SESSION, model: 'my-custom-llm' })
+      .mockResolvedValueOnce({ ...SESSION, model: undefined as unknown as string });
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    // Apply a custom model.
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), '__custom__');
+    await userEvent.type(screen.getByLabelText('自定义模型输入'), 'my-custom-llm');
+    await userEvent.click(screen.getByRole('button', { name: '应用' }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('my-custom-llm');
+    });
+
+    // Switch back to the config default (clears the override).
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-v4-pro');
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-v4-pro');
+    });
+
+    // The custom model must remain selectable — it was folded into the
+    // "recently used" list instead of disappearing with the override.
+    expect(screen.getByRole('option', { name: 'my-custom-llm' })).toBeInTheDocument();
+  });
+
+  it('lists the provider models in the selector when the list loads (Task 26 follow-up)', async () => {
+    fetchAvailableModelsMock.mockResolvedValue({
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+    });
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    // List mode: provider models are options, the free-text custom entry is gone.
+    expect(screen.getByRole('option', { name: 'deepseek-chat' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'deepseek-reasoner' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '自定义模型…' })).not.toBeInTheDocument();
+  });
+
+  it('selecting a listed model PATCHes the session AND updates the global default config', async () => {
+    fetchAvailableModelsMock.mockResolvedValue({
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+    });
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: 'deepseek-chat' });
+    saveConfigMock.mockResolvedValue({ llm: { model: 'deepseek-chat' } });
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-chat');
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', 'deepseek-chat');
+    });
+    // The global default follows so the NEXT session uses the same model.
+    await waitFor(() => {
+      expect(saveConfigMock).toHaveBeenCalledWith({ llm: { model: 'deepseek-chat' } });
+    });
+  });
+
+  it('shows a fallback hint when the model list fails and keeps the custom entry', async () => {
+    fetchAvailableModelsMock.mockRejectedValue(new Error('未配置 deepseek 的 API key'));
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    expect(await screen.findByText(/模型列表加载失败/)).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '自定义模型…' })).toBeInTheDocument();
+  });
+
+  it('still switches the session model when the global config save fails, with a hint', async () => {
+    fetchAvailableModelsMock.mockResolvedValue({
+      models: ['deepseek-chat', 'deepseek-reasoner'],
+    });
+    updateSessionModelMock.mockResolvedValue({ ...SESSION, model: 'deepseek-chat' });
+    saveConfigMock.mockRejectedValue(new Error('config write denied'));
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    await userEvent.selectOptions(screen.getByLabelText('选择模型'), 'deepseek-chat');
+    await waitFor(() => {
+      expect(updateSessionModelMock).toHaveBeenCalledWith('s_1', 'deepseek-chat');
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText('选择模型')).toHaveValue('deepseek-chat');
+    });
+    expect(await screen.findByText(/全局配置更新失败/)).toBeInTheDocument();
+  });
+
+  it('shows billed token usage breakdown when the session carries tokenUsage (KNOWN_ISSUES 9)', async () => {
+    const withUsage = {
+      ...SESSION,
+      tokenUsage: { prompt: 1200, completion: 340, cached: 900 },
+    };
+    renderDetail(withUsage);
+    expect(await screen.findByText('输入')).toBeInTheDocument();
+    expect(screen.getByText('1.2K')).toBeInTheDocument();
+    expect(screen.getByText('340')).toBeInTheDocument();
+    expect(screen.getByText('900')).toBeInTheDocument();
+    expect(screen.getByText('1.5K')).toBeInTheDocument();
+  });
+
+  it('re-fetches the session when it completes via WS so billed token usage appears without refresh (acceptance feedback)', async () => {
+    const completed = {
+      ...SESSION,
+      status: 'completed' as const,
+      tokenUsage: { prompt: 1200, completion: 340, cached: 900 },
+    };
+    fetchSessionMock.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(completed);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+    // First snapshot: running session, no tokenUsage yet — no breakdown.
+    expect(fetchSessionMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('输入')).not.toBeInTheDocument();
+
+    // The WS flips the session to completed — no page refresh.
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    // The detail re-fetches the REST snapshot once, and the breakdown renders.
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('输入')).toBeInTheDocument();
+    expect(screen.getByText('1.2K')).toBeInTheDocument();
+    expect(screen.getByText('340')).toBeInTheDocument();
+    // Exactly one refetch — no refresh loop.
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps the cockpit alive when the completion refetch fails (reviewer Important)', async () => {
+    fetchSessionMock
+      .mockResolvedValueOnce(SESSION)
+      .mockRejectedValueOnce(new Error('network down'));
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+    // No full-screen error, no spinner tear-down — the stale-but-alive view stays.
+    expect(screen.queryByText('无法加载会话')).not.toBeInTheDocument();
+    expect(screen.getByText('把认证模块改成刷新令牌')).toBeInTheDocument();
+    // And no refresh loop after the failure.
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+  });
+
+  it('refetches when the session fails via WS too (its final snapshot carries tokenUsage)', async () => {
+    const failed = {
+      ...SESSION,
+      status: 'failed' as const,
+      tokenUsage: { prompt: 100, completion: 20 },
+    };
+    fetchSessionMock.mockResolvedValueOnce(SESSION).mockResolvedValueOnce(failed);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+    expect(screen.queryByText('输入')).not.toBeInTheDocument();
+
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'failed' },
+      }),
+    );
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('100')).toBeInTheDocument();
+    expect(screen.getByText('20')).toBeInTheDocument();
+  });
+
+  it('does not refetch a session already completed in the initial snapshot', async () => {
+    const completed = {
+      ...SESSION,
+      status: 'completed' as const,
+      tokenUsage: { prompt: 1200, completion: 340, cached: 900 },
+    };
+    renderDetail(completed);
+    await screen.findByText('输入');
+    expect(fetchSessionMock).toHaveBeenCalledTimes(1);
+
+    // A redundant completed frame (e.g. re-broadcast) must not refetch either.
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    expect(fetchSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-arms the completion refetch after a resume (completed → running → completed)', async () => {
+    const done1 = {
+      ...SESSION,
+      status: 'completed' as const,
+      tokenUsage: { prompt: 500, completion: 100 },
+    };
+    const done2 = {
+      ...SESSION,
+      status: 'completed' as const,
+      tokenUsage: { prompt: 600, completion: 110 },
+    };
+    fetchSessionMock
+      .mockResolvedValueOnce(SESSION)
+      .mockResolvedValueOnce(done1)
+      .mockResolvedValueOnce(done2);
+    renderDetail();
+    await screen.findByText('把认证模块改成刷新令牌');
+
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('500')).toBeInTheDocument();
+
+    // Resumed (e.g. from another tab/CLI) then completed again — must refetch.
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'running' },
+      }),
+    );
+    act(() =>
+      source.emit({
+        type: 'session:status',
+        data: { sessionId: 's_1', status: 'completed' },
+      }),
+    );
+    await waitFor(() => expect(fetchSessionMock).toHaveBeenCalledTimes(3));
+    expect(await screen.findByText('600')).toBeInTheDocument();
+  });
+
+  it('renders live terminal frames under the 终端 tab (KNOWN_ISSUES 9)', async () => {
+    renderDetail();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '终端' }));
+    expect(await screen.findByText(/暂无终端输出/)).toBeInTheDocument();
+
+    act(() =>
+      source.emit({
+        type: 'tool:executed',
+        data: { toolName: 'read_file', duration_ms: 4, success: true },
+      }),
+    );
+    expect(await screen.findByText(/\[tool\] read_file/)).toBeInTheDocument();
   });
 });

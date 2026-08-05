@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import type { Config, LLMProvider, Message, Session, ToolResult, Validator } from '../../types.js';
 import { AgentLoop } from '../../core/main-loop.js';
@@ -27,7 +28,7 @@ import { ShellCheckValidator } from '../../feedback/validators/shell-check-valid
 import { TestResultValidator } from '../../feedback/validators/test-result-validator.js';
 import { PatternGuard } from '../../guardrail/pattern-guard.js';
 import { ScopeFence } from '../../guardrail/scope-fence.js';
-import { HITLManager } from '../../guardrail/hitl-manager.js';
+import { HITLManager, HITLState } from '../../guardrail/hitl-manager.js';
 import { SessionMemory } from '../../memory/session-memory.js';
 import { createEventBus } from '../../events.js';
 import type { HarnessEvents, HarnessEventMap } from '../../events.js';
@@ -40,6 +41,11 @@ import { defaultConfigOptions } from '../options.js';
 import { buildCredentialStore } from '../store.js';
 import { promptHidden, readKeyWithConfirm } from '../prompt.js';
 import { adviceFor } from '../errors.js';
+// Task 27: the REPL module reuses the CLI run semantics (streaming, HITL
+// approval, approved-action execution) — the module cycle with repl.ts is
+// safe: both sides only use the other's bindings inside function bodies.
+import { createTerminalReplIO, runRepl } from '../repl.js';
+import type { ReplIO } from '../repl.js';
 import { createWebUIServer } from '../../webui/server.js';
 import type { WebUIServer } from '../../webui/server.js';
 import { InMemorySessionStore } from '../../webui/session-store.js';
@@ -63,6 +69,14 @@ export interface BuildAgentLoopOptions {
    * "approve in the browser → the paused session resumes" works end-to-end.
    */
   hitl?: HITLManager;
+  /**
+   * Task 26: the stored session being run (WebUI path only). Its
+   * `session.model` override (if any) wins over config.llm.model when the
+   * loop factory builds the LLM provider. CLI `start <task>` has no stored
+   * session at build time — the option stays absent and the factory falls
+   * back to the config default.
+   */
+  session?: Session;
 }
 
 export type BuildAgentLoop = (
@@ -93,6 +107,10 @@ export interface StartCommandDeps {
    * natively via process.exit(0).
    */
   exitOverride?: boolean;
+  /** Task 27 REPL: injectable terminal I/O (tests drive stdin as a queue). */
+  io?: ReplIO;
+  /** Task 27 REPL: called when the REPL exits (tests assert the exit code). */
+  onExit?: (code: number) => void;
 }
 
 export interface RunStartTaskOptions {
@@ -106,10 +124,12 @@ export interface RunStartTaskOptions {
   hitl?: HITLManager;
   /** Interactive decision prompt (CLI default reads stdin; tests inject). */
   promptApproval?: (question: string) => Promise<boolean>;
+  /** 标签着色开关。默认 process.stdout.isTTY（管道/重定向自动纯文本）；测试可注入。 */
+  color?: boolean;
 }
 
 /** Read a y/n decision from stdin (CLI human-in-the-loop default). */
-function promptApproval(question: string): Promise<boolean> {
+export function cliPromptApproval(question: string): Promise<boolean> {
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(`${question}\n> `, (answer) => {
@@ -119,10 +139,35 @@ function promptApproval(question: string): Promise<boolean> {
   });
 }
 
-function formatMessageLine(data: HarnessEventMap['message:added']): string {
+// CLI 输出降噪（KNOWN_ISSUES 用户反馈）：对话内容（user/assistant）用亮色
+// 标签与系统消息区分，工具/系统消息用灰色退后；着色只在 TTY 下启用，
+// 管道/重定向输出保持纯文本（脚本捕获不受转义码污染）。
+export const ANSI_GREEN = '\x1b[32m';
+export const ANSI_CYAN = '\x1b[36m';
+export const ANSI_GRAY = '\x1b[90m';
+export const ANSI_RESET = '\x1b[0m';
+const ROLE_COLORS: Record<string, string> = {
+  user: ANSI_GREEN,
+  assistant: ANSI_CYAN,
+  tool: ANSI_GRAY,
+  system: ANSI_GRAY,
+  feedback: ANSI_GRAY,
+};
+
+/** 消息行格式化。返回 null 表示该消息无需打印（空内容且无工具标注——纯
+ *  工具调用的 assistant 消息不打空头，降噪）。`color` 开启时标签带 ANSI 色。 */
+export function formatMessageLine(
+  data: HarnessEventMap['message:added'],
+  color = false,
+): string | null {
   const toolName =
     typeof data.metadata?.toolName === 'string' ? `:${data.metadata.toolName}` : '';
-  return `[${data.role}${toolName}] ${data.content}`;
+  if (data.content === '' && toolName === '') {
+    return null;
+  }
+  const tag = `[${data.role}${toolName}]`;
+  const displayTag = color ? `${ROLE_COLORS[data.role] ?? ''}${tag}${ANSI_RESET}` : tag;
+  return `${displayTag} ${data.content}`;
 }
 
 /**
@@ -252,12 +297,23 @@ export async function executeApprovedActionImpl(
 export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> {
   const print = opts.print ?? console.log;
   const events = opts.events ?? createEventBus();
+  // 着色只对真实 TTY 生效（process.stdout.isTTY 在管道下为 undefined）。
+  const color = opts.color ?? process.stdout.isTTY === true;
 
   const onMessage = (data: HarnessEventMap['message:added']): void => {
-    print(formatMessageLine(data));
+    const line = formatMessageLine(data, color);
+    if (line !== null) {
+      print(line);
+    }
   };
   const onStatus = (data: HarnessEventMap['session:status']): void => {
-    print(`[session] ${data.status}`);
+    // 降噪：running/completed 无信息量（done 摘要已含终态）；paused/failed
+    // 等中间态保留（暂停指引、异常提示需要前置行）。
+    if (data.status === 'running' || data.status === 'completed') {
+      return;
+    }
+    const tag = color ? `${ANSI_GRAY}[session]${ANSI_RESET}` : '[session]';
+    print(`${tag} ${data.status}`);
   };
 
   events.on('message:added', onMessage);
@@ -270,20 +326,27 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
     // Human-in-the-loop (CLI): a warn/out-of-workspace pause asks on stdin
     // (y/n) and resumes the SAME stored session — approve executes the
     // authorized operation first, deny records the decision and continues.
-    const ask = opts.promptApproval ?? promptApproval;
-    while (session.status === 'paused' && hitl.getPendingCommand() !== null) {
-      const pending = hitl.getPendingCommand() ?? 'unknown operation';
+    // I1 CR: gate on the HITL STATE, not pendingCommand — after a decision the
+    // pending command is retained (EXECUTING/BLOCKED), so a later pause that
+    // is NOT a fresh approval (e.g. maxRounds upgrade) must not re-ask about
+    // the already-decided command (approve() would throw in EXECUTING state).
+    const ask = opts.promptApproval ?? cliPromptApproval;
+    while (
+      session.status === 'paused' &&
+      hitl.getState(session.id) === HITLState.AWAITING_APPROVAL
+    ) {
+      const pending = hitl.getPendingCommand(session.id) ?? 'unknown operation';
       const approved = await ask(
         `[HITL] 需要人工确认 — 批准执行该操作？\n  ${pending}\n  (y=批准执行 / n=拒绝)`,
       );
       if (approved) {
-        hitl.approve();
-        const action = hitl.getApprovedAction();
+        hitl.approve(session.id);
+        const action = hitl.getApprovedAction(session.id);
         if (action) {
           await executeApprovedActionImpl(session, action, events);
         }
       } else {
-        hitl.deny();
+        hitl.deny(session.id);
         const deniedMsg: Message = {
           id: crypto.randomUUID(),
           role: 'system',
@@ -305,6 +368,17 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
     print(
       `[session] done: ${session.id} status=${session.status} rounds=${session.currentRound}`,
     );
+    // KNOWN_ISSUES 1: an upgrade pause (maxRounds reached) has no pending
+    // command, so the stdin approval loop above can never resume it — the run
+    // exits paused with only "[session] paused" today. Give the user an
+    // actionable way forward instead of a dead end.
+    if (session.status === 'paused') {
+      print(
+        '[session] 会话已暂停（达到轮次上限升级暂停，无待批准命令可交互确认）。\n' +
+          '  直跑模式下进程退出后内存会话将丢失：请重新运行任务（提高 maxRounds），\n' +
+          '  或改用 `codeharness start --web` 在 WebUI 中创建会话，暂停后可在界面恢复。',
+      );
+    }
     return session;
   } finally {
     events.off('message:added', onMessage);
@@ -315,6 +389,12 @@ export async function runStartTask(opts: RunStartTaskOptions): Promise<Session> 
 export interface CreateProviderOptions {
   readHidden?: (label: string) => Promise<string>;
   print?: (line: string) => void;
+  /**
+   * Task 26 session-level model override. When provided it wins over
+   * config.llm.model (the DeepSeekProvider is constructed with it); absent
+   * means "follow the config default" — CLI sessions never set this.
+   */
+  model?: string;
 }
 
 /**
@@ -363,7 +443,8 @@ export async function createLLMProvider(
       new DeepSeekProvider({
         baseUrl: config.llm.baseUrl,
         apiKey: key,
-        model: config.llm.model,
+        // Task 26: the session-level override wins when present.
+        model: opts.model ?? config.llm.model,
         maxTokens: config.llm.maxTokens,
       }),
   );
@@ -371,7 +452,7 @@ export async function createLLMProvider(
 
 /** Default production wiring: real tools, real validators, configured provider. */
 function buildDefaultAgentLoop(deps: StartCommandDeps): BuildAgentLoop {
-  return async ({ config, events, hitl }) => {
+  return async ({ config, events, hitl, session }) => {
     const readHidden = deps.readHidden ?? promptHidden;
     const store =
       deps.store ??
@@ -381,7 +462,13 @@ function buildDefaultAgentLoop(deps: StartCommandDeps): BuildAgentLoop {
             readHidden,
             apiKeySource: config.llm.apiKeySource, // SPEC §4.2: explicit source only
           })))());
-    const llm = await createLLMProvider(config, store, { readHidden });
+    // Task 26: the session-level model override (if any) wins over
+    // config.llm.model — CLI `start <task>` has no session, so it always
+    // falls back to the config default.
+    const llm = await createLLMProvider(config, store, {
+      readHidden,
+      model: session?.model,
+    });
 
     const tools = new ToolRegistry();
     tools.register(readFileTool);
@@ -435,6 +522,12 @@ export interface CreateWebHarnessOptions {
   sessionStore?: SessionStore;
   /** Config persistence for PUT /api/config (defaults to the project file). */
   persistConfig?: (config: Config) => Promise<void>;
+  /**
+   * 生产模式静态目录（vite build 产物）。解析顺序：显式参数 →
+   * CODEHARNESS_WEBUI_DIR 环境变量 → 项目根 src/webui/client/dist。
+   * 不依赖 process.cwd()（全局 codeharness 命令在任意目录运行）。
+   */
+  staticDir?: string;
 }
 
 export interface WebHarness {
@@ -444,11 +537,43 @@ export interface WebHarness {
   close(): Promise<void>;
 }
 
+/**
+ * 生产模式静态目录解析（spec 2026-08-04 第 1 层）：显式参数优先，其次
+ * CODEHARNESS_WEBUI_DIR（Electron 打包布局用它指向 resources/backend/webui），
+ * 缺省为项目根 src/webui/client/dist。projectRoot 由调用方解析（默认
+ * import.meta.url 上溯），绝不依赖 process.cwd()。
+ */
+export function resolveStaticDir(
+  staticDir: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..'),
+): string {
+  if (staticDir !== undefined && staticDir !== '') {
+    return path.resolve(staticDir);
+  }
+  const envDir = env.CODEHARNESS_WEBUI_DIR;
+  if (envDir !== undefined && envDir !== '') {
+    return path.resolve(envDir);
+  }
+  return path.resolve(projectRoot, 'src', 'webui', 'client', 'dist');
+}
+
 export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<WebHarness> {
   const { config, events, credentialStore, buildAgentLoop } = opts;
   const hitl = new HITLManager();
   const sessionStore =
     opts.sessionStore ?? new InMemorySessionStore(config.agent.maxRounds, config.agent.workspaceRoot);
+
+  // Real-test fix: the LOOP layer must follow config changes. `liveConfig` is
+  // re-pointed by the server's persist channel (PUT /api/config and the
+  // POST /api/keys registry write both persist through it), so every
+  // runSession builds its provider from the CURRENT config — activating a
+  // provider in Settings immediately applies to new/restarted sessions.
+  let liveConfig = config;
+  const persistConfig = async (next: Config): Promise<void> => {
+    liveConfig = next;
+    await opts.persistConfig?.(next);
+  };
 
   /** Live runs by session id — the pause/stop endpoints abort them (I2). */
   const activeRuns = new Map<string, AbortController>();
@@ -456,17 +581,30 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
   const pendingInjection = new Map<string, boolean>();
 
   const runSession = async (session: Session): Promise<void> => {
+    // M1: an injection latch that landed BEFORE this run started (set during
+    // a window with no live run, e.g. a switch racing an approval execution)
+    // must not trigger a bogus restart in the finally — this fresh run
+    // already satisfies it: the provider build reads the session model and
+    // memory re-seeds from the store. A switch DURING the run re-sets the
+    // latch after this delete, so the finally still restarts when needed.
+    pendingInjection.delete(session.id);
     // C1: restore HITL to IDLE before each run so a NEW warn-level command can
     // request approval again — otherwise the post-decision state (EXECUTING /
     // EXECUTING_MODIFIED / BLOCKED) silently swallows every later warn as
-    // "HITL busy". Known limitation (I3): single-session concurrency — this
-    // reset may clear ANOTHER session's pending approval; multi-session HITL
-    // keying is future work.
-    hitl.reset();
+    // "HITL busy". Keyed per session (KNOWN_ISSUES 6): only THIS session's
+    // decision is reset; other sessions' pending approvals are untouched.
+    hitl.reset(session.id);
     const controller = new AbortController();
     activeRuns.set(session.id, controller);
     try {
-      const loop = await buildAgentLoop({ config, events, hitl });
+      // Task 26: hand the stored session to the factory so the provider is
+      // built with `session.model` when the session overrides the config
+      // default (model switches → the restarted run rebuilds the provider).
+      // LIVE config: activating another provider re-points llm.provider /
+      // baseUrl, and a fresh run must build against that (not the startup
+      // snapshot) — real-test: after activating nju, requests still went to
+      // deepseek until the process restarted.
+      const loop = await buildAgentLoop({ config: liveConfig, events, hitl, session });
       await loop.run(session.task, { session, signal: controller.signal });
     } catch (err) {
       // The loop never throws for LLM/tool failures, but guard against
@@ -485,14 +623,31 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
       if (activeRuns.get(session.id) === controller) {
         activeRuns.delete(session.id);
       }
-      // A user message arrived while this run was live — restart the loop so
-      // the new instruction lands in the next LLM context (the run re-seeds
-      // memory from the store, which already holds the message).
-      if (pendingInjection.get(session.id) === true) {
+      // A user message or model switch arrived while this run was live —
+      // restart the loop so the change lands in the next run (memory
+      // re-seeds from the store; the provider build reads the session
+      // model). I1: ONLY when the session is still running — a pause/stop
+      // that landed during the abort wins, and restarting a paused session
+      // would double-run and stream messages behind the UI's pause. The
+      // latch stays set for the next runSession, which clears it on entry
+      // (M1), so a later resume restarts exactly once.
+      if (pendingInjection.get(session.id) === true && session.status === 'running') {
         pendingInjection.delete(session.id);
         continueSession(session);
       }
     }
+  };
+
+  /**
+   * Interrupt a live run so the NEXT run picks up a change (a user message
+   * or a model switch — review M5). Shared by onMessageAdded and
+   * onModelChanged: sets the injection latch and aborts the current
+   * controller; runSession's finally restarts via continueSession unless a
+   * pause/stop landed in between (I1).
+   */
+  const restartLiveRun = (session: Session): void => {
+    pendingInjection.set(session.id, true);
+    activeRuns.get(session.id)?.abort();
   };
 
   /**
@@ -510,7 +665,7 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     // HITL approval authorizes the operation — the harness executes it directly
     // (SPEC §3.4: approval = authorization to run, never a hint for the LLM
     // to re-issue it; real LLMs do not re-issue after "[HITL] approved").
-    const approved = hitl.getApprovedAction();
+    const approved = hitl.getApprovedAction(session.id);
     if (approved !== null) {
       session.status = 'running';
       events.emit('session:status', { sessionId: session.id, status: 'running' });
@@ -534,13 +689,39 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
     approved: { tool: string; params: Record<string, unknown>; id?: string },
   ): Promise<void> => executeApprovedActionImpl(session, approved, events);
 
+  // 生产模式（spec 2026-08-04）：静态目录缺失 → 启动失败并给构建指引，
+  // 避免用户打开 3000 看到裸 404 困惑。
+  const staticDir = resolveStaticDir(opts.staticDir);
+  if (!fs.existsSync(staticDir)) {
+    throw new Error(
+      `WebUI 前端构建产物不存在：${staticDir}。请先构建前端：npm run build && cd src/webui/client && npm run build`,
+    );
+  }
+
   const web = createWebUIServer({
     sessionStore,
     events,
     credentialStore,
     config,
     hitl,
-    persistConfig: opts.persistConfig,
+    persistConfig,
+    staticDir,
+    // Real-test fix: switching the provider/endpoint makes every running
+    // loop's provider stale — restart them all (same abort+restart path as a
+    // model switch). Other config fields (maxRounds etc.) do not restart.
+    onConfigChanged: (prev, next) => {
+      if (
+        prev.llm.provider !== next.llm.provider ||
+        prev.llm.baseUrl !== next.llm.baseUrl ||
+        prev.llm.model !== next.llm.model
+      ) {
+        for (const session of sessionStore.list()) {
+          if (session.status === 'running') {
+            restartLiveRun(session);
+          }
+        }
+      }
+    },
     onSessionCreated: (session) => {
       void runSession(session);
     },
@@ -560,10 +741,20 @@ export async function createWebHarness(opts: CreateWebHarnessOptions): Promise<W
       // re-seeds memory from the store on every run, so the new message is
       // picked up by the restarted run.
       if (session.status === 'running') {
-        pendingInjection.set(session.id, true);
-        activeRuns.get(session.id)?.abort();
+        restartLiveRun(session);
       } else {
         continueSession(session);
+      }
+    },
+    onModelChanged: (session) => {
+      // Task 26 model switch: shares the message-injection abort+restart
+      // path (restartLiveRun → runSession finally → continueSession). The
+      // restarted run rebuilds the provider with the session's NEW model and
+      // re-seeds memory from the store, so the agent continues seamlessly.
+      // Paused/completed sessions only record the override — the next run
+      // picks it up (restarting a paused approval would be wrong).
+      if (session.status === 'running') {
+        restartLiveRun(session);
       }
     },
     onSessionControl: (session, action) => {
@@ -606,6 +797,31 @@ function loadStartConfig(deps: StartCommandDeps): Config {
 }
 
 /**
+ * Default `start --web` config persistence (real-test fix): POST /api/keys
+ * registry writes and PUT /api/config both persist through the harness's
+ * persistConfig channel — with nothing wired that channel is a no-op, so a
+ * WebUI-added provider's baseUrl/defaultModel only lived in the in-memory
+ * liveConfig and vanished on restart. The CLI default writes the project-level
+ * config file the loader reads back on startup — same path resolution and
+ * write format as the config router's default (config.ts). The path is a lazy
+ * getter so resolution happens at write time (testable against a temp file).
+ */
+export function createDefaultPersistConfig(
+  getProjectPath: () => string,
+): (config: Config) => Promise<void> {
+  return async (config: Config) => {
+    // `fs` here is the callback API (`import * as fs`) — writeFile without a
+    // callback throws; use the promises variant (config.ts's default does the
+    // same write via `promises as fs`).
+    await fs.promises.writeFile(
+      getProjectPath(),
+      `${JSON.stringify(config, null, 2)}\n`,
+      'utf-8',
+    );
+  };
+}
+
+/**
  * `start --web` (Task 19, SPEC §9): same-process WebUI + real agent loop.
  * Sessions created in the browser run on the live loop; the process stays
  * up until Ctrl+C (injectable for tests).
@@ -631,13 +847,71 @@ async function runWebAction(deps: StartCommandDeps): Promise<void> {
       events,
       credentialStore,
       buildAgentLoop,
-      persistConfig: deps.persistConfig,
+      // Real-test fix: the production chain (createProgram → createStartCommand)
+      // never provides deps.persistConfig, so the registry writes from POST
+      // /api/keys were lost on restart. Default to writing the project config
+      // file — the same path the loader read at startup.
+      persistConfig:
+        deps.persistConfig ??
+        createDefaultPersistConfig(
+          () => deps.config?.projectConfigPath ?? path.join(process.cwd(), '.codeharness.json'),
+        ),
     });
     print(`[web] WebUI on http://localhost:${harness.port} — Ctrl+C to stop`);
     await (deps.waitForShutdown ?? waitForSigint)();
     await harness.close();
   } catch (err) {
     (deps.errPrint ?? console.error)(`codeharness start: ${adviceFor(err)}`);
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Task 27 REPL (SPEC §4.3, §5.1): `codeharness` with no arguments enters an
+ * interactive loop — a task input runs the agent with streaming output, later
+ * inputs are injected into the SAME session as new user instructions (context
+ * preserved), slash commands (/exit /help /model /clear /status) drive the
+ * session, and HITL confirmation happens inside the REPL. Ctrl+C during a run
+ * interrupts it (returns to the prompt); Ctrl+C at the prompt exits.
+ */
+export async function runReplAction(deps: StartCommandDeps = {}): Promise<void> {
+  try {
+    const config = loadStartConfig(deps);
+    // Task 27: first-run key bootstrap stays OUTSIDE the REPL — the REPL's
+    // persistent readline shares stdin with promptHidden's raw-mode key
+    // entry, which would also feed the key into the REPL input queue (a
+    // credential leak into the next LLM context). Instead the missing-key
+    // error surfaces with actionable advice (§4.3) and the user runs
+    // `codeharness key update`.
+    const buildAgentLoop =
+      deps.buildAgentLoop ??
+      buildDefaultAgentLoop({
+        ...deps,
+        readHidden: () => {
+          throw new Error('No API key found. Run `codeharness key update` to add one.');
+        },
+      });
+    const print = deps.print ?? console.log;
+    // Ctrl+C during a run: the terminal readline (raw mode for the whole
+    // REPL) consumes the key and calls this — the run aborts at its next
+    // round boundary and the prompt returns. At the prompt, Ctrl+C resolves
+    // the pending read as null and the REPL exits instead.
+    let interruptRun: (() => void) | undefined;
+    const io = deps.io ?? createTerminalReplIO(print, () => interruptRun?.());
+    await runRepl({
+      config,
+      buildAgentLoop,
+      io,
+      hitl: deps.hitl,
+      events: createEventBus(),
+      promptApproval: deps.promptApproval,
+      onRunInterrupt: (handler) => {
+        interruptRun = handler;
+      },
+      onExit: deps.onExit,
+    });
+  } catch (err) {
+    (deps.errPrint ?? console.error)(`codeharness: ${adviceFor(err)}`);
     process.exitCode = 1;
   }
 }

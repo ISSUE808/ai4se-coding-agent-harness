@@ -6,7 +6,7 @@ import { createKeyCommand } from './commands/key.js';
 import type { KeyCommandDeps } from './commands/key.js';
 import { createConfigCommand } from './commands/config.js';
 import type { ConfigCommandDeps } from './commands/config.js';
-import { createStartCommand } from './commands/start.js';
+import { createStartCommand, runReplAction } from './commands/start.js';
 import type { StartCommandDeps } from './commands/start.js';
 import { buildCredentialStore } from './store.js';
 import { promptHidden } from './prompt.js';
@@ -71,6 +71,13 @@ export function createProgram(deps: ProgramDeps = {}, options: ProgramOptions = 
       ...deps.start,
     }),
   );
+
+  // Task 27 (SPEC §4.3/§5.1): `codeharness` with no arguments enters the
+  // interactive REPL — a task input runs the agent, later inputs inject new
+  // instructions into the same conversation, /exit /help /model /clear
+  // /status drive the session. Subcommands (start/key/config) still dispatch
+  // normally.
+  program.action(() => runReplAction({ ...deps.start }));
 
   return program;
 }

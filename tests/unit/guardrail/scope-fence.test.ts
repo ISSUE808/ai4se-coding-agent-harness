@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { ScopeFence } from '../../../src/guardrail/scope-fence.js';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as fs from 'node:fs';
 
 describe('ScopeFence', () => {
   const workspaceRoot = os.platform() === 'win32'
@@ -63,6 +64,86 @@ describe('ScopeFence', () => {
       expect(fence.validatePath(outsideWin, wsWin)).toBe(false);
       const insideWin = 'C:\\Users\\agent\\workspace\\src\\main.ts';
       expect(fence.validatePath(insideWin, wsWin)).toBe(true);
+    });
+  });
+
+  describe('canonical symlink check (KNOWN_ISSUES 7)', () => {
+    // Real-filesystem fixtures: a symlink INSIDE the workspace pointing
+    // OUTSIDE it must not let validatePath pass (lexical prefix matching
+    // alone would). Windows: junction links need no admin privilege, so the
+    // test runs on both platforms; if link creation fails (e.g. filesystem
+    // without reparse support) the group is skipped.
+    let root: string;
+    let outside: string;
+    let linkDir: string;
+    let linksSupported = true;
+
+    beforeAll(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-fence-root-'));
+      outside = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-fence-out-'));
+      fs.writeFileSync(path.join(outside, 'secret.txt'), 'top secret');
+      linkDir = path.join(root, 'link');
+      try {
+        fs.symlinkSync(outside, linkDir, process.platform === 'win32' ? 'junction' : 'dir');
+      } catch {
+        linksSupported = false;
+      }
+    });
+
+    afterAll(() => {
+      if (linksSupported) {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it.skipIf(!linksSupported)('拦截会话根内 symlink 指向根外的逃逸路径', () => {
+      const fence = new ScopeFence();
+      // Lexically inside the root (`root/link/secret.txt`), canonically
+      // outside (`outside/secret.txt`).
+      expect(fence.validatePath(path.join(linkDir, 'secret.txt'), root)).toBe(false);
+    });
+
+    it.skipIf(!linksSupported)('放行会话根内的真实路径（canonical 检查不误伤）', () => {
+      const fence = new ScopeFence();
+      const inner = path.join(root, 'real', 'file.txt');
+      fs.mkdirSync(path.dirname(inner), { recursive: true });
+      fs.writeFileSync(inner, 'x');
+      expect(fence.validatePath(inner, root)).toBe(true);
+    });
+
+    it.skipIf(!linksSupported)('放行会话根内尚不存在的写入目标（canonical 走最近存在祖先）', () => {
+      const fence = new ScopeFence();
+      // write_file targets need not exist yet — canonicalize must walk up to
+      // the nearest existing ancestor (the root) and still accept.
+      expect(fence.validatePath(path.join(root, 'not-yet-created.ts'), root)).toBe(true);
+    });
+
+    it.skipIf(!linksSupported)('会话根内 symlink 逃逸路径即使以根为前缀也被拦截', () => {
+      const fence = new ScopeFence();
+      // Deeper nesting: root/sub/link → outside. Lexical prefix passes, the
+      // canonical comparison must reject.
+      const subLink = path.join(root, 'sub');
+      fs.mkdirSync(subLink, { recursive: true });
+      fs.symlinkSync(outside, path.join(subLink, 'esc'), process.platform === 'win32' ? 'junction' : 'dir');
+      expect(fence.validatePath(path.join(subLink, 'esc', 'secret.txt'), root)).toBe(false);
+    });
+
+    it.skipIf(!linksSupported)('symlink 循环（ELOOP）时 fail-closed 拒绝，而非截断接受（reviewer Important）', () => {
+      const fence = new ScopeFence();
+      // Two-way cycle (a→b, b→a) — a self-referential link is rejected by
+      // Windows (EPERM). realpathSync throws ELOOP; the pre-fix walk-up
+      // swallowed the error, dropped the leaf, and ACCEPTED the truncated
+      // path — a later open() on the leaf would resolve the real symlink.
+      const loopA = path.join(root, 'loop-a');
+      const loopB = path.join(root, 'loop-b');
+      try {
+        fs.symlinkSync(loopB, loopA, 'junction');
+        fs.symlinkSync(loopA, loopB, 'junction');
+      } catch {
+        return; // junction to a nonexistent target may be refused — skip
+      }
+      expect(fence.validatePath(path.join(loopA, 'x.txt'), root)).toBe(false);
     });
   });
 

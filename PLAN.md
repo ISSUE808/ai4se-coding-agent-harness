@@ -1086,7 +1086,7 @@ describe('Agent Main Loop (integration)', () => {
 
 **需求备注（Phase 10 收尾时用户决策）**：会话级工作目录绑定（"打开/新建项目"）统一在 Task 19 实现——✅ 全部落地（commit `860336b`）：
 - ✅ `Session` 增加 `workspaceRoot` 字段（当前为全局 `config.agent.workspaceRoot`，会话无项目绑定）
-- ✅ `POST /api/sessions` 接受并校验 workspaceRoot（绝对路径/存在/目录/可写四重校验 + 400；7 种非法输入测试）；`SessionStore.create` 支持
+- ✅ `POST /api/sessions` 接受并校验 workspaceRoot（绝对路径/存在/目录三重校验 + 400；7 种非法输入测试；1.6 真实测试跟进：移除「可写」检查——Windows `fs.access` 不查 ACL，`C:\Windows` 恒过 W_OK，纸面限制只制造与选择器（任意目录可选）的不一致；不可写根合法，树加载失败可见报错 + 工具层 isWithinWorkspace 兜底）；`SessionStore.create` 支持
 - ✅ `AgentLoop.run` 按会话 workspaceRoot 构建 ToolContext/验证器 cwd/scope-fence 基准（run(options) 会话 > 显式参数 > config 回退链）
 - ✅ WebUI 新建会话 modal 加「工作目录」字段（默认当前 workspaceRoot）；会话详情显示项目路径
 - ⬜ CLI `start` 加 `--cwd` 选项（可选增强，未实现——start.ts 注释注明）
@@ -1127,9 +1127,10 @@ describe('Agent Main Loop (integration)', () => {
 - 创建：`Dockerfile`、`.dockerignore`
 - 修改：`package.json`（添加 `files`、`publishConfig`）
 
+- [x] **npm link 部分已落地**（2026-08-05，Task 29——`npm link` 全局 `codeharness` 命令，bin/shebang 已就位零代码；npm publish 仍未做，维持待办）
 - [ ] **步骤 1：Dockerfile**——FROM node:20-alpine, COPY package*.json, RUN npm ci --omit=dev, COPY dist/, EXPOSE 3000, ENTRYPOINT node dist/cli/index.js
 - [ ] **步骤 2：.dockerignore**——排除 node_modules、tests、.git、.env、secrets、*.cred
-- [ ] **步骤 3：npm 配置**——`"files": ["dist/", "README.md", "LICENSE"]`，`"publishConfig": {"access": "public"}`
+- [ ] **步骤 3：npm 配置**——`"files": ["dist/", "README.md", "LICENSE"]`，`"publishConfig": {"access": "public"}`（npm publish 待办）
 - [ ] **步骤 4：构建并验证**——`npm run build && docker build -t codeharness . && docker run --rm codeharness --version`
 - [ ] **步骤 5：CI 更新**——在 `.github/workflows/ci.yml` 中添加 `docker-build` job
 - [ ] **步骤 6：提交**
@@ -1143,7 +1144,7 @@ describe('Agent Main Loop (integration)', () => {
 **涉及文件：**
 - 创建/完成：`README.md`
 
-- [ ] **步骤 1：README.md**——项目概述、安装（npm + Docker）、快速开始、key 配置指南、WebUI、目录结构、安全边界、已知限制、许可证
+- [x] **已完成**（2026-08-05，Task 33 落地——README.md 由分发专项实施：项目概述、安装（npm link + 桌面应用）、快速开始、key 配置指南、WebUI 说明、目录结构、安全边界、已知限制；commits `9d241c8` `946386c`）
 
 提交：`docs: README`
 
@@ -1151,7 +1152,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ### 任务 23：fs 浏览端点 + 目录选择器 + 会话详情文件树
 
-**背景（用户建议）**：新建会话工作目录需手动输入路径（不便）；会话详情左栏只显示文件变更（希望显示工作目录文件树）。
+**背景**：新建会话工作目录需手动输入路径（不便）；会话详情左栏只显示文件变更（希望显示工作目录文件树）。
 
 **涉及文件：**
 - 创建：`src/webui/api/fs.ts`——`GET /api/fs/tree?path=<dir>` 枚举目录树（含文件大小/类型；越界拦截——仅限授权的工作目录；深度限制防爆炸）
@@ -1160,9 +1161,12 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** fs 端点返回目录树（含嵌套目录、文件类型/大小）；越界路径 400；前端文件树可展开/折叠；目录选择器弹窗可选目录并回填输入框；全部 Mock 测试（API 用临时目录 fixture）。
 
+- [x] **已完成**（commit `9bba87c` + 评审修复 `3f0ee53`，主项目 463 + client 131）——fs 端点（嵌套/大小/排序、realpath 边界、symlink 拒绝、深度 4/每层 200/全局 5000 节点截断）；目录选择器弹窗（懒加载/回填/Escape 关闭）；会话详情文件树（展开折叠 + A/M 标记 + 变更文件 fallback 列表 + diff 预览）
+- [x] **整机浏览增强**（commit `e5f88e8`，主项目 525 + client 177）——用户真实测试需求"选择整台电脑的任何目录"：新增 `GET /api/fs/browse` 无授权浏览端点（无 path → 机器根：Windows 盘符 / POSIX `/`；逐级枚举仅**元数据**：名称/类型/大小；symlink 标 `link` 不跟随；每层 200 截断）；`/tree` 保持授权根不变；前端选择器切换为 browse（机器根起始 + 逐级懒加载 + 选中回填）；KNOWN_ISSUES 记录元数据-only 安全取舍
+
 ### 任务 24：MD 渲染 + 移除搜索框
 
-**背景（用户建议）**：AI 输出的 markdown 应以渲染预览显示；右上角搜索框无功能应删除。
+**背景**：AI 输出的 markdown 应以渲染预览显示；右上角搜索框无功能应删除。
 
 **涉及文件：**
 - 修改：`src/webui/client/src/components/MessageList.tsx`——assistant 消息用 **react-markdown** 安全渲染（样式对齐 design-tokens：代码块/表格/列表/行内代码；禁用危险 HTML——防 XSS）
@@ -1170,9 +1174,11 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** assistant 消息的 markdown（标题/代码块/表格/列表/行内 code/链接）渲染正常且样式与 tokens 一致；`dangerouslySetInnerHTML` 零使用（XSS 审计）；搜索框从 TopBar 移除；client 测试更新（MD 渲染断言 + 移除搜索框断言）。
 
+- [x] **已完成**（commit `b53df7a` + XSS URL 测试 `c2a63cc`，client 136 + 主项目 463）——react-markdown skipHtml 安全渲染（HTML 禁用 + URL 协议剥除 + 图片 alt 化，XSS 三类入口全测）；user 保持纯文本；搜索框移除
+
 ### 任务 25：自定义供应商 + 模型/护栏可编辑
 
-**背景（用户建议）**：API Keys 仅三家供应商（需支持任意自定义供应商）；设置"模型与护栏"只读（需可直接修改并同步配置）。
+**背景**：API Keys 仅三家供应商（需支持任意自定义供应商）；设置"模型与护栏"只读（需可直接修改并同步配置）。
 
 **涉及文件：**
 - 修改：`src/webui/api/keys.ts`——新增 `GET /api/keys`（枚举凭据库中已配置的 provider）
@@ -1180,9 +1186,11 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** 任意 provider 名可添加并保存 key（keytar 通道，掩码显示）；重启后自定义 provider 仍在（从凭据库枚举）；模型/护栏编辑保存后 config show 反映变更；密钥字段仍被拒绝（回归测试）；client 测试更新。
 
+- [x] **已完成**（commit `cc8b703` + 评审修复 `ab497ac`，主项目 481 + client 147）——GET /api/keys 凭据库枚举（CredentialBackend.list）；动态 provider 列表 + 添加供应商（URL 编码 + 名校验）；模型/护栏可编辑表单（PUT config 白名单）；**护栏配置接入运行时**（Config.guardrails：blockOutbound 网络外呼确认 / requireApproval 规则匹配确认——真实生效，非写死旋钮）
+
 ### 任务 26：对话中切换模型
 
-**背景（用户建议）**：切换模型应便捷（对话中即可），不必每次改配置。
+**背景**：切换模型应便捷（对话中即可），不必每次改配置。
 
 **涉及文件：**
 - 修改：`src/types.ts`（Session 增加 `model?: string`）、`src/webui/session-store.ts`（create 支持 model）
@@ -1193,15 +1201,82 @@ describe('Agent Main Loop (integration)', () => {
 
 **完成条件：** 会话详情可切换模型（下拉默认模型 + 自定义输入）；切换后 agent 下一轮用新模型（provider 构造验证——可注入 spy）；运行中切换：abort 当前 run → 新模型重启 → 继续；CLI 会话不受影响（无 session.model 时用 config）；Mock 测试覆盖。
 
+- [x] **已完成**（commit `9743b5f` + 评审修复 `9422977`，主项目 495 + client 166）——Session.model 全链路 + PATCH /:id/model（WS session:updated 按会话过滤）；BuildAgentLoopOptions.session → createLLMProvider model 参数（CLI 结构性回退 config）；运行中切换复用 abort+restart（finally 加 running 守卫防 pause 竞态；restartLiveRun helper）；前端上下文栏模型选择器（默认/历史/自定义 + 清除覆盖）
+
 ### 任务 27：CLI 交互式 REPL（Claude Code 式）
 
-**背景（用户建议）**：CLI 启动/对话需手动输入完整命令（不便）——参考 Claude Code 交互界面。
+**背景**：CLI 启动/对话需手动输入完整命令（不便）
 
 **涉及文件：**
 - 修改：`src/cli/index.ts`、`src/cli/commands/start.ts`——无参数启动进入 **REPL**（readline 交互循环：提示符 → 输入任务 → 运行 agent → 流式输出 → 等待下一条指令 → **消息注入**（复用 onMessageAdded 机制）→ 继续；`/exit`、`/help` 等斜杠命令）
 - 复用：CLI 交互确认（stdin y/n）、已批准命令记忆、会话级 workspaceRoot
 
 **完成条件：** `codeharness`（无参数）进入 REPL；输入任务即运行；运行中可输入新指令（注入下一轮）；HITL 确认在 REPL 内交互；`/exit` 退出、`/help` 列出命令；REPL 逻辑可注入测试（MockProvider 确定性）。
+
+- [x] **已完成**（commit `051e052` + 评审修复 `b5b5efe`，主项目 520 + client 166）——无参数进 REPL；单会话持久 reader（管道不丢行）；首输入=任务、后续=消息注入（hitl.reset + maxRounds 上调 + 每轮新 loop 带 session 保 model 覆盖）；斜杠命令（/exit /help /model /clear）；Ctrl+C 三态（提示符退出/运行中中断/HITL 确认中断）；EOF 退出码镜像 start（非 completed → 1）；凭据隔离（缺 key 抛可操作错误）；24 个确定性测试
+
+---
+
+### 任务 28：生产模式静态服务（server staticDir + SPA fallback）✅ — `006d448`
+
+**背景**：CLI/WebUI 启动需手动输入命令（不便）——分发专项（桌面应用 + 全局命令）第 1 层底座：`codeharness start --web` 单命令即可浏览器使用完整 WebUI。
+
+**涉及文件：**
+- 修改：`src/webui/server.ts`（`WebUIServerDeps.staticDir` + 静态挂载 + SPA fallback）
+- 创建：`tests/integration/webui-static.test.ts`
+
+- [x] **已完成**（commit `006d448`，主项目 627/627）——staticDir 可注入；`express.static` 挂在 `/api` 404 兜底**之后**（`/api/*` 永不落入 fallback，即使 build 产物含 api/ 目录）；SPA fallback 仅 GET（react-router 深链回 index.html，sendFile 错误走 error handler）；staticDir 缺省保持 API-only（开发模式 Vite 5173 不受影响）；4 集成测试（fixture 临时目录模拟 build 产物，不依赖真实构建）
+
+### 任务 29：--web 生产模式接线 + dist 缺失报错 + npm link ✅ — `90e3778` `c4d7724`
+
+**背景**：生产模式接线——`resolveStaticDir`（显式参数 → `CODEHARNESS_WEBUI_DIR` env → 项目根 `src/webui/client/dist`，`import.meta.url` 上溯**不依赖 process.cwd()**——npm link 后 `codeharness` 在任意目录运行）；dist 缺失明确失败（构建指引）；`npm link` 全局命令（bin/shebang 已就位，零代码）。
+
+**涉及文件：**
+- 修改：`src/cli/commands/start.ts`（`resolveStaticDir` 导出 + createWebHarness 校验/接线）
+- 修改：`tests/integration/full-loop.test.ts`（makeHarness fixture staticDir 自给自足——CI 不构建 client，修复了隐式依赖真实构建产物的 CI 回归）
+
+- [x] **已完成**（commits `90e3778` `c4d7724`，主项目 630/630）——3 harness 级测试（env 覆盖 / fixture 静态页 / dist 缺失报错）+ resolveStaticDir 单测；`codeharness --version` 任意目录可用（npm link 已验证）
+
+### 任务 30：desktop/ 脚手架 + 主进程纯函数 ✅ — `cbe0a40`
+
+**背景**：Electron 桌面壳（分发专项第 3 层）第 1 步——**纯逻辑与 electron 解耦**（依赖注入，单测不启动 Electron，CI 不装 Electron）。
+
+**涉及文件：**
+- 创建：`desktop/`（独立 package：package.json、tsconfig.json CJS、vitest.config.ts）
+- 创建：`desktop/src/lifecycle.ts`（`resolveBackendDir` / `buildBackendCommand` / `waitForPort` / `killProcessTree` 纯函数）
+- 修改：根 `.gitignore`（+`desktop/build/`、`desktop/node_modules/`）
+
+- [x] **已完成**（commit `cbe0a40`，desktop 6/6 单测）——独立 package（electron 依赖不污染主项目）；spawn 命令构造含 `CODEHARNESS_WEBUI_DIR` env；端口轮询（fetch 注入）；进程树清理（taskkill /T /F，spawnFn 注入）；Windows 路径断言用 path.join 构造
+
+### 任务 31：Electron 生命周期 + main 接线 ✅ — `0d5fdf9` `d2203dc`
+
+**背景**：主进程生命周期——短探 :3000 就绪 → 直接开窗不重复 spawn；未就绪 → spawn 后端（生产模式）→ 轮询 30s → BrowserWindow；超时 → showError + **onExit（防僵尸应用）**；窗口关闭 → kill 进程树 + 退出。
+
+**涉及文件：**
+- 创建：`desktop/src/lifecycle.ts`（追加 `runDesktopLifecycle` 注入式编排）
+- 创建：`desktop/src/main.ts`（唯一 import electron 的薄接线层；`app.isPackaged` 分支）
+
+- [x] **已完成**（commits `0d5fdf9` `d2203dc`，desktop 11/11 单测）——评审修复：`intentional` 标志（主动关闭不误弹「后端已退出」框——Windows 强杀 exit code ≠ 0）/ 超时分支 close 杀已 spawn 进程（防孤儿）/ spawn null 立即报错
+
+### 任务 32：electron-builder 打包 + TESTING 验收 ✅ — `b28dc04` `cb1975c` `918ac18`
+
+**背景**：便携 + NSIS 安装程序；`extraResources` 三件套（backend dist + node_modules + client 产物 → resources/backend）；**keytar 原生模块出 asar**（SPEC §8.5 的"目标机安全配置"落地）。
+
+**涉及文件：**
+- 修改：`desktop/package.json`（build 字段：`directories.output: build` 避开 tsc dist、`signAndEditExecutable: false`——Windows 无管理员符号链接权限，无自定义图标/签名零损失）
+- 创建：`desktop/prepare-resources.mjs`（组装 backend-pack：cpSync + `npm prune --omit=dev`——分发体积 73MB→20MB，typescript/vitest 不进用户包）
+- 修改：`TESTING.md`（B11 验收小节：全局命令 / 窗口自载 / 无残留进程 / 复用不重复 spawn / 端口占用错误框）
+
+- [x] **已完成**（commits `b28dc04`（用户实现）`cb1975c` `918ac18`，82MB 双 exe 实测）——win-unpacked + portable + NSIS 三产物；**KNOWN_ISSUES #12**：打包 keytar ABI 依赖打包机 Node 版本（@electron/rebuild 只重建 app 目录依赖，extraResources verbatim 复制——修复路径：钉打包机 Node 20 或 backend-pack rebuild）
+
+### 任务 33：README ✅ — `9d241c8` `946386c`
+
+**背景**：Task 22（文档）的实际落地——安装（npm link + 桌面应用）、快速开始、WebUI 说明（开发/生产模式）、目录结构、安全边界、已知限制。
+
+**涉及文件：**
+- 创建：`README.md`
+
+- [x] **已完成**（commits `9d241c8` `946386c`）——命令逐一核验（npm link bin 指向、vite 代理配置）；产物路径 `desktop/build/`（修正 plan 笔误 desktop/dist）
 
 ---
 
@@ -1223,9 +1298,10 @@ describe('Agent Main Loop (integration)', () => {
 阶段 13: 分发             任务 21        （Dockerfile + npm 配置）
 阶段 14: 文档             任务 22        （README）
 阶段 15: WebUI/CLI 增强    任务 23-27     （用户真实测试后提出的产品改进；依赖阶段 10-11 完成）
+阶段 16: 分发落地          任务 28-33     （2026-08-05 用户建议"输入产品名启动 CLI / 桌面应用连 WebUI"；生产模式 + npm link + Electron 桌面壳 + 打包 + README；依赖阶段 11/14 完成）
 ```
 
-**拆分后任务总数**：30（Task 11→11a/11b、Task 13→13a/13b、Task 18→18a/18b、Task 23-27 为阶段 15 产品增强）
+**拆分后任务总数**：36（Task 11→11a/11b、Task 13→13a/13b、Task 18→18a/18b、Task 23-27 为阶段 15 产品增强、Task 28-33 为阶段 16 分发落地）
 
 **可并行的任务对**：任务 2+4（LLM + 工具）、任务 6+8（配置 + 护栏）、任务 10+14（反馈 + 凭据）、任务 17+20（WebUI 服务器 + 演示）
 
@@ -1237,4 +1313,5 @@ describe('Agent Main Loop (integration)', () => {
  1 ──→ {2→3, 4→5} ──→ {6, 7} ──→ {8→9, 10→11a→11b→12} ──→ 13a→13b
                                                                    │
  14→15 ──→ 16 ──→ {17→18a→18b, 20} ──→ 19 ──→ 21 ──→ 22
+                                                          └─→ 28→29→{30→31→32, 33}
 ```

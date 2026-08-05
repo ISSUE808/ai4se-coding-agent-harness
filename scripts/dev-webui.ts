@@ -41,6 +41,9 @@ function memoryBackend(): CredentialBackend {
     async exists(_service, account) {
       return secrets.has(account);
     },
+    async list() {
+      return [...secrets.keys()];
+    },
   };
 }
 

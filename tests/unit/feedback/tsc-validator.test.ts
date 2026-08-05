@@ -15,7 +15,9 @@ describe('TscValidator', () => {
 
   beforeEach(() => {
     execSync = makeExec();
-    validator = new TscValidator(execSync, () => true);
+    // hasConfig + hasBin injected as present so execSync paths are exercised
+    // (the env-prereq skip is tested separately below).
+    validator = new TscValidator(execSync, () => true, () => true);
   });
 
   it('skips (passes) when no tsconfig.json exists in the workspace — env prerequisite', async () => {
@@ -27,6 +29,18 @@ describe('TscValidator', () => {
     expect(feedback.passed).toBe(true);
     expect(feedback.validator).toBe('tsc');
     expect(feedback.evidence).toContain('skipped');
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  it('skips (passes) when tsconfig exists but no local tsc binary — the tsc@2.0.4 npx trap (KNOWN_ISSUES 4)', async () => {
+    const result: ToolResult = { success: true, duration_ms: 10, filesChanged: ['src/index.ts'] };
+    const noBinValidator = new TscValidator(execSync, () => true, () => false);
+
+    const feedback = await noBinValidator.validate(action, result, ctx);
+
+    expect(feedback.passed).toBe(true);
+    expect(feedback.validator).toBe('tsc');
+    expect(feedback.evidence).toContain('tsc');
     expect(execSync).not.toHaveBeenCalled();
   });
 

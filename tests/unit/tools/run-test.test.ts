@@ -19,6 +19,12 @@ let context: ToolContext;
 
 beforeAll(() => {
   workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-rt-'));
+  // Real env prerequisite (KNOWN_ISSUES 3): run_test skips when vitest is not
+  // installed. Give the shared workspace a fake local vitest binary so the
+  // execSync paths below are exercised; the skip path gets its own workspace.
+  fs.mkdirSync(path.join(workspaceRoot, 'node_modules', '.bin'), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, 'node_modules', '.bin', 'vitest'), '#!/bin/sh\n');
+  fs.writeFileSync(path.join(workspaceRoot, 'node_modules', '.bin', 'vitest.cmd'), '@echo off\n');
   context = { workspaceRoot };
 });
 
@@ -125,5 +131,111 @@ describe('run_test tool', () => {
     expect(runTestTool.name).toBe('run_test');
     expect(runTestTool.description).toBeDefined();
     expect(runTestTool.parameters).toBeDefined();
+  });
+
+  // Real vitest v2.1.9 output captured on Windows (pipe): per-file lines and
+  // summary lines are interleaved with ANSI color codes — e.g.
+  // `\x1b[32m✓\x1b[39m path` and `\x1b[1m\x1b[32m48 passed\x1b[39m`. The parser
+  // must strip them before matching, otherwise EVERY real invocation resolves
+  // to `{passed:false, results:[]}` (KNOWN_ISSUES 9.6).
+  const ANSI_FILE_LINES =
+    '\x1b[32m✓\x1b[39m tests/unit/cli/prompt.test.ts \x1b[2m(\x1b[22m\x1b[2m12 tests\x1b[22m\x1b[2m)\x1b[22m\x1b[90m 11\x1b[2mms\x1b[22m\x1b[39m\n' +
+    '\x1b[32m✓\x1b[39m tests/unit/tools/run-test.test.ts \x1b[2m(\x1b[22m\x1b[2m8 tests\x1b[22m\x1b[2m)\x1b[22m\x1b[90m 31\x1b[2mms\x1b[22m\x1b[39m\n';
+  const ANSI_SUMMARY =
+    '\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[32m2 passed\x1b[39m\x1b[22m\x1b[90m (2)\x1b[39m\n' +
+    '\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m20 passed\x1b[39m\x1b[22m\x1b[90m (20)\x1b[39m\n';
+
+  it('parses per-file lines containing ANSI color codes (KNOWN_ISSUES 9.6)', async () => {
+    mockedExecSync.mockReturnValue(ANSI_FILE_LINES + '\n' + ANSI_SUMMARY);
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.passed).toBe(true);
+    expect(p.results).toHaveLength(2);
+    expect(p.results[0].name).toContain('prompt.test.ts');
+    expect(p.results[0].status).toBe('passed');
+  });
+
+  it('does not report failure when only the ANSI-colored summary matched (KNOWN_ISSUES 9.6)', async () => {
+    // No per-file lines at all (e.g. quiet reporter) — summary alone must
+    // yield passed:true, not the old fallback `{passed:false, results:[]}`.
+    mockedExecSync.mockReturnValue('\n' + ANSI_SUMMARY);
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.passed).toBe(true);
+    expect(p.results).toHaveLength(0);
+  });
+
+  it('does not report passed:true when a skipped-count line hid a failed file (reviewer Important)', async () => {
+    // Vitest renders a file with failures AND skips as
+    // `❯ path (5 tests | 1 failed | 2 skipped) 13ms` — the per-file regex
+    // stops at `| 1 failed` and the `| 2 skipped` suffix makes it not match
+    // at all. If another file's ✓ line matched, the per-file path used to
+    // short-circuit to passed:true while the summary said a file failed.
+    mockedExecSync.mockReturnValue(
+      '\x1b[32m✓\x1b[39m tests/unit/ok.test.ts \x1b[2m(\x1b[22m\x1b[2m2 tests\x1b[22m\x1b[2m)\x1b[22m\x1b[90m 4\x1b[2mms\x1b[22m\x1b[39m\n' +
+        '\x1b[31m❯\x1b[39m tests/unit/flaky.test.ts \x1b[2m(\x1b[22m\x1b[2m5 tests\x1b[22m \x1b[2m|\x1b[22m \x1b[2m1 failed\x1b[22m \x1b[2m|\x1b[22m \x1b[2m2 skipped\x1b[22m\x1b[2m)\x1b[22m\x1b[90m 13\x1b[2mms\x1b[22m\x1b[39m\n' +
+        '\n\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[90m |\x1b[39m\x1b[22m\x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (2)\x1b[39m\n' +
+        '\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m6 passed\x1b[39m\x1b[22m\x1b[90m\x1b[39m\x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[90m (7 | 1 skipped)\x1b[39m\n',
+    );
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.passed).toBe(false);
+  });
+
+  it('reports passed:false on an all-failed summary line (reviewer Minor)', async () => {
+    mockedExecSync.mockReturnValue(
+      '\x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m3 failed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m\n' +
+        '\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[31m3 failed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m\n',
+    );
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.passed).toBe(false);
+    expect(p.results).toHaveLength(0);
+  });
+
+  it('truncates rawOutput beyond 4000 chars with an explicit marker (reviewer Minor)', async () => {
+    const longOutput = 'line of vitest output\n'.repeat(600); // ~12600 chars
+    mockedExecSync.mockReturnValue(longOutput);
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.rawOutput!.length).toBeLessThanOrEqual(4000 + 64);
+    expect(p.rawOutput).toContain('output truncated at 4000 chars');
+  });
+
+  it('includes the raw stdout in output.rawOutput when parsing fails (KNOWN_ISSUES 9.6)', async () => {
+    // A vitest version/locale change could defeat the parser — the agent must
+    // still see the original stdout instead of an empty `{passed:false}`.
+    const weirdOutput = 'garbled nonsense without any recognizable marker';
+    mockedExecSync.mockReturnValue(weirdOutput);
+    const result = await runTestTool.execute({}, context);
+
+    expect(result.success).toBe(true);
+    const p = JSON.parse(result.output!);
+    expect(p.rawOutput).toContain(weirdOutput);
+  });
+
+  it('fails clearly without triggering an npx download when vitest is not installed (KNOWN_ISSUES 3)', async () => {
+    const bareRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-rt-bare-'));
+    const bareContext: ToolContext = { workspaceRoot: bareRoot };
+
+    try {
+      const result = await runTestTool.execute({}, bareContext);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('vitest');
+      expect(mockedExecSync).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(bareRoot, { recursive: true, force: true });
+    }
   });
 });

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ChevronRight, Loader2, Pause, Play, Plus, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, ChevronRight, FolderOpen, Loader2, Pause, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import designTokens from '../design-tokens';
-import { createSession, fetchConfig, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
+import { createSession, deleteSession, fetchConfig, fetchSessions, sessionControl, type SessionSummary } from '../lib/api';
 import { formatDuration, formatTokens } from '../lib/format';
 import StatusBadge from '../components/StatusBadge';
+import DirectoryPicker from '../components/DirectoryPicker';
 
 type Phase = 'loading' | 'ready' | 'error';
 
@@ -52,6 +53,19 @@ export default function Dashboard() {
   const [modalOpen, setModalOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>('all');
   const [rowBusy, setRowBusy] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
+  // Acceptance feedback: deletion is destructive — first click arms the row's
+  // confirm state, a second click actually deletes (auto-disarms after 3s).
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (confirmTimerRef.current !== null) {
+        clearTimeout(confirmTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     setPhase('loading');
@@ -78,6 +92,28 @@ export default function Dashboard() {
     try {
       await sessionControl(s.id, s.status === 'running' ? 'pause' : 'resume');
       await load();
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
+  /** Delete a session row (KNOWN_ISSUES 9). Running sessions are disabled —
+   *  the backend refuses them with 409; stop them first. A stale list (the
+   *  session resumed in another tab) or a network failure surfaces inline
+   *  instead of an unhandled rejection (reviewer Important). */
+  async function removeRow(s: SessionSummary): Promise<void> {
+    if (rowBusy !== null) {
+      return;
+    }
+    setRowBusy(s.id);
+    setRowError(null);
+    try {
+      await deleteSession(s.id);
+      await load();
+    } catch (err) {
+      setRowError(
+        `删除会话失败：${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       setRowBusy(null);
     }
@@ -267,6 +303,26 @@ export default function Dashboard() {
               </div>
 
               {visible.length > 0 ? (
+                <>
+                {rowError !== null && (
+                  <div
+                    role="alert"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: designTokens.spacing[2],
+                      padding: `${designTokens.spacing[2]} ${designTokens.spacing[3]}`,
+                      marginBottom: designTokens.spacing[3],
+                      borderRadius: designTokens.radius.md,
+                      background: designTokens.colors.dangerSoft,
+                      color: designTokens.colors.danger,
+                      fontSize: designTokens.typography.fontSize.sm,
+                    }}
+                  >
+                    <AlertTriangle size={13} />
+                    {rowError}
+                  </div>
+                )}
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr>
@@ -425,12 +481,81 @@ export default function Dashboard() {
                             >
                               <ChevronRight size={13} />
                             </button>
+                            <button
+                              type="button"
+                              title={
+                                s.status === 'running'
+                                  ? '运行中会话需先停止再删除'
+                                  : confirmDeleteId === s.id
+                                    ? '再次点击确认删除'
+                                    : '删除会话'
+                              }
+                              aria-label={confirmDeleteId === s.id ? `确认删除 ${s.id}` : `删除 ${s.id}`}
+                              disabled={rowBusy !== null || s.status === 'running'}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirmDeleteId !== s.id) {
+                                  // First click: arm the two-step confirm.
+                                  if (confirmTimerRef.current !== null) {
+                                    clearTimeout(confirmTimerRef.current);
+                                  }
+                                  setConfirmDeleteId(s.id);
+                                  confirmTimerRef.current = setTimeout(
+                                    () => setConfirmDeleteId(null),
+                                    3000,
+                                  );
+                                  return;
+                                }
+                                // Second click: actually delete.
+                                if (confirmTimerRef.current !== null) {
+                                  clearTimeout(confirmTimerRef.current);
+                                }
+                                setConfirmDeleteId(null);
+                                void removeRow(s);
+                              }}
+                              style={{
+                                ...iconBtnStyle,
+                                // The 确认删除 label is wider than the fixed
+                                // 28px icon button — expand it while armed
+                                // (reviewer Minor).
+                                width:
+                                  confirmDeleteId === s.id && s.status !== 'running'
+                                    ? 'auto'
+                                    : undefined,
+                                padding:
+                                  confirmDeleteId === s.id && s.status !== 'running'
+                                    ? '0 8px'
+                                    : undefined,
+                                color: s.status === 'running'
+                                  ? designTokens.colors.textFaint
+                                  : designTokens.colors.danger,
+                                background:
+                                  confirmDeleteId === s.id && s.status !== 'running'
+                                    ? designTokens.colors.dangerSoft
+                                    : undefined,
+                              }}
+                            >
+                              {confirmDeleteId === s.id && s.status !== 'running' ? (
+                                <span
+                                  style={{
+                                    fontSize: designTokens.typography.codeSize.sm,
+                                    fontWeight: 600,
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  确认删除
+                                </span>
+                              ) : (
+                                <Trash2 size={13} />
+                              )}
+                            </button>
                           </span>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                </>
               ) : (
                 <EmptyState
                   title={sessions.length === 0 ? '还没有会话' : '当前筛选下没有会话'}
@@ -591,6 +716,8 @@ function NewSessionModal({
   const [roundsText, setRoundsText] = useState('40');
   // 工作目录 (Task 19): defaults to the current config workspaceRoot, editable.
   const [workspaceRoot, setWorkspaceRoot] = useState('');
+  // Task 23: graphical directory picker over GET /api/fs/tree.
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -725,13 +852,25 @@ function NewSessionModal({
           >
             工作目录
           </label>
-          <input
-            id="new-session-workspace-root"
-            value={workspaceRoot}
-            onChange={(e) => setWorkspaceRoot(e.target.value)}
-            placeholder="agent 在此目录中执行工具（默认：当前工作区）"
-            style={{ ...inputStyle, fontFamily: designTokens.typography.fontFamily.mono }}
-          />
+          <div style={{ display: 'flex', gap: designTokens.spacing[2], alignItems: 'flex-start' }}>
+            <input
+              id="new-session-workspace-root"
+              value={workspaceRoot}
+              onChange={(e) => setWorkspaceRoot(e.target.value)}
+              placeholder="agent 在此目录中执行工具（默认：当前工作区）"
+              style={{ ...inputStyle, fontFamily: designTokens.typography.fontFamily.mono, flex: 1 }}
+            />
+            {/* Task 23: graphical directory browsing (picker fetches the fs tree). */}
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              title="浏览目录"
+              aria-label="浏览…"
+              style={browseButtonStyle}
+            >
+              <FolderOpen size={14} />
+            </button>
+          </div>
           <span
             style={{
               display: 'block',
@@ -740,7 +879,7 @@ function NewSessionModal({
               color: designTokens.colors.textMuted,
             }}
           >
-            文件读写、命令与护栏越界检查均以此目录为边界。
+            文件读写、命令与护栏越界检查均以此目录为边界。可直接输入，或用浏览选择。
           </span>
 
           <label
@@ -822,6 +961,16 @@ function NewSessionModal({
             创建并启动
           </button>
         </div>
+
+        {pickerOpen && (
+          <DirectoryPicker
+            onSelect={(picked) => {
+              setWorkspaceRoot(picked);
+              setPickerOpen(false);
+            }}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
       </div>
     </div>
   );
@@ -999,4 +1148,20 @@ const inputStyle: CSSProperties = {
   fontSize: designTokens.typography.fontSize.base,
   fontFamily: designTokens.typography.fontFamily.sans,
   resize: 'vertical',
+};
+
+/** Task 23: folder button that opens the directory picker. */
+const browseButtonStyle: CSSProperties = {
+  display: 'grid',
+  placeItems: 'center',
+  width: 34,
+  height: 34,
+  flexShrink: 0,
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.borderStrong,
+  background: designTokens.colors.surface,
+  color: designTokens.colors.textMuted,
+  cursor: 'pointer',
 };

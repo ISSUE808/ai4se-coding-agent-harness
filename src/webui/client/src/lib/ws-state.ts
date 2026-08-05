@@ -20,7 +20,17 @@ export interface SessionRuntimeState {
   status: SessionStatus | null;
   currentRound: number | null;
   maxRounds: number | null;
+  /** Session-level model override (Task 26); null = follow the config default. */
+  model: string | null;
   pendingApproval: PendingApproval | null;
+}
+
+/** One line of the session's live terminal stream (KNOWN_ISSUES 9 终端 tab). */
+export interface TerminalLine {
+  id: string;
+  timestamp: string;
+  kind: 'tool' | 'feedback' | 'guardrail' | 'round' | 'status';
+  text: string;
 }
 
 /** WS frame shape: server serializes every HarnessEventMap event as `{type, data}`. */
@@ -34,6 +44,8 @@ export interface InitialRuntimeState {
   status: SessionStatus;
   currentRound?: number;
   maxRounds?: number;
+  /** Session-level model override from the REST snapshot (Task 26). */
+  model?: string;
 }
 
 const KNOWN_STATUSES: SessionStatus[] = ['running', 'paused', 'completed', 'failed'];
@@ -44,6 +56,7 @@ export function createInitialRuntimeState(initial?: InitialRuntimeState): Sessio
     status: initial?.status ?? null,
     currentRound: initial?.currentRound ?? null,
     maxRounds: initial?.maxRounds ?? null,
+    model: initial?.model ?? null,
     pendingApproval: null,
   };
 }
@@ -88,6 +101,16 @@ export function reduceSessionEvent(state: SessionRuntimeState, event: SessionEve
       return { ...state, currentRound: data.currentRound, maxRounds: data.maxRounds };
     }
 
+    case 'session:updated': {
+      // Task 26: the session-level model override changed (`null` = cleared,
+      // back to the config default). Anything else than a string/null is a
+      // malformed frame — keep the previous model.
+      if (typeof data.model !== 'string' && data.model !== null) {
+        return state;
+      }
+      return { ...state, model: data.model };
+    }
+
     case 'guardrail:triggered': {
       if (
         data.level !== 'warn' ||
@@ -104,5 +127,95 @@ export function reduceSessionEvent(state: SessionRuntimeState, event: SessionEve
 
     default:
       return state;
+  }
+}
+
+// ─── Terminal stream (KNOWN_ISSUES 9 终端 tab) ──────────────────────────────
+
+const TERMINAL_MAX = 500;
+
+/**
+ * Reduce WS frames into terminal lines for the session's live "terminal" tab.
+ * Kept separate from `reduceSessionEvent` — the message feed and the
+ * operational log have different consumers and retention policies.
+ * `now` (ISO) is injected by the caller: the mapped frame types carry NO
+ * timestamp on the wire (HarnessEventMap has none), so the receive-time stamp
+ * is the only true "when it happened" the client has (reviewer Important).
+ */
+export function reduceTerminalEvent(
+  lines: TerminalLine[],
+  event: SessionEventFrame,
+  now = '',
+): TerminalLine[] {
+  if (!isRecord(event.data)) {
+    return lines;
+  }
+  const line = terminalLine(event.type, event.data, now);
+  if (line === null) {
+    return lines;
+  }
+  // Monotonic key: WS frames carry no id, and `lines.length` alone would
+  // repeat once the 500-line cap kicks in (duplicate React keys). Pure max+1
+  // keeps the reducer deterministic (reviewer Important).
+  line.id = lines.length === 0 ? '0' : String(Math.max(...lines.map((l) => Number(l.id))) + 1);
+  const next = [...lines, line];
+  return next.length > TERMINAL_MAX ? next.slice(next.length - TERMINAL_MAX) : next;
+}
+
+function terminalLine(type: string, data: Record<string, unknown>, now = ''): TerminalLine | null {
+  const stamp = now !== '' ? now : typeof data.timestamp === 'string' ? data.timestamp : '';
+  switch (type) {
+    case 'tool:executed': {
+      const toolName = typeof data.toolName === 'string' ? data.toolName : '?';
+      const success = typeof data.success === 'boolean' ? data.success : true;
+      const ms = typeof data.duration_ms === 'number' ? `${data.duration_ms}ms` : '';
+      return {
+        id: stamp,
+        timestamp: stamp,
+        kind: 'tool',
+        text: `[tool] ${toolName} ${success ? '✓' : '✗'} ${ms}`.trim(),
+      };
+    }
+    case 'feedback:completed': {
+      const validator = typeof data.validator === 'string' ? data.validator : '?';
+      const passed = typeof data.passed === 'boolean' ? data.passed : false;
+      const category =
+        typeof data.failureCategory === 'string' && data.failureCategory !== ''
+          ? ` (${data.failureCategory})`
+          : '';
+      return {
+        id: stamp,
+        timestamp: stamp,
+        kind: 'feedback',
+        text: `[feedback] ${validator} ${passed ? '✓' : `✗${category}`}`,
+      };
+    }
+    case 'guardrail:triggered': {
+      const rule = typeof data.rule === 'string' ? data.rule : '?';
+      const command = typeof data.command === 'string' ? data.command : '';
+      const level = typeof data.level === 'string' ? data.level : 'warn';
+      return {
+        id: stamp,
+        timestamp: stamp,
+        kind: 'guardrail',
+        text: `[guardrail] ${level}: ${rule}${command !== '' ? ` — ${command}` : ''}`,
+      };
+    }
+    case 'round:changed': {
+      const current = typeof data.currentRound === 'number' ? data.currentRound : 0;
+      const max = typeof data.maxRounds === 'number' ? data.maxRounds : 0;
+      return {
+        id: stamp,
+        timestamp: stamp,
+        kind: 'round',
+        text: `[round] ${current}/${max === 0 ? '∞' : max}`,
+      };
+    }
+    case 'session:status': {
+      const status = typeof data.status === 'string' ? data.status : '?';
+      return { id: stamp, timestamp: stamp, kind: 'status', text: `[session] ${status}` };
+    }
+    default:
+      return null;
   }
 }

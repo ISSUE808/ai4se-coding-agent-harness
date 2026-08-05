@@ -141,18 +141,6 @@ export function parseLineDelta(output: string | undefined): { add: number; del: 
   return null;
 }
 
-/** Last tool output (or error) for a file, for the FileDiff placeholder. */
-export function contentForFile(messages: SessionMessage[], path: string): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (toolFiles(message).includes(path)) {
-      const result = message.metadata?.toolResult;
-      return result?.output ?? result?.error ?? null;
-    }
-  }
-  return null;
-}
-
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'typescript',
   tsx: 'typescript',

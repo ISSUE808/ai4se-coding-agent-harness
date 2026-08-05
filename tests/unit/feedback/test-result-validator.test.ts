@@ -15,11 +15,25 @@ describe('TestResultValidator', () => {
 
   beforeEach(() => {
     execSync = makeExec();
-    validator = new TestResultValidator(execSync);
+    // hasVitest injected as always-present so execSync paths are exercised
+    // (the env-prereq skip is tested separately below).
+    validator = new TestResultValidator(execSync, () => true);
   });
 
   it('has name "test-runner"', () => {
     expect(validator.name).toBe('testResultParser');
+  });
+
+  it('skips (passes) when vitest is not installed in the workspace — env prerequisite (KNOWN_ISSUES 3)', async () => {
+    const result: ToolResult = { success: true, duration_ms: 10, filesChanged: ['src/index.ts'] };
+    const noVitestValidator = new TestResultValidator(execSync, () => false);
+
+    const feedback = await noVitestValidator.validate(action, result, ctx);
+
+    expect(feedback.passed).toBe(true);
+    expect(feedback.validator).toBe('testResultParser');
+    expect(feedback.evidence).toContain('vitest');
+    expect(execSync).not.toHaveBeenCalled();
   });
 
   it('returns passed when all tests pass', async () => {

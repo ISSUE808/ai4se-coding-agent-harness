@@ -36,6 +36,7 @@ function fakeKeytar(available: boolean): CredentialBackend {
     save: vi.fn(async () => undefined),
     delete: vi.fn(async () => false),
     exists: vi.fn(async () => false),
+    list: vi.fn(async () => []),
   };
 }
 
@@ -131,6 +132,7 @@ describe('buildCredentialStore (SPEC §3.7 priority chain from the CLI)', () => 
       save: vi.fn(),
       delete: vi.fn(),
       exists: vi.fn(),
+      list: vi.fn(async () => []),
     } as CredentialBackend;
     const readHidden = vi.fn(async () => 'pw');
     const store = await buildCredentialStore({

@@ -55,6 +55,7 @@ const colors = {
   text:       palette.slate2,
   textMuted:  palette.slate7,
   textSubtle: palette.slate5,
+  textFaint:  palette.slate7, // faintest text — disabled labels, timestamps
 
   // single primary accent (interactive, links, live/running indicator)
   primary:       palette.indigo,

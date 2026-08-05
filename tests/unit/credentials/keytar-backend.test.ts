@@ -6,6 +6,7 @@ const keytarMock = vi.hoisted(() => ({
   getPassword: vi.fn(),
   setPassword: vi.fn(),
   deletePassword: vi.fn(),
+  findCredentials: vi.fn(),
 }));
 
 vi.mock('keytar', () => ({ default: keytarMock }));
@@ -69,5 +70,19 @@ describe('KeytarBackend', () => {
     keytarMock.deletePassword.mockResolvedValue(true);
     await expect(backend.delete(service, account)).resolves.toBe(true);
     expect(keytarMock.deletePassword).toHaveBeenCalledWith(service, account);
+  });
+
+  it('list enumerates accounts via keytar.findCredentials', async () => {
+    keytarMock.findCredentials.mockResolvedValue([
+      { account: 'deepseek', password: 'sk-a' },
+      { account: 'groq', password: 'sk-b' },
+    ]);
+    await expect(backend.list(service)).resolves.toEqual(['deepseek', 'groq']);
+    expect(keytarMock.findCredentials).toHaveBeenCalledWith(service);
+  });
+
+  it('list returns an empty array when the keychain has no entries for the service', async () => {
+    keytarMock.findCredentials.mockResolvedValue([]);
+    await expect(backend.list(service)).resolves.toEqual([]);
   });
 });

@@ -205,4 +205,83 @@ describe('useSessionEvents', () => {
     expect(result.current.messages).toEqual([]);
     expect(vi.isMockFunction(console.warn)).toBeFalsy();
   });
+
+  it('a WS session:updated frame (even model null) wins over a late REST snapshot (review M2)', () => {
+    const source = new FakeSource();
+    const { result, rerender } = renderSessionEvents(source);
+
+    // The WS delivers the model change BEFORE the (stale) REST snapshot merges.
+    act(() =>
+      source.emit({
+        type: 'session:updated',
+        data: { sessionId: 's_1', model: null, updatedAt: '2026-08-03T00:00:00.000Z' },
+      }),
+    );
+    expect(result.current.model).toBeNull();
+
+    // A late snapshot that still carries the old override must NOT resurrect it.
+    rerender({
+      initial: { messages: [], status: 'running', model: 'deepseek-r1' },
+    });
+    expect(result.current.model).toBeNull();
+
+    // A WS-set model also wins over the snapshot value.
+    act(() =>
+      source.emit({
+        type: 'session:updated',
+        data: { sessionId: 's_1', model: 'deepseek-v3', updatedAt: '2026-08-03T00:01:00.000Z' },
+      }),
+    );
+    expect(result.current.model).toBe('deepseek-v3');
+  });
+
+  it('seeds the model from the REST snapshot when no WS frame arrived yet (Task 26)', () => {
+    const source = new FakeSource();
+    const { result } = renderSessionEvents(source, {
+      messages: [],
+      status: 'running',
+      model: 'deepseek-r1',
+    });
+    expect(result.current.model).toBe('deepseek-r1');
+  });
+
+  it('updateModel applies a model override locally (Task 26)', () => {
+    const source = new FakeSource();
+    const { result } = renderSessionEvents(source);
+
+    act(() => result.current.updateModel('deepseek-v3'));
+    expect(result.current.model).toBe('deepseek-v3');
+
+    act(() => result.current.updateModel(null));
+    expect(result.current.model).toBeNull();
+  });
+
+  it('collects tool/feedback/guardrail frames into the terminal stream (KNOWN_ISSUES 9)', () => {
+    const source = new FakeSource();
+    const { result } = renderSessionEvents(source);
+
+    act(() =>
+      source.emit({
+        type: 'tool:executed',
+        data: { toolName: 'read_file', duration_ms: 4, success: true },
+      }),
+    );
+    act(() =>
+      source.emit({
+        type: 'round:changed',
+        data: { currentRound: 1, maxRounds: 3 },
+      }),
+    );
+    // message:added frames must NOT pollute the terminal stream.
+    act(() =>
+      source.emit({
+        type: 'message:added',
+        data: { id: 'm1', role: 'assistant', content: 'hi', timestamp: 't' },
+      }),
+    );
+
+    expect(result.current.terminal).toHaveLength(2);
+    expect(result.current.terminal[0].text).toContain('read_file');
+    expect(result.current.terminal[1].text).toContain('1/3');
+  });
 });

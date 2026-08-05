@@ -13,7 +13,11 @@ export interface SessionSummary {
   currentRound: number;
   /** Session workspace root (Task 19) — bound per session, defaults to the config root. */
   workspaceRoot: string;
+  /** Session-level model override (Task 26); absent = follow the config default. */
+  model?: string;
   tokenCount: number;
+  /** Billed token usage accumulated across rounds (KNOWN_ISSUES 9). */
+  tokenUsage?: { prompt: number; completion: number; cached?: number };
   createdAt: string;
   updatedAt: string;
 }
@@ -22,6 +26,28 @@ export interface KeyStatus {
   provider: string;
   /** Masked value e.g. `****-9f2c`, or the literal `not set`. */
   status: string;
+}
+
+export interface KeyProviderStatus {
+  provider: string;
+  /** Masked value e.g. `****-9f2c`, or the literal `not set`. */
+  status: string;
+  /** Registry endpoint (Task 26 follow-up); absent when not registered. */
+  baseUrl?: string;
+  /** Registry default model (Task 26 follow-up); absent when not set. */
+  defaultModel?: string;
+  /** True when this provider is the ACTIVE one (config.llm.provider). */
+  isActive?: boolean;
+}
+
+export interface KeyListResponse {
+  /** Every provider that has a credential in the store (Task 25). */
+  providers: KeyProviderStatus[];
+  /**
+   * Active credential backend name (keytar | encrypted-file | env | memory).
+   * 'env' is read-only — the UI shows a hint when it is active (reviewer M4).
+   */
+  backend?: string;
 }
 
 export interface KeySaveResponse {
@@ -88,11 +114,13 @@ export async function createSession(
   task: string,
   maxRounds: number,
   workspaceRoot?: string,
+  model?: string,
 ): Promise<SessionSummary> {
-  return request<SessionSummary>(
-    '/api/sessions',
-    jsonInit('POST', { task, maxRounds, workspaceRoot }),
-  );
+  const body: Record<string, unknown> = { task, maxRounds, workspaceRoot };
+  if (model !== undefined) {
+    body.model = model;
+  }
+  return request<SessionSummary>('/api/sessions', jsonInit('POST', body));
 }
 
 /** Session with its full message history (GET /api/sessions/:id). */
@@ -110,6 +138,38 @@ export async function postMessage(sessionId: string, content: string): Promise<S
     `/api/sessions/${encodeURIComponent(sessionId)}/message`,
     jsonInit('POST', { role: 'user', content }),
   );
+}
+
+/**
+ * Switch the session-level model override (Task 26). An empty string clears
+ * the override so the session falls back to the config default. The backend
+ * broadcasts `session:updated` over WS; a running session restarts on the
+ * new model.
+ */
+export async function updateSessionModel(sessionId: string, model: string): Promise<SessionSummary> {
+  return request<SessionSummary>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/model`,
+    jsonInit('PATCH', { model }),
+  );
+}
+
+/** KNOWN_ISSUES 9: delete one session (running sessions are refused with 409). */
+export async function deleteSession(sessionId: string): Promise<{ removed: boolean }> {
+  return request<{ removed: boolean }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}`,
+    jsonInit('DELETE', undefined),
+  );
+}
+
+export interface ClearSessionsResult {
+  deleted: number;
+  /** Running sessions are kept — ids reported so the UI can explain. */
+  keptRunning: string[];
+}
+
+/** KNOWN_ISSUES 9: bulk clear — deletes every non-running session. */
+export async function clearSessions(): Promise<ClearSessionsResult> {
+  return request<ClearSessionsResult>('/api/sessions', jsonInit('DELETE', undefined));
 }
 
 export type SessionControlAction = 'pause' | 'resume' | 'stop';
@@ -147,22 +207,162 @@ export async function resolveApproval(
 
 // ─── Keys (provider-scoped; responses are masked server-side) ───────────────
 
-export async function getKeyStatus(provider: string): Promise<KeyStatus> {
-  return request<KeyStatus>(`/api/keys/${provider}`);
+/**
+ * Enumerate the providers that have a credential in the store (Task 25) —
+ * including custom providers added at runtime. The backend never returns a
+ * hardcoded whitelist; providers come from the credential store itself.
+ */
+export async function fetchKeys(): Promise<KeyListResponse> {
+  return request<KeyListResponse>('/api/keys');
 }
 
-export async function saveKey(provider: string, apiKey: string): Promise<KeySaveResponse> {
-  return request<KeySaveResponse>(`/api/keys/${provider}`, jsonInit('POST', { apiKey }));
+export async function getKeyStatus(provider: string): Promise<KeyStatus> {
+  return request<KeyStatus>(`/api/keys/${encodeURIComponent(provider)}`);
+}
+
+/** Optional registry metadata carried by a key save (Task 26 follow-up). */
+export interface KeyMeta {
+  /** Provider base URL (OpenAI-compatible). */
+  baseUrl?: string;
+  /** Default model applied when this provider is activated. */
+  defaultModel?: string;
+}
+
+/**
+ * Save a key and/or registry metadata for a provider. `apiKey` optional when
+ * only registering metadata (`baseUrl`) — the backend rejects a POST with
+ * neither. Keys travel one-way and are never echoed back.
+ */
+export async function saveKey(
+  provider: string,
+  apiKey: string,
+  meta?: KeyMeta,
+): Promise<KeySaveResponse> {
+  const body: Record<string, unknown> = { apiKey };
+  if (meta?.baseUrl !== undefined && meta.baseUrl !== '') {
+    body.baseUrl = meta.baseUrl;
+  }
+  if (meta?.defaultModel !== undefined && meta.defaultModel !== '') {
+    body.defaultModel = meta.defaultModel;
+  }
+  return request<KeySaveResponse>(
+    `/api/keys/${encodeURIComponent(provider)}`,
+    jsonInit('POST', body),
+  );
 }
 
 export async function deleteKey(provider: string): Promise<KeyDeleteResponse> {
-  return request<KeyDeleteResponse>(`/api/keys/${provider}`, { method: 'DELETE' });
+  return request<KeyDeleteResponse>(
+    `/api/keys/${encodeURIComponent(provider)}`,
+    { method: 'DELETE' },
+  );
 }
 
 // ─── Config (masked merged config in every response) ────────────────────────
 
 export async function fetchConfig(): Promise<ConfigValue> {
   return request<ConfigValue>('/api/config');
+}
+
+// ─── Provider model list (Task 26 follow-up) ────────────────────────────────
+
+/** Model ids served by GET /api/llm/models (fetched from the provider). */
+export interface ProviderModels {
+  models: string[];
+}
+
+/**
+ * Fetch the configured provider's model list. The key never leaves the
+ * backend — the server calls the provider's `/models` endpoint with it.
+ * 401 (no key) / 502 (provider unreachable) surface as ApiError messages the
+ * UI can show and fall back from.
+ */
+export async function fetchAvailableModels(): Promise<ProviderModels> {
+  return request<ProviderModels>('/api/llm/models');
+}
+
+// ─── fs browsing (Task 23: directory picker + session file tree) ────────────
+
+/** A node in the directory tree served by GET /api/fs/tree. */
+export interface FsTreeNode {
+  /** Absolute path of this node. */
+  path: string;
+  /** Basename of this node. */
+  name: string;
+  type: 'dir' | 'file';
+  /** File size in bytes (files only). */
+  size?: number;
+  /** Direct children (dirs only, within the server depth cap). */
+  children?: FsTreeNode[];
+  /** True when this directory held more entries than the server cap. */
+  truncated?: boolean;
+}
+
+/**
+ * Fetch the directory tree below `path` (must sit under an authorized
+ * workspace root — the config root or a session workspaceRoot). Omit the
+ * path to browse the default workspace root.
+ */
+export async function fetchFsTree(path?: string): Promise<FsTreeNode> {
+  const query = path !== undefined && path !== '' ? `?path=${encodeURIComponent(path)}` : '';
+  return request<FsTreeNode>(`/api/fs/tree${query}`);
+}
+
+/** Content of a workspace file served by GET /api/fs/file (1.5: preview). */
+export interface FsFileContent {
+  /** Canonical (realpath'd) path of the file. */
+  path: string;
+  /** Basename. */
+  name: string;
+  /** UTF-8 file content (preview cap enforced server-side, 413 beyond). */
+  content: string;
+  /** Byte size of the file. */
+  size: number;
+}
+
+/**
+ * Fetch a file's CONTENT for the diff-preview pane. Unlike /browse (metadata
+ * only, machine-wide), this endpoint is workspace-bounded — the file must
+ * sit under an authorized root, same boundary as /tree.
+ */
+export async function fetchFsFile(path: string): Promise<FsFileContent> {
+  return request<FsFileContent>(`/api/fs/file?path=${encodeURIComponent(path)}`);
+}
+
+/** One entry in a GET /api/fs/browse listing (metadata only, never contents). */
+export interface FsBrowseEntry {
+  /** Absolute path of this entry. */
+  path: string;
+  /** Basename of this entry. */
+  name: string;
+  type: 'dir' | 'file' | 'link';
+  /** File size in bytes (files only). */
+  size?: number;
+}
+
+/** Directory listing served by GET /api/fs/browse?path=. */
+export interface FsBrowseResult {
+  path: string;
+  parent: string;
+  entries: FsBrowseEntry[];
+  /** True when the directory held more entries than the server cap. */
+  truncated?: boolean;
+}
+
+/**
+ * Fetch the machine's root directories (Windows drive letters like `C:\`,
+ * or `/` on POSIX). The picker's top level — browsing is deliberately
+ * UNRESTRICTED so the user can choose ANY directory as a session root;
+ * the server returns metadata only (see KNOWN_ISSUES).
+ */
+export async function fetchMachineRoots(): Promise<string[]> {
+  const body = await request<{ roots: string[] }>('/api/fs/browse');
+  return body.roots;
+}
+
+/** List one directory's entries (names/types/sizes — never file contents). */
+export async function fetchFsBrowse(path: string): Promise<FsBrowseResult> {
+  return request<FsBrowseResult>(`/api/fs/browse?path=${encodeURIComponent(path)}`);
 }
 
 export async function saveConfig(patch: ConfigValue): Promise<ConfigValue> {

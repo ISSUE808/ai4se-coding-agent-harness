@@ -1,8 +1,17 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import request from 'supertest';
+
+// accessSync is patched so a single test can simulate an unwritable root
+// (Windows fs.access() checks file attributes, not ACLs — an unwritable
+// directory cannot be constructed portably). Every other fs function
+// forwards to the real implementation untouched.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, accessSync: vi.fn(actual.accessSync) };
+});
 import { WebSocket } from 'ws';
 import { createWebUIServer } from '../../src/webui/server.js';
 import type { WebUIServer } from '../../src/webui/server.js';
@@ -43,6 +52,9 @@ function memoryBackend(): CredentialBackend {
     async exists(_service, account) {
       return secrets.has(account);
     },
+    async list() {
+      return [...secrets.keys()];
+    },
   };
 }
 
@@ -70,10 +82,15 @@ afterEach(async () => {
   openServers.length = 0;
 });
 
-async function makeFixture(config?: Config): Promise<Fixture> {
+async function makeFixture(
+  config?: Config,
+  credentialBackend?: CredentialBackend,
+  fetchFn?: typeof fetch,
+  onConfigChanged?: (prev: Config, next: Config) => void,
+): Promise<Fixture> {
   const events = createEventBus();
   const sessionStore = new InMemorySessionStore();
-  const credentialStore = new CredentialStore([memoryBackend()]);
+  const credentialStore = new CredentialStore([credentialBackend ?? memoryBackend()]);
   const hitl = new HITLManager();
   let persisted: Config | null = null;
   const web = createWebUIServer({
@@ -82,6 +99,8 @@ async function makeFixture(config?: Config): Promise<Fixture> {
     credentialStore,
     config: config ?? structuredClone(DEFAULT_CONFIG),
     hitl,
+    fetchFn,
+    onConfigChanged,
     persistConfig: async (c: Config) => {
       persisted = structuredClone(c);
     },
@@ -230,6 +249,26 @@ describe('REST /api/sessions', () => {
     }
   });
 
+  it('POST /api/sessions accepts an existing directory regardless of writability (1.6: no writability gate)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-ws-api-'));
+    try {
+      const { web } = await makeFixture();
+      // The writability check is unreliable on Windows (fs.access() checks
+      // file attributes, not ACLs — even C:\Windows passes W_OK) and the
+      // picker already allows ANY directory, so creation must not depend on
+      // it. Simulate an unwritable root by forcing accessSync to fail once.
+      const accessSyncMock = vi.mocked(fs.accessSync);
+      accessSyncMock.mockImplementationOnce(() => {
+        throw new Error('EPERM: permission denied, access C:\\Windows');
+      });
+      const res = await request(web.app).post('/api/sessions').send({ task: 't', workspaceRoot: dir });
+      expect(res.status).toBe(201);
+      expect(res.body.workspaceRoot).toBe(dir);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('POST /api/sessions rejects a missing or empty task with 400 JSON', async () => {
     const { web } = await makeFixture();
     const missing = await request(web.app).post('/api/sessions').send({});
@@ -324,30 +363,187 @@ describe('REST /api/sessions', () => {
     const ghost = await request(web.app).post('/api/sessions/ghost/pause');
     expect(ghost.status).toBe(404);
   });
+
+  it('POST /api/sessions accepts an optional model and stores it (Task 26)', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).post('/api/sessions').send({ task: 't', model: 'deepseek-v3' });
+    expect(res.status).toBe(201);
+    expect(res.body.model).toBe('deepseek-v3');
+    const detail = await request(web.app).get(`/api/sessions/${res.body.id}`);
+    expect(detail.body.model).toBe('deepseek-v3');
+  });
+
+  it('POST /api/sessions trims the model before storing (review M3)', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app)
+      .post('/api/sessions')
+      .send({ task: 't', model: '  deepseek-v3  ' });
+    expect(res.status).toBe(201);
+    expect(res.body.model).toBe('deepseek-v3');
+  });
+
+  it('POST /api/sessions rejects an invalid model with 400 JSON (Task 26)', async () => {
+    const { web } = await makeFixture();
+    for (const model of [42, null, '', '   ']) {
+      const res = await request(web.app).post('/api/sessions').send({ task: 't', model });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBeTypeOf('string');
+    }
+    // Omitting the model is fine (config default).
+    const ok = await request(web.app).post('/api/sessions').send({ task: 't' });
+    expect(ok.status).toBe(201);
+  });
+
+  it('PATCH /api/sessions/:id/model updates the model, returns the session and broadcasts session:updated over WS (Task 26)', async () => {
+    const { web, port } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 't' });
+    const id = created.body.id as string;
+    const ws = await wsConnect(port, `?sessionId=${id}`);
+
+    const res = await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+    expect(res.status).toBe(200);
+    expect(res.body.model).toBe('deepseek-v3');
+    const detail = await request(web.app).get(`/api/sessions/${id}`);
+    expect(detail.body.model).toBe('deepseek-v3');
+
+    const frame = await nextEvent(ws, (f) => f.type === 'session:updated' && f.data.sessionId === id);
+    expect(frame.data.model).toBe('deepseek-v3');
+    expect(frame.data.updatedAt).toBeTypeOf('string');
+  });
+
+  it('PATCH /api/sessions/:id/model with an empty model clears the override back to the config default (Task 26)', async () => {
+    const { web } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 't', model: 'deepseek-v3' });
+    const id = created.body.id as string;
+
+    const res = await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: '' });
+    expect(res.status).toBe(200);
+    expect(res.body.model).toBeUndefined();
+    const detail = await request(web.app).get(`/api/sessions/${id}`);
+    expect(detail.body.model).toBeUndefined();
+  });
+
+  it('PATCH /api/sessions/:id/model validates the body and 404s unknown sessions (Task 26)', async () => {
+    const { web } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 't' });
+    const id = created.body.id as string;
+
+    const bad = await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 42 });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toBeTypeOf('string');
+    const missing = await request(web.app).patch('/api/sessions/ghost/model').send({ model: 'x' });
+    expect(missing.status).toBe(404);
+  });
+
+  it('PATCH /api/sessions/:id/model notifies the harness only when the model actually changed (Task 26)', async () => {
+    const onModelChanged = vi.fn();
+    const events = createEventBus();
+    const sessionStore = new InMemorySessionStore();
+    const web = createWebUIServer({
+      sessionStore,
+      events,
+      credentialStore: new CredentialStore([memoryBackend()]),
+      config: structuredClone(DEFAULT_CONFIG),
+      hitl: new HITLManager(),
+      onModelChanged,
+    });
+    const port = await web.listen(0);
+    openServers.push(web);
+
+    const created = await request(web.app).post('/api/sessions').send({ task: 't' });
+    const id = created.body.id as string;
+    await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+    expect(onModelChanged).toHaveBeenCalledTimes(1);
+    expect(onModelChanged).toHaveBeenCalledWith(expect.objectContaining({ id, model: 'deepseek-v3' }));
+
+    // Patching the same model again is a no-op — no restart signal.
+    await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+    expect(onModelChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('DELETE /api/sessions/:id removes a non-running session (KNOWN_ISSUES 9)', async () => {
+    const { web } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 'to delete' });
+    const id = created.body.id as string;
+    await request(web.app).post(`/api/sessions/${id}/stop`).send({});
+    const del = await request(web.app).delete(`/api/sessions/${id}`);
+    expect(del.status).toBe(200);
+    expect(del.body.removed).toBe(true);
+    const list = await request(web.app).get('/api/sessions');
+    expect(list.body.some((s: { id: string }) => s.id === id)).toBe(false);
+    // Second DELETE is 404 — the session is really gone.
+    const again = await request(web.app).delete(`/api/sessions/${id}`);
+    expect(again.status).toBe(404);
+  });
+
+  it('DELETE /api/sessions/:id rejects a running session with 409', async () => {
+    const { web } = await makeFixture();
+    const created = await request(web.app).post('/api/sessions').send({ task: 'running' });
+    const res = await request(web.app).delete(`/api/sessions/${created.body.id}`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('stop');
+  });
+
+  it('DELETE /api/sessions clears all non-running sessions and reports kept running ones (KNOWN_ISSUES 9)', async () => {
+    const { web } = await makeFixture();
+    const a = await request(web.app).post('/api/sessions').send({ task: 'done-a' });
+    await request(web.app).post(`/api/sessions/${a.body.id}/stop`).send({});
+    const b = await request(web.app).post('/api/sessions').send({ task: 'done-b' });
+    await request(web.app).post(`/api/sessions/${b.body.id}/stop`).send({});
+    const running = await request(web.app).post('/api/sessions').send({ task: 'live' });
+
+    const res = await request(web.app).delete('/api/sessions');
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(2);
+    expect(res.body.keptRunning).toEqual([running.body.id]);
+
+    const list = await request(web.app).get('/api/sessions');
+    expect(list.body).toHaveLength(1);
+    expect(list.body[0].id).toBe(running.body.id);
+  });
+
+  it('DELETE /api/sessions returns 404 for an unknown session id', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).delete('/api/sessions/ghost');
+    expect(res.status).toBe(404);
+  });
+
+  it('session:updated frames are filtered by the WS sessionId (Task 26)', async () => {
+    const { web, port } = await makeFixture();
+    const a = await request(web.app).post('/api/sessions').send({ task: 'a' });
+    const b = await request(web.app).post('/api/sessions').send({ task: 'b' });
+    const wsA = await wsConnect(port, `?sessionId=${a.body.id}`);
+    const wsB = await wsConnect(port, `?sessionId=${b.body.id}`);
+
+    await request(web.app).patch(`/api/sessions/${a.body.id}/model`).send({ model: 'deepseek-v3' });
+    await nextEvent(wsA, (f) => f.type === 'session:updated' && f.data.sessionId === a.body.id);
+    // Session B's filtered client must never receive A's model change.
+    await expect(nextEvent(wsB, (f) => f.type === 'session:updated', 200)).rejects.toThrow('timeout');
+  });
 });
 
 describe('REST /api/approvals', () => {
   it('approve moves HITL to EXECUTING and records the approved command', async () => {
     const { web, hitl, sessionStore } = await makeFixture();
-    hitl.requestApproval('rm -rf /');
     const created = await request(web.app).post('/api/sessions').send({ task: 'hitl' });
     const id = created.body.id as string;
+    hitl.requestApproval(id, 'rm -rf /');
     const res = await request(web.app)
       .post(`/api/approvals/${id}`)
       .send({ decision: 'approve' });
     expect(res.status).toBe(200);
     expect(res.body.decision).toBe('approve');
     expect(res.body.state).toBe(HITLState.EXECUTING);
-    expect(hitl.getState()).toBe(HITLState.EXECUTING);
+    expect(hitl.getState(id)).toBe(HITLState.EXECUTING);
     const session = sessionStore.get(id);
     expect(session?.messages.some((m) => m.content.includes('rm -rf /'))).toBe(true);
   });
 
   it('modify requires modifiedCommand and records it', async () => {
     const { web, hitl, sessionStore } = await makeFixture();
-    hitl.requestApproval('rm -rf /');
     const created = await request(web.app).post('/api/sessions').send({ task: 'hitl' });
     const id = created.body.id as string;
+    hitl.requestApproval(id, 'rm -rf /');
     const noCommand = await request(web.app)
       .post(`/api/approvals/${id}`)
       .send({ decision: 'modify' });
@@ -357,24 +553,39 @@ describe('REST /api/approvals', () => {
       .send({ decision: 'modify', modifiedCommand: 'rm -rf /tmp/scratch' });
     expect(res.status).toBe(200);
     expect(res.body.state).toBe(HITLState.EXECUTING_MODIFIED);
-    expect(hitl.getState()).toBe(HITLState.EXECUTING_MODIFIED);
+    expect(hitl.getState(id)).toBe(HITLState.EXECUTING_MODIFIED);
     const session = sessionStore.get(id);
     expect(session?.messages.some((m) => m.content.includes('/tmp/scratch'))).toBe(true);
   });
 
   it('deny blocks the pending command and records the denial', async () => {
     const { web, hitl, sessionStore } = await makeFixture();
-    hitl.requestApproval('rm -rf /');
     const created = await request(web.app).post('/api/sessions').send({ task: 'hitl' });
     const id = created.body.id as string;
+    hitl.requestApproval(id, 'rm -rf /');
     const res = await request(web.app)
       .post(`/api/approvals/${id}`)
       .send({ decision: 'deny' });
     expect(res.status).toBe(200);
     expect(res.body.state).toBe(HITLState.BLOCKED);
-    expect(hitl.getState()).toBe(HITLState.BLOCKED);
+    expect(hitl.getState(id)).toBe(HITLState.BLOCKED);
     const session = sessionStore.get(id);
     expect(session?.messages.some((m) => m.content.toLowerCase().includes('denied'))).toBe(true);
+  });
+
+  it('409 when the session is NOT the one holding the pending decision (KNOWN_ISSUES 6)', async () => {
+    const { web, hitl } = await makeFixture();
+    const a = await request(web.app).post('/api/sessions').send({ task: 'hitl-a' });
+    const b = await request(web.app).post('/api/sessions').send({ task: 'hitl-b' });
+    // Session B's command is pending; resolving it through session A's id
+    // must fail with 409 instead of approving B's command under A's name.
+    hitl.requestApproval(b.body.id, 'rm -rf /');
+    const res = await request(web.app)
+      .post(`/api/approvals/${a.body.id}`)
+      .send({ decision: 'approve' });
+    expect(res.status).toBe(409);
+    // B's pending decision is untouched.
+    expect(hitl.getState(b.body.id)).toBe(HITLState.AWAITING_APPROVAL);
   });
 
   it('rejects an invalid decision with 400', async () => {
@@ -398,8 +609,7 @@ describe('REST /api/approvals', () => {
   });
 
   it('returns 404 for an unknown session', async () => {
-    const { web, hitl } = await makeFixture();
-    hitl.requestApproval('rm -rf /');
+    const { web } = await makeFixture();
     const res = await request(web.app)
       .post('/api/approvals/ghost')
       .send({ decision: 'approve' });
@@ -445,6 +655,20 @@ describe('REST /api/keys', () => {
     expect(empty.status).toBe(400);
   });
 
+  it('POST rejects a provider name outside [a-zA-Z0-9_-] with 400 (reviewer M1)', async () => {
+    const { web, credentialStore } = await makeFixture();
+    const dot = await request(web.app).post('/api/keys/invalid.name').send({ apiKey: 'sk-x' });
+    expect(dot.status).toBe(400);
+    expect(dot.body.error).toContain('Invalid provider name');
+    // %2F decodes to a slash; %20 to a space — both must be rejected.
+    const slash = await request(web.app).post('/api/keys/bad%2Fname').send({ apiKey: 'sk-x' });
+    expect(slash.status).toBe(400);
+    const space = await request(web.app).post('/api/keys/bad%20name').send({ apiKey: 'sk-x' });
+    expect(space.status).toBe(400);
+    // Nothing was stored.
+    expect(await credentialStore.status('codeharness/deepseek', 'invalid.name')).toBe('not set');
+  });
+
   it('DELETE removes the key; second DELETE is 404', async () => {
     const { web } = await makeFixture();
     await request(web.app).post('/api/keys/deepseek').send({ apiKey: 'sk-secret-abcd1' });
@@ -455,6 +679,111 @@ describe('REST /api/keys', () => {
     expect(after.body.status).toBe('not set');
     const again = await request(web.app).delete('/api/keys/deepseek');
     expect(again.status).toBe(404);
+  });
+});
+
+describe('REST /api/keys enumeration (Task 25: custom providers)', () => {
+  /** Config WITHOUT the built-in deepseek registry entry (Task 26 follow-up). */
+  function noRegistryConfig(): Config {
+    const config = structuredClone(DEFAULT_CONFIG);
+    delete config.llm.providers;
+    return config;
+  }
+
+  it('GET /api/keys returns an empty provider list when nothing is configured', async () => {
+    const { web } = await makeFixture(noRegistryConfig());
+    const res = await request(web.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    expect(res.body.providers).toEqual([]);
+  });
+
+  it('GET /api/keys lists the built-in registry entry even without a key (Task 26 follow-up)', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    // deepseek comes from the registry (no key stored yet): metadata + active.
+    expect(res.body.providers).toEqual([
+      {
+        provider: 'deepseek',
+        status: 'not set',
+        baseUrl: 'https://api.deepseek.com',
+        defaultModel: 'deepseek-chat',
+        isActive: true,
+      },
+    ]);
+  });
+
+  it('GET /api/keys enumerates every configured provider with a masked status, never plaintext', async () => {
+    const { web } = await makeFixture();
+    await request(web.app).post('/api/keys/deepseek').send({ apiKey: 'sk-secret-abcd1' });
+    await request(web.app).post('/api/keys/groq').send({ apiKey: 'sk-groq-5678' });
+    const res = await request(web.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    // deepseek carries its registry metadata (Task 26 follow-up) and is the
+    // active provider by default; groq only has a key.
+    expect(res.body.providers).toEqual([
+      {
+        provider: 'deepseek',
+        status: '****-bcd1',
+        baseUrl: 'https://api.deepseek.com',
+        defaultModel: 'deepseek-chat',
+        isActive: true,
+      },
+      { provider: 'groq', status: '****-5678', isActive: false },
+    ]);
+    expect(JSON.stringify(res.body)).not.toContain('sk-secret-abcd1');
+    expect(JSON.stringify(res.body)).not.toContain('sk-groq-5678');
+  });
+
+  it('a custom provider survives a backend restart — enumerated from the credential store', async () => {
+    // The SAME in-memory backend spans two server instances (a "restart").
+    const backend = memoryBackend();
+    const { web: first } = await makeFixture(noRegistryConfig(), backend);
+    await request(first.app).post('/api/keys/mistral').send({ apiKey: 'sk-mistral-9999' });
+    await first.close();
+
+    const { web: second } = await makeFixture(noRegistryConfig(), backend);
+    const res = await request(second.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    expect(res.body.providers).toEqual([{ provider: 'mistral', status: '****-9999', isActive: false }]);
+  });
+
+  it('deleting a key removes the provider from GET /api/keys', async () => {
+    const { web } = await makeFixture(noRegistryConfig());
+    await request(web.app).post('/api/keys/groq').send({ apiKey: 'sk-groq-5678' });
+    await request(web.app).delete('/api/keys/groq');
+    const res = await request(web.app).get('/api/keys');
+    expect(res.body.providers).toEqual([]);
+  });
+
+  it('GET /api/keys reports the active credential backend (env → read-only hint, reviewer M4)', async () => {
+    // A read-only backend that mirrors the EnvBackend semantics.
+    const envBackend: CredentialBackend = {
+      name: 'env',
+      async isAvailable() {
+        return true;
+      },
+      async save() {
+        throw new Error('read-only');
+      },
+      async read() {
+        return null;
+      },
+      async delete() {
+        throw new Error('read-only');
+      },
+      async exists() {
+        return false;
+      },
+      async list() {
+        return [];
+      },
+    };
+    const { web } = await makeFixture(noRegistryConfig(), envBackend);
+    const res = await request(web.app).get('/api/keys');
+    expect(res.status).toBe(200);
+    expect(res.body.backend).toBe('env');
+    expect(res.body.providers).toEqual([]);
   });
 });
 
@@ -519,6 +848,35 @@ describe('REST /api/config', () => {
     const persisted = getPersisted();
     expect(persisted).toBeNull();
     expect(JSON.stringify(persisted)).not.toContain('sk-leak');
+  });
+
+  it('PUT still rejects a secret nested in the Task 25 editable shape (guardrails.apiKey)', async () => {
+    const { web } = await makeFixture();
+    const res = await request(web.app).put('/api/config').send({
+      llm: { model: 'deepseek-v4', maxTokens: 8192 },
+      agent: { maxRounds: 5, contextThreshold: 0.7 },
+      guardrails: { requireApproval: ['prod'], apiKey: 'sk-deep-leak' },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('guardrails.apiKey cannot be set via config — use POST /api/keys/:provider instead');
+  });
+
+  it('PUT accepts the Task 25 editable fields and persists them', async () => {
+    const { web, getPersisted } = await makeFixture();
+    const res = await request(web.app).put('/api/config').send({
+      llm: { model: 'deepseek-v4', maxTokens: 8192 },
+      agent: { maxRounds: 5, contextThreshold: 0.7 },
+      guardrails: { requireApproval: ['prod', 'network'], blockOutbound: true },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.llm.model).toBe('deepseek-v4');
+    expect(res.body.llm.maxTokens).toBe(8192);
+    expect(res.body.agent.maxRounds).toBe(5);
+    expect(res.body.agent.contextThreshold).toBe(0.7);
+    expect(res.body.guardrails.requireApproval).toEqual(['prod', 'network']);
+    expect(res.body.guardrails.blockOutbound).toBe(true);
+    const persisted = getPersisted();
+    expect(persisted?.guardrails).toEqual({ requireApproval: ['prod', 'network'], blockOutbound: true });
   });
 });
 
@@ -618,5 +976,156 @@ describe('error handling middleware', () => {
       .send('{not json');
     expect(res.status).toBe(400);
     expect(res.headers['content-type']).toContain('application/json');
+  });
+});
+
+describe('provider registry (multi-provider keys, Task 26 follow-up)', () => {
+  it('POST /api/keys/:provider with baseUrl registers metadata and saves the key', async () => {
+    const { web, port, getPersisted } = await makeFixture();
+    const res = await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ apiKey: 'sk-openai', baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' });
+    expect(res.status).toBe(200);
+    expect(getPersisted()?.llm.providers?.openai).toEqual({
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModel: 'gpt-4o',
+    });
+  });
+
+  it('POST /api/keys/:provider without a key only registers metadata', async () => {
+    const { web, port, getPersisted } = await makeFixture();
+    const res = await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/groq')
+      .send({ baseUrl: 'https://api.groq.com/openai/v1' });
+    expect(res.status).toBe(200);
+    expect(getPersisted()?.llm.providers?.groq).toEqual({ baseUrl: 'https://api.groq.com/openai/v1' });
+    // No credential was stored for a key-less registration.
+    const keys = await request(`http://127.0.0.1:${port}`).get('/api/keys');
+    const groqRow = keys.body.providers.find((p: { provider: string }) => p.provider === 'groq');
+    expect(groqRow.status).toBe('not set');
+  });
+
+  it('POST /api/keys/:provider with neither apiKey nor baseUrl is rejected', async () => {
+    const { web, port } = await makeFixture();
+    const res = await request(`http://127.0.0.1:${port}`).post('/api/keys/groq').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /api/keys reports baseUrl/defaultModel/isActive from the registry', async () => {
+    const { web, port } = await makeFixture();
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ apiKey: 'sk-openai', baseUrl: 'https://api.openai.com/v1' });
+    const res = await request(`http://127.0.0.1:${port}`).get('/api/keys');
+    const deepseek = res.body.providers.find((p: { provider: string }) => p.provider === 'deepseek');
+    // deepseek is the DEFAULT config provider, so it is the active one.
+    expect(deepseek.isActive).toBe(true);
+    expect(deepseek.baseUrl).toBe('https://api.deepseek.com');
+    const openai = res.body.providers.find((p: { provider: string }) => p.provider === 'openai');
+    expect(openai.isActive).toBe(false);
+    expect(openai.baseUrl).toBe('https://api.openai.com/v1');
+  });
+
+  it('switching the provider via PUT /api/config redirects /api/llm/models to the new baseUrl', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: 'gpt-4o' }] }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const { web, port, getPersisted } = await makeFixture(
+      structuredClone(DEFAULT_CONFIG),
+      undefined,
+      fetchFn,
+    );
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ apiKey: 'sk-openai', baseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o' });
+    const put = await request(`http://127.0.0.1:${port}`)
+      .put('/api/config')
+      .send({ llm: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o' } });
+    expect(put.status).toBe(200);
+    const models = await request(`http://127.0.0.1:${port}`).get('/api/llm/models');
+    expect(models.status).toBe(200);
+    // The models endpoint must follow the LIVE config, not the startup one.
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-openai' }),
+      }),
+    );
+    expect(getPersisted()?.llm.provider).toBe('openai');
+  });
+
+  it('POST /api/keys editing the ACTIVE provider baseUrl syncs config.llm.baseUrl', async () => {
+    // Real-test: editing the active provider's endpoint in the keys card
+    // showed the OLD endpoint below until the provider was re-applied —
+    // POST /api/keys only wrote the registry. The active provider's
+    // endpoint must re-point config.llm.baseUrl in the same write.
+    const { web, port, getPersisted } = await makeFixture();
+    const res = await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/deepseek')
+      .send({ baseUrl: 'https://nju-mirror.example/v1' });
+    expect(res.status).toBe(200);
+    const cfg = await request(`http://127.0.0.1:${port}`).get('/api/config');
+    expect(cfg.body.llm.baseUrl).toBe('https://nju-mirror.example/v1');
+    // The registry entry holds the new endpoint too, and the persisted
+    // config carries both.
+    expect(cfg.body.llm.providers.deepseek.baseUrl).toBe('https://nju-mirror.example/v1');
+    expect(getPersisted()?.llm.baseUrl).toBe('https://nju-mirror.example/v1');
+  });
+
+  it('POST /api/keys editing a NON-active provider baseUrl leaves config.llm.baseUrl unchanged', async () => {
+    // Negative guard (reviewer): only the ACTIVE provider's endpoint may
+    // re-point llm.baseUrl — an unconditional sync would break the runtime.
+    const { web, port } = await makeFixture();
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ baseUrl: 'https://api.openai.com/v1' });
+    const cfg = await request(`http://127.0.0.1:${port}`).get('/api/config');
+    expect(cfg.body.llm.baseUrl).toBe('https://api.deepseek.com');
+    expect(cfg.body.llm.providers.openai.baseUrl).toBe('https://api.openai.com/v1');
+  });
+
+  it('POST /api/keys editing the ACTIVE provider baseUrl fires onConfigChanged (running loops restart)', async () => {
+    // Reviewer: PUT /api/config re-points restart running loops via
+    // onConfigChanged — a keys-card endpoint edit must honor the same
+    // contract, or running sessions keep the stale endpoint.
+    const onConfigChanged = vi.fn();
+    const { web, port } = await makeFixture(undefined, undefined, undefined, onConfigChanged);
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/deepseek')
+      .send({ baseUrl: 'https://nju-mirror.example/v1' });
+    expect(onConfigChanged).toHaveBeenCalledTimes(1);
+    const [prev, next] = onConfigChanged.mock.calls[0];
+    expect(next.llm.baseUrl).toBe('https://nju-mirror.example/v1');
+    // A non-active provider edit does not fire it.
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/openai')
+      .send({ baseUrl: 'https://api.openai.com/v1' });
+    expect(onConfigChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('config live state (registry survives PUT switches)', () => {
+  it('a registered provider is never clobbered by later PUT /api/config switches', async () => {
+    const { web, port, getPersisted } = await makeFixture();
+    // 1. Register nju with an endpoint (POST /api/keys writes the registry).
+    await request(`http://127.0.0.1:${port}`)
+      .post('/api/keys/nju')
+      .send({ apiKey: 'sk-nju', baseUrl: 'https://nju.example.com/v1' });
+    // 2. Activate nju, then deepseek — two PUT /api/config rounds.
+    await request(`http://127.0.0.1:${port}`)
+      .put('/api/config')
+      .send({ llm: { provider: 'nju', baseUrl: 'https://nju.example.com/v1', model: 'nju-model' } });
+    await request(`http://127.0.0.1:${port}`)
+      .put('/api/config')
+      .send({ llm: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' } });
+    // 3. The registry entry must survive the second PUT (the config router
+    // must merge onto the LIVE config, not a stale startup snapshot).
+    const keys = await request(`http://127.0.0.1:${port}`).get('/api/keys');
+    const njuRow = keys.body.providers.find((p: { provider: string }) => p.provider === 'nju');
+    expect(njuRow.baseUrl).toBe('https://nju.example.com/v1');
+    expect(getPersisted()?.llm.providers?.nju?.baseUrl).toBe('https://nju.example.com/v1');
+    // GET /api/config reflects the registry too (same live source).
+    const cfg = await request(`http://127.0.0.1:${port}`).get('/api/config');
+    expect(cfg.body.llm.providers.nju.baseUrl).toBe('https://nju.example.com/v1');
   });
 });

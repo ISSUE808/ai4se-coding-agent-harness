@@ -30,9 +30,34 @@ import {
   createStartCommand,
   runStartTask,
   createLLMProvider,
+  formatMessageLine,
+  createDefaultPersistConfig,
 } from '../../../src/cli/commands/start.js';
 import { createProgram } from '../../../src/cli/index.js';
 import { mockBackend, parseCaptured } from './helpers.js';
+
+/**
+ * Task 26: capture every DeepSeekProvider constructed by createLLMProvider so
+ * tests can assert which model the session override produced. A subclass is
+ * used instead of a complete spy because the provider is constructed inside
+ * the SecureHandle closure — `complete` is never called at build time.
+ */
+const { capturedProviders } = vi.hoisted(() => ({
+  capturedProviders: [] as Array<{ model: string }>,
+}));
+
+vi.mock('../../../src/llm/deepseek-provider.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/llm/deepseek-provider.js')>();
+  return {
+    ...actual,
+    DeepSeekProvider: class extends actual.DeepSeekProvider {
+      constructor(config: { model: string }) {
+        super(config as never);
+        capturedProviders.push(this);
+      }
+    },
+  };
+});
 
 /**
  * start command (SPEC §4.3, §8.2): runs the AgentLoop, streams messages to
@@ -117,6 +142,8 @@ describe('runStartTask', () => {
     const assistantIdx = printed.findIndex((l) => l.includes('Task complete.'));
     expect(userIdx).toBeGreaterThanOrEqual(0);
     expect(assistantIdx).toBeGreaterThan(userIdx);
+    // 降噪：纯工具调用的 assistant 消息（无文本）不打空头（CR Minor 5）
+    expect(printed.filter((l) => l.trim() === '[assistant]')).toHaveLength(0);
     // Final status line
     expect(printed.some((l) => l.includes('status=completed'))).toBe(true);
   });
@@ -175,6 +202,50 @@ describe('runStartTask', () => {
     expect(session.messages.some((m) => m.content.includes('Approved operation executed'))).toBe(false);
   });
 
+  it('does not re-ask an approved command when the resumed run hits maxRounds (I1 CR)', async () => {
+    // maxRounds = 1: the resumed run upgrades (triggerHITL pause, no
+    // requestApproval) — HITL state is EXECUTING, so the approval loop must
+    // NOT ask again (approve() would throw in EXECUTING state).
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ id: 'call_push', name: 'run_shell', arguments: { command: 'git push --force origin feature/x' } }] },
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+    ];
+    const ask = vi.fn(async () => true);
+    const session = await runStartTask({
+      task: 'push',
+      config: { ...makeConfig(), agent: { ...makeConfig().agent, maxRounds: 1 } },
+      buildAgentLoop: buildMockAgentLoop(responses),
+      hitl: new HITLManager(),
+      promptApproval: ask,
+    });
+    expect(ask).toHaveBeenCalledTimes(1);
+    // The upgrade pause is reported cleanly instead of crashing mid-loop.
+    expect(session.status).toBe('paused');
+  });
+
+  it('prints actionable resume guidance when the run ends paused (KNOWN_ISSUES 1)', async () => {
+    // Upgrade pause (maxRounds reached): no pending command, so no stdin
+    // approval is possible — the run exits paused with only "[session]
+    // paused" today, and the user has no idea how to continue.
+    const printed: string[] = [];
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+    ];
+    const session = await runStartTask({
+      task: 'read test.ts',
+      config: { ...makeConfig(), agent: { ...makeConfig().agent, maxRounds: 1 } },
+      buildAgentLoop: buildMockAgentLoop(responses),
+      hitl: new HITLManager(),
+      print: (line) => printed.push(line),
+    });
+    expect(session.status).toBe('paused');
+    const guidance = printed.find((l) => l.includes('已暂停'));
+    expect(guidance).toBeDefined();
+    expect(guidance ?? '').toContain('--web');
+    expect(guidance ?? '').toContain('maxRounds');
+  });
+
   it('sets exit code 1 when the session ends without completing (I3 CR)', async () => {
     const printed: string[] = [];
     const cmd = createStartCommand({
@@ -218,6 +289,59 @@ describe('runStartTask', () => {
   });
 });
 
+describe('formatMessageLine', () => {
+  it('着色模式给标签加 ANSI 色（user 绿 / assistant 青 / tool 灰），正文不着色', () => {
+    expect(formatMessageLine({ id: 'm1', role: 'user', content: 'hello', timestamp: 't' }, true)).toBe(
+      '\x1b[32m[user]\x1b[0m hello',
+    );
+    expect(
+      formatMessageLine({ id: 'm2', role: 'assistant', content: 'hi', timestamp: 't' }, true),
+    ).toBe('\x1b[36m[assistant]\x1b[0m hi');
+    expect(
+      formatMessageLine(
+        { id: 'm3', role: 'tool', content: 'out', metadata: { toolName: 'run_shell' }, timestamp: 't' },
+        true,
+      ),
+    ).toBe('\x1b[90m[tool:run_shell]\x1b[0m out');
+  });
+
+  it('无色模式输出纯文本（默认；管道/重定向与测试注入场景）', () => {
+    expect(formatMessageLine({ id: 'm1', role: 'user', content: 'hello', timestamp: 't' })).toBe(
+      '[user] hello',
+    );
+  });
+
+  it('空内容消息（纯工具调用的 assistant 消息）返回 null——不打印空头', () => {
+    expect(
+      formatMessageLine({ id: 'm1', role: 'assistant', content: '', timestamp: 't' }),
+    ).toBeNull();
+  });
+
+  it('feedback 消息（系统类）标签灰色（CR Minor 1）', () => {
+    expect(
+      formatMessageLine({ id: 'm4', role: 'feedback', content: 'x', timestamp: 't' }, true),
+    ).toBe('\x1b[90m[feedback]\x1b[0m x');
+  });
+
+  it('color: true 时着色标签到达打印流（TTY 模式端到端，CR Minor 3）', async () => {
+    const printed: string[] = [];
+    const responses: LLMResponse[] = [
+      { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+      { content: 'Task complete.' },
+    ];
+    await runStartTask({
+      task: 'read test.ts',
+      config: makeConfig(),
+      buildAgentLoop: buildMockAgentLoop(responses),
+      print: (line) => printed.push(line),
+      color: true,
+    });
+    const out = printed.join('\n');
+    expect(out).toContain('\x1b[32m[user]\x1b[0m read test.ts');
+    expect(out).toContain('\x1b[36m[assistant]\x1b[0m Task complete.');
+  });
+});
+
 describe('createLLMProvider', () => {
   const service = 'codeharness/deepseek';
   const account = 'deepseek';
@@ -256,6 +380,55 @@ describe('createLLMProvider', () => {
     await expect(createLLMProvider(deepseekConfig(), store, {})).rejects.toThrow(
       /key update/i,
     );
+  });
+
+  it('an explicit model override wins over config.llm.model (Task 26 session override)', async () => {
+    const backend = mockBackend('mock', { secret: 'sk-abc' });
+    const store = new CredentialStore([backend.backend]);
+    capturedProviders.length = 0;
+    const provider = await createLLMProvider(deepseekConfig(), store, { model: 'deepseek-v3' });
+    expect(provider).toBeInstanceOf(DeepSeekProvider);
+    // The DeepSeekProvider was constructed with the session's model.
+    expect(capturedProviders).toHaveLength(1);
+    expect(capturedProviders[0].model).toBe('deepseek-v3');
+  });
+
+  it('without a model override the provider uses config.llm.model (CLI sessions unaffected)', async () => {
+    const backend = mockBackend('mock', { secret: 'sk-abc' });
+    const store = new CredentialStore([backend.backend]);
+    capturedProviders.length = 0;
+    await createLLMProvider(deepseekConfig(), store, {});
+    expect(capturedProviders[0].model).toBe(DEFAULT_CONFIG.llm.model);
+  });
+});
+
+describe('createDefaultPersistConfig', () => {
+  it('writes the full config to the resolved project path (provider registry survives restart)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-persist-'));
+    const projectPath = path.join(dir, '.codeharness.json');
+    try {
+      const persist = createDefaultPersistConfig(() => projectPath);
+      const config: Config = {
+        ...makeConfig(),
+        llm: {
+          ...DEFAULT_CONFIG.llm,
+          providers: {
+            ...DEFAULT_CONFIG.llm.providers,
+            nju: { baseUrl: 'https://nju.example.com', defaultModel: 'nju-chat' },
+          },
+        },
+      };
+      await persist(config);
+      const raw = fs.readFileSync(projectPath, 'utf-8');
+      // Same write format as PUT /api/config's default (config.ts): pretty-
+      // printed JSON + trailing newline — the loader reads it back on startup.
+      expect(raw.endsWith('\n')).toBe(true);
+      expect(JSON.parse(raw)).toEqual(config);
+      expect(raw).toContain('"nju"');
+      expect(raw).toContain('https://nju.example.com');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -300,24 +473,105 @@ describe('createStartCommand wiring', () => {
   });
 
   it('`start --web` starts the server in-process and prints the URL (no task needed)', async () => {
-    const printed: string[] = [];
-    const cmd = createStartCommand({
-      config: {
-        userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
-        projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
-        cliArgs: { webui: { port: 0 } }, // ephemeral port — no collision with other servers
-      },
-      storeFactory: async () => new CredentialStore([mockBackend('mem', { secret: 'sk-mock' }).backend]),
-      buildAgentLoop: buildMockAgentLoop([{ content: 'done' }]),
-      print: (line) => printed.push(line),
-      waitForShutdown: async () => {
-        // Test-only: resolve immediately so the command exits.
-      },
-    });
-    const result = await parseCaptured(cmd, ['start', '--web']);
-    expect(printed.some((l) => l.includes('[web] WebUI'))).toBe(true);
-    expect(result.err).toBe('');
-    expect(process.exitCode).toBe(0);
+    // CI regression fix: runWebAction 不给 createWebHarness 传 staticDir，走
+    // resolveStaticDir 的 env 覆盖路径（CODEHARNESS_WEBUI_DIR，生产/Electron 同
+    // 机制）。CI 的 unit-test job 不构建 client（dist 被 gitignore），真实 dist
+    // 缺失时 createWebHarness 抛"请先构建前端"→ 测试在 CI 红、本机绿。指向
+    // fixture 静态目录使测试自给自足。
+    const webuiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-cli-webui-'));
+    fs.writeFileSync(path.join(webuiDir, 'index.html'), '<!doctype html><title>CodeHarness</title>');
+    const originalWebuiDir = process.env.CODEHARNESS_WEBUI_DIR;
+    try {
+      // runWebAction 只在失败时写 exitCode=1，成功路径不触碰——测试必须自己
+      // 播种 0，否则单独跑（-t 过滤）时 worker 里 exitCode 是 undefined（Node
+      // 默认值），断言依赖前一个测试的 afterEach 才成立（顺序耦合）。
+      process.exitCode = 0;
+      process.env.CODEHARNESS_WEBUI_DIR = webuiDir;
+      const printed: string[] = [];
+      const cmd = createStartCommand({
+        config: {
+          userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+          projectConfigPath: path.join(workspaceRoot, 'missing-project.json'),
+          cliArgs: { webui: { port: 0 } }, // ephemeral port — no collision with other servers
+        },
+        storeFactory: async () => new CredentialStore([mockBackend('mem', { secret: 'sk-mock' }).backend]),
+        buildAgentLoop: buildMockAgentLoop([{ content: 'done' }]),
+        print: (line) => printed.push(line),
+        waitForShutdown: async () => {
+          // Test-only: resolve immediately so the command exits.
+        },
+      });
+      const result = await parseCaptured(cmd, ['start', '--web']);
+      expect(printed.some((l) => l.includes('[web] WebUI'))).toBe(true);
+      expect(result.err).toBe('');
+      expect(process.exitCode).toBe(0);
+    } finally {
+      if (originalWebuiDir === undefined) {
+        delete process.env.CODEHARNESS_WEBUI_DIR;
+      } else {
+        process.env.CODEHARNESS_WEBUI_DIR = originalWebuiDir;
+      }
+      fs.rmSync(webuiDir, { recursive: true, force: true });
+    }
+  });
+
+  it('`start --web`: POST /api/keys persists the provider registry to the project config (restart survives)', async () => {
+    // Real-test regression: runWebAction 生产链路从不提供 deps.persistConfig
+    // → createWebHarness 的持久化通道是 no-op → POST /api/keys 的 registry
+    // 写入（baseUrl/defaultModel）只更新内存 liveConfig，重启后端后 baseUrl
+    // 丢失（key 在 keytar 不受影响）。修复后默认 persistConfig 写项目配置
+    // 文件（与 PUT /api/config 的缺省同路径同格式），重启后 registry 保留。
+    const webuiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-cli-webui-'));
+    fs.writeFileSync(path.join(webuiDir, 'index.html'), '<!doctype html><title>CodeHarness</title>');
+    const projectPath = path.join(workspaceRoot, 'webui-keys-project.json');
+    expect(fs.existsSync(projectPath)).toBe(false);
+    const originalWebuiDir = process.env.CODEHARNESS_WEBUI_DIR;
+    let postStatus = 0;
+    let persisted = '';
+    try {
+      process.exitCode = 0;
+      process.env.CODEHARNESS_WEBUI_DIR = webuiDir;
+      const printed: string[] = [];
+      const cmd = createStartCommand({
+        config: {
+          userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+          projectConfigPath: projectPath,
+          cliArgs: { webui: { port: 0 } }, // ephemeral port
+        },
+        storeFactory: async () => new CredentialStore([mockBackend('mem', { secret: 'sk-mock' }).backend]),
+        buildAgentLoop: buildMockAgentLoop([{ content: 'done' }]),
+        print: (line) => printed.push(line),
+        waitForShutdown: async () => {
+          // The server is live and the URL line is printed — POST a provider
+          // now, then let the command shut down. The keys route awaits
+          // persistence BEFORE responding, so a 200 means the file write
+          // already completed.
+          const urlLine = printed.find((l) => l.includes('[web] WebUI'));
+          const port = Number(urlLine?.match(/localhost:(\d+)/)?.[1] ?? 0);
+          const res = await fetch(`http://localhost:${port}/api/keys/nju`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ baseUrl: 'https://nju.example.com', apiKey: 'sk-nju-test' }),
+          });
+          postStatus = res.status;
+          persisted = fs.existsSync(projectPath) ? fs.readFileSync(projectPath, 'utf-8') : '';
+        },
+      });
+      const result = await parseCaptured(cmd, ['start', '--web']);
+      expect(postStatus).toBe(200);
+      expect(persisted).toContain('"nju"');
+      expect(persisted).toContain('https://nju.example.com');
+      expect(printed.some((l) => l.includes('[web] WebUI'))).toBe(true);
+      expect(result.err).toBe('');
+    } finally {
+      if (originalWebuiDir === undefined) {
+        delete process.env.CODEHARNESS_WEBUI_DIR;
+      } else {
+        process.env.CODEHARNESS_WEBUI_DIR = originalWebuiDir;
+      }
+      fs.rmSync(webuiDir, { recursive: true, force: true });
+      fs.rmSync(projectPath, { force: true });
+    }
   });
 
   it('`start` without a task and without --web exits 1 with a task-required error', async () => {

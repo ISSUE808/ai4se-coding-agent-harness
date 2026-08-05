@@ -28,8 +28,23 @@ export interface Session {
   currentRound: number;
   /** Session workspace root — tool cwd / scope-fence base / validator cwd (Task 19). */
   workspaceRoot: string;
+  /**
+   * Session-level model override (Task 26). When set, the provider built for
+   * this session uses it instead of config.llm.model; `undefined` = follow
+   * the config default. Switchable mid-conversation via PATCH
+   * /api/sessions/:id/model (running sessions abort + restart on the new
+   * model).
+   */
+  model?: string;
   messages: Message[];
   tokenCount: number;
+  /**
+   * Actual API token usage accumulated across rounds (KNOWN_ISSUES 9 Token
+   * 明细). `undefined` until a provider reports usage (MockProvider fixtures
+   * may omit it). Distinct from `tokenCount` — that is the memory layer's
+   * estimated context size; this is what the LLM API billed.
+   */
+  tokenUsage?: TokenUsage;
   createdAt: string;
   updatedAt: string;
 }
@@ -72,9 +87,21 @@ export interface LLMProvider {
   complete(messages: Message[], tools: Tool[]): Promise<LLMResponse>;
 }
 
+/** Actual token billing from one LLM call (KNOWN_ISSUES 9 Token 明细). */
+export interface TokenUsage {
+  /** Input (prompt) tokens. */
+  prompt: number;
+  /** Output (completion) tokens. */
+  completion: number;
+  /** Prompt tokens served from the provider's prompt cache, if reported. */
+  cached?: number;
+}
+
 export interface LLMResponse {
   content: string | null;
   toolCalls?: { id?: string; name: string; arguments: Record<string, unknown> }[];
+  /** Billing usage reported by the provider for this call; may be absent. */
+  usage?: TokenUsage;
 }
 
 export interface Validator {
@@ -98,6 +125,14 @@ export interface Config {
     maxTokens: number;
     apiKeySource: 'keytar' | 'encrypted_file' | 'env';
     apiKeyService: string;
+    /**
+     * Task 26 follow-up: provider registry — per-provider connection
+     * metadata. `llm.provider`/`llm.baseUrl`/`llm.model` are the ACTIVE
+     * provider's values; this map keeps every registered provider's
+     * endpoint so the Settings "应用" action can switch cleanly. Keys
+     * (secrets) live in the CredentialStore, never here.
+     */
+    providers?: Record<string, { baseUrl: string; defaultModel?: string }>;
   };
   agent: {
     maxRounds: number;
@@ -118,6 +153,20 @@ export interface Config {
     blocklist: string[];
     warnlist: string[];
     downgrade: Record<string, 'allow'>;
+  };
+  /**
+   * WebUI-editable guardrail switches (PLAN Task 25, edited in Settings →
+   * 模型与护栏). Optional — when absent the guardrail pipeline runs purely
+   * on PatternGuard/ScopeFence/HITL rules. When present it is an ADDITIVE
+   * overlay (main-loop runGuardrails): `blockOutbound` flags network-outbound
+   * shell commands (curl/wget/ssh/scp/git push …) for a human decision, and
+   * each `requireApproval` rule is matched as a case-sensitive substring of a
+   * shell command. Matched commands pause for approval even when PatternGuard
+   * allows or has previously approved them.
+   */
+  guardrails?: {
+    requireApproval?: string[];
+    blockOutbound?: boolean;
   };
   shell: {
     timeoutSeconds: number;
@@ -146,4 +195,10 @@ export interface CredentialBackend {
   read(service: string, account: string): Promise<string | null>;
   delete(service: string, account: string): Promise<boolean>;
   exists(service: string, account: string): Promise<boolean>;
+  /**
+   * Enumerate the account names configured under a service (Task 25: WebUI
+   * GET /api/keys lists providers from the credential store). Backends that
+   * cannot enumerate (env: no account namespace) return an empty array.
+   */
+  list(service: string): Promise<string[]>;
 }

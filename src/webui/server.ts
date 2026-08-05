@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { Socket } from 'node:net';
+import * as path from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
@@ -16,6 +17,8 @@ import { createSessionsRouter } from './api/sessions.js';
 import { createApprovalsRouter } from './api/approvals.js';
 import { createKeysRouter } from './api/keys.js';
 import { createConfigRouter } from './api/config.js';
+import { createFsRouter } from './api/fs.js';
+import { createModelsRouter } from './api/models.js';
 
 /**
  * WebUI backend (PLAN Task 17, SPEC §5.1): an Express HTTP server with a
@@ -40,6 +43,17 @@ export interface WebUIServerDeps {
   hitl: HITLManager;
   /** Injectable config persistence (defaults to writing the project file). */
   persistConfig?: (config: Config) => Promise<void>;
+  /**
+   * 生产模式静态目录（vite build 产物，spec 2026-08-04 第 1 层）。存在时
+   * 挂载 express.static + SPA fallback；缺省保持 API-only（开发模式走
+   * Vite dev server，不受影响）。
+   */
+  staticDir?: string;
+  /**
+   * Task 26 follow-up: injectable fetch for GET /api/llm/models (defaults to
+   * globalThis.fetch) — tests keep the provider call zero-network.
+   */
+  fetchFn?: typeof fetch;
   /**
    * Task 19: invoked after a session is created (POST /api/sessions) so the
    * integrated harness can run the AgentLoop on the stored session in-process.
@@ -67,6 +81,17 @@ export interface WebUIServerDeps {
    * instruction lands in the next LLM context).
    */
   onMessageAdded?: (session: Session, message: Message) => void;
+  /**
+   * Task 26: invoked after PATCH /api/sessions/:id/model changed the session
+   * model — the harness restarts a running session on the new model.
+   */
+  onModelChanged?: (session: Session) => void;
+  /**
+   * Real-test fix: invoked after PUT /api/config persisted a change — the
+   * harness decides whether running loops are stale (provider/baseUrl/model
+   * changed → restart them all).
+   */
+  onConfigChanged?: (prev: Config, next: Config) => void;
 }
 
 export interface WebUIServer {
@@ -87,6 +112,7 @@ const EVENT_TYPES: ReadonlyArray<keyof HarnessEventMap> = [
   'guardrail:triggered',
   'session:status',
   'round:changed',
+  'session:updated',
 ];
 
 function jsonErrorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
@@ -103,6 +129,16 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
   const app = express();
   app.use(express.json());
 
+  // Task 26 follow-up: `liveConfig` is the config every router reads. The
+  // config router's persistence re-points it, so routes mounted with this
+  // reference (keys registry, provider model list) follow PUT /api/config —
+  // the startup snapshot alone would leave them stuck on the old provider.
+  let liveConfig: Config = deps.config;
+  const persistConfig = async (config: Config): Promise<void> => {
+    liveConfig = config;
+    await deps.persistConfig?.(config);
+  };
+
   app.use(
     '/api/sessions',
     createSessionsRouter({
@@ -112,6 +148,7 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
       onSessionControl: deps.onSessionControl,
       onSessionResumed: deps.onSessionResumed,
       onMessageAdded: deps.onMessageAdded,
+      onModelChanged: deps.onModelChanged,
     }),
   );
   app.use(
@@ -128,17 +165,65 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
     createKeysRouter({
       credentialStore: deps.credentialStore,
       service: deps.config.llm.apiKeyService,
+      getConfig: () => liveConfig,
+      persistConfig,
+      onConfigChanged: deps.onConfigChanged,
     }),
   );
   app.use(
     '/api/config',
-    createConfigRouter({ config: deps.config, persistConfig: deps.persistConfig }),
+    // Stateless: reads the LIVE config (single source of truth) so registry
+    // writes from POST /api/keys are never clobbered by a later PUT.
+    createConfigRouter({ getConfig: () => liveConfig, persistConfig, onConfigChanged: deps.onConfigChanged }),
+  );
+  // Task 23: fs browsing (directory picker / file tree). Allowed roots = the
+  // config workspace root plus every known session workspaceRoot, queried
+  // live so sessions created after mount stay browseable.
+  app.use(
+    '/api/fs',
+    createFsRouter({
+      getAllowedRoots: () => [
+        deps.config.agent.workspaceRoot,
+        ...deps.sessionStore.list().map((session) => session.workspaceRoot),
+      ],
+    }),
+  );
+  // Task 26 follow-up: provider model list (fetched with the stored key).
+  // `getConfig` reads the LIVE config so switching providers redirects the
+  // fetch target (a plain `config:` snapshot would freeze the startup value).
+  app.use(
+    '/api/llm/models',
+    createModelsRouter({
+      getConfig: () => liveConfig,
+      credentialStore: deps.credentialStore,
+      fetchFn: deps.fetchFn,
+    }),
   );
 
   // Unknown API paths → JSON 404 (never the HTML default)
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found' });
   });
+
+  // 生产模式（spec 2026-08-04）：静态服务 + SPA fallback。API 路由与 `/api`
+  // 404 兜底均在此前注册——`/api/*` 永不落入 fallback；未知静态路径由
+  // sendFile 的 err 走 jsonErrorHandler。
+  if (deps.staticDir !== undefined) {
+    app.use(express.static(deps.staticDir));
+    // react-router client 路由深链（/sessions/xxx 直接访问）需要回 index.html。
+    app.get('*', (req, res, next) => {
+      if (req.method !== 'GET') {
+        next();
+        return;
+      }
+      res.sendFile(path.join(deps.staticDir as string, 'index.html'), (err) => {
+        if (err) {
+          next(err);
+        }
+      });
+    });
+  }
+
   app.use(jsonErrorHandler);
 
   const server = createServer(app);
@@ -174,9 +259,12 @@ export function createWebUIServer(deps: WebUIServerDeps): WebUIServer {
         continue;
       }
       const filter = filters.get(client);
-      // Only session:status carries a sessionId in its payload; events
-      // without one are broadcast to every connected client.
-      if (filter !== undefined && type === 'session:status') {
+      // session:status and session:updated carry a sessionId in their payload;
+      // events without one are broadcast to every connected client.
+      if (
+        filter !== undefined &&
+        (type === 'session:status' || type === 'session:updated')
+      ) {
         if ((data as { sessionId: string }).sessionId !== filter) {
           continue;
         }

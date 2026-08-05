@@ -470,17 +470,39 @@ $ codeharness key reset           # 清除所有 key
 
 ### 8.4 分发形态
 
-**npm**: `npm install -g codeharness` → `codeharness start`
-**Docker**: `docker pull ghcr.io/<user>/codeharness:latest` → `docker run -it ...`
+**npm**: `npm install -g codeharness` → `codeharness start`（2026-08-05 已落地：`npm link` 全局命令，bin/shebang 就位零代码；`npm publish` 待办）
+**Docker**: `docker pull ghcr.io/<user>/codeharness:latest` → `docker run -it ...`（待办，Task 21）
 
 CI 中 `docker build` 作为验证步骤，git tag 触发自动 push 到 GHCR。
 
-### 8.5 Key 在目标机上的安全配置
+### 8.5 桌面应用分发
+
+三层架构（每层独立可验证）：
+
+```
+第 3 层  Electron 桌面壳（desktop/）——双击打开 → 独立窗口 → 自动连上 WebUI
+第 2 层  CLI 全局命令（npm link）——终端输入 codeharness 即启动
+第 1 层  生产模式（server 静态服务）——start --web 单命令 → 浏览器直接可用
+```
+
+**第 1 层——生产模式**：`WebUIServerDeps.staticDir` 可注入（缺省 API-only，开发模式 Vite 5173 不受影响）；`express.static` 挂在 `/api` 404 兜底之后（`/api/*` 永不落入 SPA fallback）；SPA fallback 仅 GET（react-router 深链回 index.html）；`resolveStaticDir` 解析顺序：显式参数 → `CODEHARNESS_WEBUI_DIR` env → 项目根 `src/webui/client/dist`——**`import.meta.url` 上溯，不依赖 `process.cwd()`**（npm link 后命令在任意目录运行）；dist 缺失 → 启动明确失败（构建指引）。
+
+**第 2 层——npm link**：bin/shebang 已就位，零代码；`codeharness` / `codeharness start --web` 全局可用。
+
+**第 3 层——Electron 壳**：
+- `desktop/` 独立 package（CJS 主进程，electron 依赖不污染主项目）；**主进程纯逻辑与 electron 解耦**（`lifecycle.ts` 依赖注入，单测不启动 Electron，CI 不装 Electron）
+- 生命周期：短探 :3000 就绪 → 直接开窗不重复 spawn；未就绪 → spawn 后端 → 轮询 30s → BrowserWindow；超时 → showError + **onExit**（防无窗口僵尸应用）；窗口关闭 → kill 进程树 + 退出
+- **免 Node 打包**：`ELECTRON_RUN_AS_NODE=1` + `process.execPath`——electron.exe 以纯 Node 模式运行后端（官方机制；零下载、原生模块 ABI 与 electron 内嵌 Node 匹配——`@electron/rebuild` 按 app 依赖重编译）；dev 模式用系统 `node`（`resolveNodePath(app.isPackaged)`）
+- **打包布局**（electron-builder）：`extraResources` 三件套（backend dist + node_modules + client 产物 → resources/backend）；**keytar 原生模块必须出 asar**；`directories.output: build`（避开 tsc 的 dist/）；`signAndEditExecutable: false`（Windows 无管理员符号链接权限，无自定义图标/签名零损失）；`prepare-resources.mjs` 组装时 `npm prune --omit=dev`（分发体积 73MB→20MB）
+- **已知限制**（KNOWN_ISSUES #12）：打包产物 keytar ABI 依赖打包机 Node 版本——`@electron/rebuild` 只重建 app 目录依赖，`extraResources` 内容 verbatim 复制（按打包机系统 Node ABI 编译）；与 electron 内嵌 Node（33 → 20.18/ABI 115）不匹配时降级 encrypted-file。修复路径：钉打包机 Node 20.x 或对 backend-pack 跑 rebuild。
+
+### 8.6 Key 在目标机上的安全配置
 
 | 分发形态 | 配置方式 |
 |---------|---------|
 | npm | 首次运行引导 → keytar（优先）或加密文件（fallback，keytar 编译失败时） |
 | Docker | 首次运行引导 → 加密文件（唯一可用后端，容器内无系统 keychain） |
+| 桌面应用 | 同 npm（keytar 优先；打包 keytar ABI 不匹配时降级加密文件——现场 key update 存 encrypted-file 仍可用） |
 
 ---
 
@@ -494,7 +516,7 @@ CI 中 `docker build` 作为验证步骤，git tag 触发自动 push 到 GHCR。
 | 治理护栏 | Mock 直接构造 `Action(command="rm -rf /")` → PatternGuard 返回 block；构造 `git push --force main` → block |
 | HITL | Mock 触发 warn → 用户通过 WebUI 内联审批卡片批准/修改/拒绝 |
 | 凭据安全 | `key status` 不回显明文；key 不作为文件落地；`.gitignore` 排除所有凭据路径 |
-| 分发 | `npm install -g` 后可运行；`docker build && docker run` 后可运行 |
+| 分发 | `npm install -g` 后可运行；`docker build && docker run` 后可运行；桌面应用（portable exe）双击独立窗口连接 WebUI（对方机器无需安装 Node） |
 | 上下文管理 | messages 超过 80% 窗口阈值 → 压缩触发，important 消息不被压缩 |
 | CI | `npm test` 一键运行全部单测（含 mock-LLM 测试），GitHub Actions `unit-test` job 通过 |
 | WebUI | `codeharness start --web` → 浏览器访问 Dashboard → 创建会话 → 实时观察 agent 消息流 |

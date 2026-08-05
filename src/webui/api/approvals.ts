@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Session } from '../../types.js';
 import type { HarnessEvents } from '../../events.js';
+import { HITLState } from '../../guardrail/hitl-manager.js';
 import type { HITLManager } from '../../guardrail/hitl-manager.js';
 import type { SessionStore } from '../session-store.js';
 
@@ -44,17 +45,30 @@ export function createApprovalsRouter(deps: ApprovalsRouterDeps): Router {
       return;
     }
 
-    const pending = hitl.getPendingCommand();
+    // Session ownership (KNOWN_ISSUES 6): HITL state is keyed per session —
+    // this endpoint may only resolve THIS session's pending decision. Without
+    // the check, a client could resolve a pending command belonging to a
+    // different session through any sessionId. (The try/catch below stays as
+    // defense against the decision methods' state guards.)
+    const state = hitl.getState(session.id);
+    if (state !== HITLState.AWAITING_APPROVAL) {
+      res.status(409).json({
+        error: `Session ${session.id} has no pending approval (state: ${state})`,
+      });
+      return;
+    }
+
+    const pending = hitl.getPendingCommand(session.id);
     let record: string;
     try {
       if (decision === 'approve') {
-        hitl.approve();
+        hitl.approve(session.id);
         record = `[HITL] Command approved: ${pending ?? '(none)'}`;
       } else if (decision === 'modify') {
-        hitl.approveWithModification(modifiedCommand as string);
+        hitl.approveWithModification(session.id, modifiedCommand as string);
         record = `[HITL] Command approved with modification: ${modifiedCommand}`;
       } else {
-        hitl.deny();
+        hitl.deny(session.id);
         record = `[HITL] Command denied: ${pending ?? '(none)'}`;
       }
     } catch (err) {
@@ -76,7 +90,7 @@ export function createApprovalsRouter(deps: ApprovalsRouterDeps): Router {
     // Task 19: hand the session back to the integrated harness — a paused
     // (HITL) session is re-run with the decision recorded in its history.
     deps.onApprovalResolved?.(session);
-    res.json({ sessionId: session.id, decision, state: hitl.getState() });
+    res.json({ sessionId: session.id, decision, state: hitl.getState(session.id) });
   });
 
   return router;

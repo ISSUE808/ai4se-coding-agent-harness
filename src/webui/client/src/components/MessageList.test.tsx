@@ -142,6 +142,110 @@ describe('MessageList', () => {
     expect(screen.getByText('AssertionError: expected token to rotate')).toBeInTheDocument();
   });
 
+  it('renders assistant markdown: heading, bold, inline code, fenced code block, list, table and link', () => {
+    const md = [
+      '# 修复认证刷新',
+      '',
+      '请把 `refresh_token` 轮换逻辑 **修好**，见 [spec](https://example.com/spec).',
+      '',
+      '```ts',
+      'const t = await rotate(token);',
+      '```',
+      '',
+      '- 步骤一',
+      '- 步骤二',
+      '',
+      '| 列A | 列B |',
+      '| --- | --- |',
+      '| a1 | b1 |',
+    ].join('\n');
+    render(<MessageList messages={[msg({ id: 'a1', role: 'assistant', content: md })]} />);
+
+    expect(screen.getByRole('heading', { level: 1, name: '修复认证刷新' })).toBeInTheDocument();
+    // Inline code + bold render as real elements (not literal markdown text).
+    expect(screen.getByText('refresh_token').tagName).toBe('CODE');
+    expect(screen.getByText('修好').tagName).toBe('STRONG');
+    expect(screen.getByRole('link', { name: 'spec' })).toHaveAttribute('href', 'https://example.com/spec');
+    // Fenced code block lives in a <pre>.
+    expect(screen.getByText('const t = await rotate(token);').closest('pre')).not.toBeNull();
+    // GFM list.
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    // GFM table with header row.
+    expect(screen.getByRole('columnheader', { name: '列A' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'b1' })).toBeInTheDocument();
+  });
+
+  it('does not render raw HTML from assistant content (XSS-safe)', () => {
+    render(
+      <MessageList
+        messages={[
+          msg({
+            id: 'a1',
+            role: 'assistant',
+            content:
+              '安全文本\n\n<script>window.__xssPwned = 1</script>\n\n<img src="x" onerror="window.__xssPwned = 2" />\n\n![evil](https://example.com/pixel.png)\n\n**依然渲染**',
+          }),
+        ]}
+      />,
+    );
+
+    // Raw HTML must never become elements nor execute.
+    expect(document.querySelector('script')).toBeNull();
+    expect(document.querySelector('img')).toBeNull();
+    expect((window as unknown as { __xssPwned?: number }).__xssPwned).toBeUndefined();
+    // The surrounding markdown still renders.
+    expect(screen.getByText('安全文本')).toBeInTheDocument();
+    expect(screen.getByText('依然渲染')).toBeInTheDocument();
+  });
+
+  it('strips javascript: URLs from links (XSS-safe URL protocols)', () => {
+    render(
+      <MessageList
+        messages={[
+          msg({
+            id: 'a2',
+            role: 'assistant',
+            content: '[点我](javascript:window.__xssPwned=1) 和 [正常](https://example.com)',
+          }),
+        ]}
+      />,
+    );
+
+    const links = screen.getAllByRole('link');
+    // The javascript: link is stripped entirely — its text stays but is NOT a
+    // link; the safe https link renders normally.
+    const evil = links.find((l) => l.textContent === '点我');
+    expect(evil).toBeUndefined();
+    expect(screen.getByText('点我')).toBeInTheDocument();
+    const safe = links.find((l) => l.textContent === '正常');
+    expect(safe?.getAttribute('href')).toBe('https://example.com');
+  });
+
+  it('keeps user messages as plain text (no markdown rendering)', () => {
+    render(<MessageList messages={[msg({ id: 'u1', role: 'user', content: '请用 **加粗** 和 `code` 输出' })]} />);
+
+    expect(screen.getByText('请用 **加粗** 和 `code` 输出')).toBeInTheDocument();
+    expect(document.querySelector('strong')).toBeNull();
+    expect(document.querySelector('code')).toBeNull();
+  });
+
+  it('styles markdown elements from design tokens (code well + link primary)', () => {
+    render(
+      <MessageList
+        messages={[
+          msg({ id: 'a1', role: 'assistant', content: '```js\nfoo()\n```\n\n看 [文档](https://example.com/doc) 与 `x`' }),
+        ]}
+      />,
+    );
+
+    const pre = screen.getByText('foo()').closest('pre');
+    expect(pre).not.toBeNull();
+    expect(pre).toHaveStyle({ backgroundColor: designTokens.colors.well });
+    expect(pre).toHaveStyle({ borderColor: designTokens.colors.border });
+    expect(screen.getByRole('link', { name: '文档' })).toHaveStyle({ color: designTokens.colors.primary });
+    expect(screen.getByText('x')).toHaveStyle({ backgroundColor: designTokens.colors.well });
+  });
+
   it('renders the approval card inline when an approval is pending', () => {
     render(
       <MessageList

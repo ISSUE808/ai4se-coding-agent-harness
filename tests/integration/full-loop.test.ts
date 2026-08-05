@@ -40,7 +40,7 @@ import type {
   Tool,
   Validator,
 } from '../../src/types.js';
-import type { BuildAgentLoop } from '../../src/cli/commands/start.js';
+import type { BuildAgentLoop, BuildAgentLoopOptions } from '../../src/cli/commands/start.js';
 
 /**
  * Task 19 full integration (SPEC §5.1, §9): `start --web` wiring — the real
@@ -68,6 +68,9 @@ function memoryBackend(): CredentialBackend {
     },
     async exists(_service, account) {
       return secrets.has(account);
+    },
+    async list() {
+      return [...secrets.keys()];
     },
   };
 }
@@ -162,6 +165,8 @@ interface Fixture {
 
 const openHarnesses: WebHarness[] = [];
 const openSockets: WebSocket[] = [];
+/** Fixture 静态目录（CR 2026-08-04：makeHarness 自给自足，不依赖真实构建产物）。 */
+const fixtureStaticDirs: string[] = [];
 
 afterEach(async () => {
   for (const ws of openSockets) {
@@ -172,6 +177,10 @@ afterEach(async () => {
     await harness.close();
   }
   openHarnesses.length = 0;
+  for (const dir of fixtureStaticDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  fixtureStaticDirs.length = 0;
 });
 
 async function makeHarness(
@@ -179,16 +188,28 @@ async function makeHarness(
   provider: LLMProvider,
   validators?: Map<string, Validator>,
   guardOverrides?: { patternGuard?: PatternGuard; scopeFence?: ScopeFence },
+  /** Task 26: per-build observer (records what runSession passed the factory). */
+  onBuild?: (opts: BuildAgentLoopOptions) => void,
 ): Promise<Fixture> {
   const events = createEventBus();
   const credentialStore = new CredentialStore([memoryBackend()]);
   const sessionStore = new InMemorySessionStore(config.agent.maxRounds, config.agent.workspaceRoot);
+  // CR 2026-08-04: fixture 静态目录（同 webui-static.test.ts 模式）。createWebHarness
+  // 生产接线会校验 staticDir 存在（缺失抛错）——测试必须自给自足，不能依赖真实
+  // client/dist 构建产物（CI 的 unit-test job 不构建 client，dist 被 gitignore）。
+  const staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ch-fullloop-dist-'));
+  fs.writeFileSync(path.join(staticDir, 'index.html'), '<!doctype html><title>CodeHarness</title>');
+  fixtureStaticDirs.push(staticDir);
   const harness = await createWebHarness({
     config,
     events,
     credentialStore,
     sessionStore,
-    buildAgentLoop: buildLoopFactory(provider, validators, guardOverrides),
+    staticDir,
+    buildAgentLoop: async (opts) => {
+      onBuild?.(opts);
+      return buildLoopFactory(provider, validators, guardOverrides)(opts);
+    },
     persistConfig: async () => {
       // Test-only: never touch the project config file.
     },
@@ -283,6 +304,9 @@ function toolCount(store: SessionStore, id: string): number {
   return store.get(id)?.messages.filter((m) => m.role === 'tool').length ?? 0;
 }
 
+// Longer per-test budget: HITL approval scenarios (pause → decide → execute
+// → resume → complete) exceed the 5s default under parallel load — the WS
+// helpers already use their own 5-8s waits, this guards the vitest-level cap.
 describe('full integration — start --web wiring (Task 19)', () => {
   let configRoot: string;
 
@@ -439,6 +463,107 @@ describe('full integration — start --web wiring (Task 19)', () => {
         ((m.metadata?.toolResult?.error as string | undefined) ?? '').includes('fatal'),
     );
     expect(executed.length).toBeGreaterThanOrEqual(1);
+  });
+
+  describe('Task 25 guardrails config overlay (config.guardrails)', () => {
+    it('blockOutbound=true pauses a network-outbound command for approval, then resumes to completion', async () => {
+      // `git push origin main` is NOT flagged by PatternGuard (only
+      // `--force` is a warn rule) — the config switch must be the reason.
+      const cfg = makeConfig(configRoot, { maxRounds: 10 });
+      cfg.guardrails = { blockOutbound: true };
+      const mock = new MockProvider([
+        { toolCalls: [{ id: 'call_net', name: 'run_shell', arguments: { command: 'git push origin main' } }] },
+        { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+        { content: '任务完成。' },
+      ]);
+      const { sessionStore, web } = await makeHarness(cfg, mock);
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '推送' });
+      expect(created.status).toBe(201);
+      const id = created.body.id as string;
+
+      const paused = await waitForStatus(sessionStore, id, 'paused');
+      const guardMsg = paused.messages.find((m) => m.metadata?.approvalRequired === true);
+      expect(guardMsg).toBeDefined();
+      expect(guardMsg?.metadata?.guardrailRule).toContain('blockOutbound');
+
+      const approve = await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+      expect(approve.status).toBe(200);
+
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(
+        done.messages.some(
+          (m) => m.metadata?.toolName === 'read_file' && m.metadata?.toolResult?.success,
+        ),
+      ).toBe(true);
+    });
+
+    it('blockOutbound=true demands a FRESH decision even for a previously approved network command', async () => {
+      const cfg = makeConfig(configRoot, { maxRounds: 10 });
+      cfg.guardrails = { blockOutbound: true };
+      const mock = new MockProvider([
+        { toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'git push origin main' } }] },
+        { toolCalls: [{ id: 'c2', name: 'run_shell', arguments: { command: 'git push origin main' } }] },
+        { content: '任务完成。' },
+      ]);
+      const { sessionStore, web } = await makeHarness(cfg, mock);
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '推送两次' });
+      const id = created.body.id as string;
+
+      // First occurrence pauses.
+      await waitForStatus(sessionStore, id, 'paused');
+      await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+
+      // The SAME command again must still pause — the config switch overrides
+      // the session approval cache (PatternGuard warn would pass it through).
+      const second = await waitForStatus(sessionStore, id, 'paused');
+      expect(
+        second.messages.filter((m) => m.metadata?.approvalRequired === true),
+      ).toHaveLength(2);
+      await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.status).toBe('completed');
+    });
+
+    it('requireApproval pauses a command matching a listed rule (substring); non-matching commands run freely', async () => {
+      const cfg = makeConfig(configRoot, { maxRounds: 10 });
+      cfg.guardrails = { requireApproval: ['prod'] };
+      const mock = new MockProvider([
+        { toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'kubectl apply -f prod-deploy.yaml' } }] },
+        { toolCalls: [{ id: 'c2', name: 'run_shell', arguments: { command: 'kubectl apply -f dev-deploy.yaml' } }] },
+        { content: '任务完成。' },
+      ]);
+      const { sessionStore, web } = await makeHarness(cfg, mock);
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '部署' });
+      const id = created.body.id as string;
+
+      const paused = await waitForStatus(sessionStore, id, 'paused');
+      const guardMsg = paused.messages.find((m) => m.metadata?.approvalRequired === true);
+      expect(guardMsg?.metadata?.guardrailRule).toContain('requireApproval');
+      expect(guardMsg?.metadata?.guardrailRule).toContain('prod');
+      await request(web.app).post(`/api/approvals/${id}`).send({ decision: 'approve' });
+
+      // The dev command does NOT contain 'prod' — it must execute unpaused.
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.messages.filter((m) => m.metadata?.approvalRequired === true)).toHaveLength(1);
+    });
+
+    it('no guardrails config → the same commands behave exactly as before (no config interception)', async () => {
+      const mock = new MockProvider([
+        { toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'git push origin main' } }] },
+        { content: '任务完成。' },
+      ]);
+      const { sessionStore, web } = await makeHarness(makeConfig(configRoot, { maxRounds: 10 }), mock);
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '推送' });
+      const id = created.body.id as string;
+
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.messages.filter((m) => m.metadata?.approvalRequired === true)).toHaveLength(0);
+    });
   });
 
   it('a user message resumes a completed session — the agent continues (user feedback)', async () => {
@@ -692,4 +817,228 @@ describe('full integration — start --web wiring (Task 19)', () => {
     expect(toolCount(sessionStore, id)).toBeLessThanOrEqual(countAtStop + 1);
     expect(sessionStore.get(id)?.status).toBe('completed');
   });
-});
+
+  describe('Task 26 — session-level model override', () => {
+    it('a session created WITH a model hands it to the first provider build (spy)', async () => {
+      const builtModels: Array<string | undefined> = [];
+      const provider = new MockProvider([{ content: '完成。' }]);
+      const { sessionStore, web } = await makeHarness(
+        makeConfig(configRoot),
+        provider,
+        undefined,
+        undefined,
+        (opts) => {
+          builtModels.push(opts.session?.model);
+        },
+      );
+
+      const created = await request(web.app)
+        .post('/api/sessions')
+        .send({ task: '带模型的会话', model: 'deepseek-r1' });
+      expect(created.status).toBe(201);
+      await waitForStatus(sessionStore, created.body.id, 'completed');
+
+      // The very first loop build already carried the session's model.
+      expect(builtModels).toEqual(['deepseek-r1']);
+    });
+
+    it('PATCH while running aborts the run and restarts with the new model (spy + timing)', async () => {
+      const builtModels: Array<string | undefined> = [];
+      // Slow provider: the PATCH lands while the first run is mid-call.
+      // Scripted: the FIRST tool call is cut by the abort (the loop breaks
+      // right after the LLM response); the restarted run executes the next
+      // tool call and completes.
+      const provider = slowMockProvider(
+        [
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { content: '完成。' },
+        ],
+        400,
+      );
+      const { harness, sessionStore, web, port } = await makeHarness(
+        makeConfig(configRoot),
+        provider,
+        undefined,
+        undefined,
+        (opts) => {
+          builtModels.push(opts.session?.model);
+        },
+      );
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '模型切换任务' });
+      const id = created.body.id as string;
+      // The initial build happened with no session-level model.
+      expect(builtModels).toEqual([undefined]);
+
+      const ws = await wsConnect(port);
+      const patched = await request(web.app)
+        .patch(`/api/sessions/${id}/model`)
+        .send({ model: 'deepseek-v3' });
+      expect(patched.status).toBe(200);
+
+      // The abort+restart mechanism rebuilt the loop — the new build carries
+      // the session's model (spec: provider construction spy).
+      await waitForCondition(() => builtModels.length >= 2, 8000, 'provider rebuild after switch');
+      expect(builtModels).toEqual([undefined, 'deepseek-v3']);
+
+      // The restarted agent continued and completed under the new model.
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.model).toBe('deepseek-v3');
+      expect(done.messages.some((m) => m.role === 'tool')).toBe(true);
+      // The model change reached WebSocket clients too.
+      const frame = await nextEvent(ws, (f) => f.type === 'session:updated' && f.data.sessionId === id);
+      expect(frame.data.model).toBe('deepseek-v3');
+    });
+
+    it('pause racing a model switch wins — no restart flow behind the pause (review I1)', async () => {
+      const builtModels: Array<string | undefined> = [];
+      const provider = slowMockProvider(
+        [
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { content: '完成。' },
+          { content: '完成。' },
+        ],
+        400,
+      );
+      const { sessionStore, web } = await makeHarness(
+        makeConfig(configRoot),
+        provider,
+        undefined,
+        undefined,
+        (opts) => {
+          builtModels.push(opts.session?.model);
+        },
+      );
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '竞态测试' });
+      const id = created.body.id as string;
+
+      // Model switch while running, then pause IMMEDIATELY — the pause lands
+      // while the aborted run is still finishing. The abort cuts the loop
+      // right after the in-flight LLM response (the round's tool call is
+      // dropped), and the pause's final status suppresses any restart.
+      await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+      const paused = await request(web.app).post(`/api/sessions/${id}/pause`);
+      expect(paused.status).toBe(200);
+      expect(paused.body.status).toBe('paused');
+
+      // Give the in-flight round time to finish — then verify NOTHING
+      // restarted behind the pause (a buggy finally would re-run the loop:
+      // status flips to completed / tool messages keep flowing / a second
+      // provider is built).
+      await silence(1000);
+      const session = sessionStore.get(id);
+      expect(session?.status).toBe('paused');
+      // The switch itself is still recorded — the NEXT run honors it.
+      expect(session?.model).toBe('deepseek-v3');
+      // No restart flow behind the pause — and the cut round ran NO tool.
+      expect(toolCount(sessionStore, id)).toBe(0);
+      expect(builtModels).toEqual([undefined]);
+    });
+
+    it('resume after the paused race does not re-restart on a leftover latch (review M1)', async () => {
+      const builtModels: Array<string | undefined> = [];
+      const provider = slowMockProvider(
+        [
+          { toolCalls: [{ name: 'read_file', arguments: { paths: ['test.ts'] } }] },
+          { content: '完成。' },
+          { content: '完成。' },
+        ],
+        400,
+      );
+      const { sessionStore, web } = await makeHarness(
+        makeConfig(configRoot),
+        provider,
+        undefined,
+        undefined,
+        (opts) => {
+          builtModels.push(opts.session?.model);
+        },
+      );
+
+      const created = await request(web.app).post('/api/sessions').send({ task: '竞态恢复' });
+      const id = created.body.id as string;
+
+      // Same I1 race: the model switch's latch is left behind by the paused
+      // run (its finally must NOT consume-and-restart it).
+      await request(web.app).patch(`/api/sessions/${id}/model`).send({ model: 'deepseek-v3' });
+      await request(web.app).post(`/api/sessions/${id}/pause`);
+      await silence(1000);
+      expect(sessionStore.get(id)?.status).toBe('paused');
+
+      // Resume: the new run honors the model switch, completes, and the
+      // leftover latch must NOT trigger an extra rebuild afterwards.
+      const resumed = await request(web.app).post(`/api/sessions/${id}/resume`);
+      expect(resumed.status).toBe(200);
+      const done = await waitForStatus(sessionStore, id, 'completed');
+      expect(done.model).toBe('deepseek-v3');
+
+      // Exactly TWO provider builds: the original run and the resumed one.
+      expect(builtModels).toEqual([undefined, 'deepseek-v3']);
+
+      // Nothing keeps flowing after completion. The cut round ran no tool,
+      // and the resumed run (re-seeded, no tool message) completes directly.
+      await silence(900);
+      expect(builtModels).toEqual([undefined, 'deepseek-v3']);
+      expect(toolCount(sessionStore, id)).toBe(0);
+    });
+  });
+}, 15000);
+
+describe('provider activation follows the LIVE config (real-test fix)', () => {
+  it('sessions built after PUT /api/config use the NEW provider; running sessions restart onto it', async () => {
+    const builds: BuildAgentLoopOptions[] = [];
+    const config = makeConfig(os.tmpdir());
+    // Slow responses keep the first session RUNNING while the switch lands.
+    const slow = slowMockProvider(
+      [
+        { role: 'assistant', content: 'done', toolCalls: [] },
+        { role: 'assistant', content: 'done 2', toolCalls: [] },
+        { role: 'assistant', content: 'done 3', toolCalls: [] },
+      ],
+      400,
+    );
+    const { harness, port, sessionStore } = await makeHarness(
+      config,
+      slow,
+      undefined,
+      undefined,
+      (opts) => builds.push(opts),
+    );
+
+    // First session runs on the STARTUP provider (deepseek).
+    const first = await request(`http://127.0.0.1:${port}`)
+      .post('/api/sessions')
+      .send({ task: 't1' });
+    expect(first.status).toBe(201);
+    await waitForStatus(sessionStore, first.body.id, 'running');
+    expect(builds[0].config.llm.provider).toBe('mock');
+
+    // Activate another provider — the Settings 应用 action.
+    const put = await request(`http://127.0.0.1:${port}`)
+      .put('/api/config')
+      .send({ llm: { provider: 'nju', baseUrl: 'https://nju.example.com/v1', model: 'nju-model' } });
+    expect(put.status).toBe(200);
+
+    // The RUNNING session restarts onto the new provider and completes.
+    await waitForStatus(sessionStore, first.body.id, 'completed', 10000);
+    expect(builds.length).toBeGreaterThanOrEqual(2);
+    const restarted = builds[builds.length - 1];
+    expect(restarted.config.llm.provider).toBe('nju');
+    expect(restarted.config.llm.baseUrl).toBe('https://nju.example.com/v1');
+
+    // A NEW session also builds with the LIVE config, not the startup one.
+    const before = builds.length;
+    const second = await request(`http://127.0.0.1:${port}`)
+      .post('/api/sessions')
+      .send({ task: 't2' });
+    expect(second.status).toBe(201);
+    await waitForStatus(sessionStore, second.body.id, 'completed', 10000);
+    expect(builds.length).toBeGreaterThan(before);
+    const built = builds[builds.length - 1];
+    expect(built.config.llm.provider).toBe('nju');
+    expect(built.config.llm.baseUrl).toBe('https://nju.example.com/v1');
+  });
+}, 15000);

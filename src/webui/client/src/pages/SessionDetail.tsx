@@ -8,11 +8,15 @@
  * and dedupes by message id. All colors/fonts/spacing resolve to
  * design-tokens.ts.
  */
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowLeft,
+  ChevronRight,
+  File,
+  Folder,
+  FolderOpen,
   Loader2,
   Pause,
   Play,
@@ -30,18 +34,31 @@ import type { ApprovalStatus } from '../components/ApprovalCard';
 import FileDiff from '../components/FileDiff';
 import { useSessionEvents } from '../hooks/useSessionEvents';
 import {
+  fetchAvailableModels,
   fetchConfig,
+  fetchFsFile,
+  fetchFsTree,
   fetchSession,
+  fetchSessions,
   postMessage,
   resolveApproval,
+  saveConfig,
   sessionControl,
+  updateSessionModel,
   type ApprovalDecision,
   type ConfigValue,
+  type FsTreeNode,
   type SessionControlAction,
   type SessionDetail,
 } from '../lib/api';
+import type { TerminalLine } from '../lib/ws-state';
 import { formatTokens, type SessionStatus } from '../lib/format';
-import { aggregateFiles, contentForFile, formatDateTime } from '../lib/session-messages';
+import {
+  aggregateFiles,
+  formatDateTime,
+  toolFiles,
+  type FileEntry,
+} from '../lib/session-messages';
 
 type Phase = 'loading' | 'ready' | 'error';
 
@@ -66,29 +83,79 @@ export default function SessionDetail() {
           status: session.status,
           currentRound: session.currentRound,
           maxRounds: session.maxRounds,
+          model: session.model,
         }
       : undefined,
   );
 
   const displayStatus: SessionStatus | null = events.status ?? session?.status ?? null;
 
-  const load = useCallback(async () => {
-    if (sessionId === '') {
-      return;
-    }
-    setPhase('loading');
-    try {
-      setSession(await fetchSession(sessionId));
-      setPhase('ready');
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : '无法加载会话');
-      setPhase('error');
-    }
-  }, [sessionId]);
+  // Status of the session the CURRENT snapshot reflects (set inside load).
+  // Acceptance feedback: the WS streams status/rounds but NOT tokenUsage (it
+  // is finalized only when the loop ends), so the REST snapshot — which does
+  // carry it — is re-fetched exactly once when the session reaches a terminal
+  // status (completed/failed). Without this, the Token 使用 breakdown appears
+  // only after a manual refresh.
+  const snapshotStatusRef = useRef<SessionStatus | null>(null);
+  // Fetch generation (same pattern as treeRequestRef): a refresh superseded
+  // while in flight (e.g. the session resumed mid-fetch) must not overwrite
+  // the guard with a stale result (reviewer Minor).
+  const fetchGenRef = useRef(0);
+
+  const load = useCallback(
+    async (mode: 'initial' | 'refresh' = 'initial') => {
+      if (sessionId === '') {
+        return;
+      }
+      const gen = ++fetchGenRef.current;
+      if (mode === 'initial') {
+        setPhase('loading');
+      }
+      try {
+        const fresh = await fetchSession(sessionId);
+        if (gen !== fetchGenRef.current) {
+          return; // superseded by a newer fetch — drop the stale result
+        }
+        snapshotStatusRef.current = fresh.status;
+        setSession(fresh);
+        if (mode === 'initial') {
+          setPhase('ready');
+        }
+      } catch (err) {
+        if (mode === 'initial') {
+          setLoadError(err instanceof Error ? err.message : '无法加载会话');
+          setPhase('error');
+        }
+        // Refresh failure keeps the stale-but-alive cockpit (reviewer
+        // Important): no full-screen error from a background refetch.
+      }
+    },
+    [sessionId],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Refetch exactly once per terminal status: the guard is set BEFORE the
+  // await so a second effect run during the in-flight fetch cannot double-fire,
+  // and re-armed when the session leaves the terminal state (a resumed session
+  // may complete again). A history view already terminal at mount never
+  // refetches. `failed` is the same class — its final snapshot also carries
+  // the accumulated tokenUsage (reviewer Minor).
+  useEffect(() => {
+    const s = events.status;
+    if (s === null || session === null) {
+      return;
+    }
+    const terminal = s === 'completed' || s === 'failed';
+    if (terminal && snapshotStatusRef.current !== s) {
+      snapshotStatusRef.current = s;
+      void load('refresh');
+    } else if (!terminal && snapshotStatusRef.current !== null) {
+      snapshotStatusRef.current = null;
+    }
+  }, [events.status, session, load]);
 
   // Model + guardrail chips come from the (masked) backend config.
   useEffect(() => {
@@ -98,6 +165,131 @@ export default function SessionDetail() {
         // Config unavailable — context sections just omit model/chips.
       });
   }, []);
+
+  // Task 26: "recently used models" = distinct session-level models across
+  // every known session (fetched once; the dropdown dedupes against the
+  // config default).
+  const [recentModels, setRecentModels] = useState<string[]>([]);
+  useEffect(() => {
+    fetchSessions()
+      .then((sessions) => {
+        const seen = new Set<string>();
+        for (const s of sessions) {
+          if (typeof s.model === 'string' && s.model !== '' && !seen.has(s.model)) {
+            seen.add(s.model);
+          }
+        }
+        setRecentModels([...seen]);
+      })
+      .catch(() => {
+        // Sessions unavailable — the selector falls back to default + custom.
+      });
+  }, []);
+
+  // ─── Model selector (Task 26) ─────────────────────────────────────────────
+
+  // Task 26 follow-up: the provider's model list (from GET /api/llm/models).
+  // `null` = not loaded / failed → the selector falls back to the free-text
+  // custom entry with a hint; a loaded list restricts options to its models.
+  const [availableModels, setAvailableModels] = useState<string[] | null>(null);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  useEffect(() => {
+    fetchAvailableModels()
+      .then(({ models }) => {
+        setAvailableModels(models);
+        setModelsError(null);
+      })
+      .catch((err) => {
+        setAvailableModels(null);
+        setModelsError(err instanceof Error ? err.message : '模型列表加载失败');
+      });
+  }, []);
+
+  const [customMode, setCustomMode] = useState(false);
+  const [customModel, setCustomModel] = useState('');
+  const [modelBusy, setModelBusy] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+
+  /**
+   * Task 26 follow-up: applying a model also updates the GLOBAL default
+   * (`llm.model`) so the next session uses it too. The session PATCH is the
+   * primary action (it takes effect immediately, restarting a live run); a
+   * failed config save does NOT undo the switch — the user is told.
+   */
+  async function applyModelSync(model: string): Promise<void> {
+    const updated = await updateSessionModel(sessionId, model);
+    events.updateModel(updated.model ?? null);
+    setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
+    rememberRecentModel(updated.model);
+    try {
+      // The merged config the server returns becomes the new baseline for
+      // the "默认模型" option and the config-default comparison below.
+      const merged = await saveConfig({ llm: { model } });
+      setConfig(merged);
+    } catch (err) {
+      setModelError(
+        `已切换会话模型，但全局配置更新失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async function handleModelSelect(value: string): Promise<void> {
+    if (value === CUSTOM_MODEL_VALUE) {
+      setCustomMode(true);
+      return;
+    }
+    // Picking the default option clears the override ('' = config default).
+    const next = value === configModel ? '' : value;
+    if (sessionId === '' || modelBusy) {
+      return;
+    }
+    setModelBusy(true);
+    setModelError(null);
+    try {
+      if (next === '') {
+        // Clearing the override — the config default stays as it is.
+        const updated = await updateSessionModel(sessionId, '');
+        events.updateModel(updated.model ?? null);
+        setSession((prev) => (prev ? { ...prev, model: updated.model } : prev));
+      } else {
+        await applyModelSync(next);
+      }
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : '切换模型失败');
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  async function applyCustomModel(): Promise<void> {
+    const trimmed = customModel.trim();
+    if (trimmed === '' || sessionId === '' || modelBusy) {
+      return;
+    }
+    setModelBusy(true);
+    setModelError(null);
+    try {
+      await applyModelSync(trimmed);
+      setCustomMode(false);
+      setCustomModel('');
+    } catch (err) {
+      setModelError(err instanceof Error ? err.message : '切换模型失败');
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
+  /**
+   * Review M4: fold a successfully applied model into the "recently used"
+   * list — switching AWAY from it (back to the default) must not make the
+   * option vanish from the dropdown.
+   */
+  function rememberRecentModel(model: string | undefined): void {
+    if (typeof model !== 'string' || model === '') {
+      return;
+    }
+    setRecentModels((prev) => (prev.includes(model) ? prev : [...prev, model]));
+  }
 
   // ─── Header controls ───────────────────────────────────────────────────────
 
@@ -185,7 +377,147 @@ export default function SessionDetail() {
   // ─── Files column ──────────────────────────────────────────────────────────
 
   const files = aggregateFiles(events.messages);
+  // Changed-file marks (A/M) overlaid on the workspace tree (Task 23).
+  // Tool metadata reports paths relative to the workspace root while fs tree
+  // nodes carry absolute paths — join against the root and normalize
+  // separators so the overlay matches on every platform.
+  const fileMarks = new Map(
+    files.map((f) => [normalizePath(absoluteWithin(session?.workspaceRoot ?? '', f.path)), f] as const),
+  );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedContent, setSelectedContent] = useState<string | null>(null);
+  const [selectedError, setSelectedError] = useState<string | null>(null);
+  const fileRequestRef = useRef(0);
+
+  // 1.5 real-test follow-up: selecting a file fetches its CURRENT CONTENT
+  // from GET /api/fs/file (workspace-bounded) instead of showing tool-output
+  // summaries — write_file carries no output, so the old preview was always
+  // empty for freshly written files. A generation counter makes a stale
+  // response (quickly re-clicked files) a no-op.
+  function selectFile(absPath: string): void {
+    setSelectedPath(absPath);
+    setSelectedContent(null);
+    setSelectedError(null);
+    const requestId = ++fileRequestRef.current;
+    fetchFsFile(absPath)
+      .then((file) => {
+        if (requestId !== fileRequestRef.current) {
+          return;
+        }
+        setSelectedContent(file.content);
+      })
+      .catch((err) => {
+        if (requestId !== fileRequestRef.current) {
+          return;
+        }
+        setSelectedError(err instanceof Error ? err.message : '无法读取文件内容');
+      });
+  }
+
+  // Task 23: workspace file tree in the left column, fetched from the fs
+  // endpoint (bounded to the session workspaceRoot). The workspaceRoot
+  // effect fetches once per session (M5: status changes rebuild the session
+  // object but must not refetch the tree); a second effect refetches after
+  // NEW file-changing tool messages so freshly created files appear without
+  // a manual page refresh (1.4). A request generation counter makes a stale
+  // response (switched root, superseded refetch) a no-op.
+  const workspaceRoot = session?.workspaceRoot ?? '';
+  const [tree, setTree] = useState<FsTreeNode | null>(null);
+  const [treeError, setTreeError] = useState<string | null>(null);
+  const [treeExpanded, setTreeExpanded] = useState<Set<string>>(new Set());
+  const treeRequestRef = useRef(0);
+
+  const loadTree = useCallback(() => {
+    if (workspaceRoot === '') {
+      return;
+    }
+    const requestId = ++treeRequestRef.current;
+    fetchFsTree(workspaceRoot)
+      .then((node) => {
+        if (requestId !== treeRequestRef.current) {
+          return; // a newer request (or a root switch) superseded this one
+        }
+        setTree(node);
+        setTreeError(null);
+        // Root starts expanded so the first level is visible immediately.
+        setTreeExpanded((prev) => new Set(prev).add(node.path));
+      })
+      .catch((err) => {
+        if (requestId !== treeRequestRef.current) {
+          return;
+        }
+        setTreeError(err instanceof Error ? err.message : '无法加载文件树');
+      });
+  }, [workspaceRoot]);
+
+  useEffect(() => {
+    loadTree();
+  }, [loadTree]);
+
+  // 1.4: refetch the tree when the live message stream reports a NEW
+  // file-changing tool message (a file the snapshot does not know yet must
+  // appear without refreshing the page). The first non-empty message list —
+  // the REST snapshot merged once by the hook — is absorbed without a
+  // refetch (the workspaceRoot effect already covered it); only messages
+  // arriving after that trigger, debounced so a burst of tool calls costs
+  // one fetch.
+  const treeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const treeSnapshotSeenRef = useRef(false);
+  const treeLastMessageRef = useRef<string | null>(null);
+  useEffect(() => {
+    const messages = events.messages;
+    const last = messages[messages.length - 1];
+    if (last === undefined) {
+      return;
+    }
+    if (!treeSnapshotSeenRef.current) {
+      treeSnapshotSeenRef.current = true;
+      treeLastMessageRef.current = last.id;
+      return;
+    }
+    if (last.id === treeLastMessageRef.current) {
+      return;
+    }
+    treeLastMessageRef.current = last.id;
+    if (last.role !== 'tool' || toolFiles(last).length === 0) {
+      return;
+    }
+    if (treeRefreshTimerRef.current !== null) {
+      clearTimeout(treeRefreshTimerRef.current);
+    }
+    treeRefreshTimerRef.current = setTimeout(() => {
+      treeRefreshTimerRef.current = null;
+      loadTree();
+    }, 300);
+  }, [events.messages, loadTree]);
+
+  useEffect(
+    () => () => {
+      if (treeRefreshTimerRef.current !== null) {
+        clearTimeout(treeRefreshTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  // CR I2: changed files that the fetched tree hides (depth/per-level caps)
+  // stay reachable through a fallback list below the tree.
+  const treeFilePaths = collectTreeFilePaths(tree);
+  const hiddenChangedFiles = files.filter(
+    (f) => !treeFilePaths.has(normalizePath(absoluteWithin(workspaceRoot, f.path))),
+  );
+
+  function toggleTreeDir(dirPath: string): void {
+    setTreeExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(dirPath)) {
+        next.delete(dirPath);
+      } else {
+        next.add(dirPath);
+      }
+      return next;
+    });
+  }
 
   const toolCallCount = events.messages.filter((m) => m.role === 'tool').length;
 
@@ -253,7 +585,39 @@ export default function SessionDetail() {
   const roundPercent =
     maxRounds <= 0 ? 0 : Math.min(100, Math.max(0, (currentRound / maxRounds) * 100));
   const roundsLeft = maxRounds - currentRound;
-  const model = typeof config?.model === 'string' ? config.model : null;
+  // Task 26: effective model = session override (WS/PATCH state) → REST
+  // snapshot → config default. The selector options are the config default,
+  // distinct models from other sessions, and a custom entry.
+  // Task 26 real-test fix (4.1): the config model lives at `config.llm.model`
+  // (src/types.ts Config) — a top-level `model` never exists in the masked
+  // config response, so reading it made configModel always null and the
+  // selector never rendered. The test mock's wrong shape (top-level model)
+  // is what hid this; narrowed like `guardrails` below.
+  const llmRaw = config?.llm;
+  const llm =
+    typeof llmRaw === 'object' && llmRaw !== null
+      ? (llmRaw as Record<string, unknown>)
+      : undefined;
+  const configModel = typeof llm?.model === 'string' ? llm.model : null;
+  const effectiveModel = events.model ?? session?.model ?? configModel;
+  const sessionModel = typeof session?.model === 'string' ? session.model : null;
+  // Task 26 follow-up: when the provider model list loaded, ONLY its models
+  // are selectable (plus the config default and any session override not in
+  // the list) — the free-text custom entry is hidden. When the list is
+  // unavailable/empty, fall back to recently-used models + the custom entry.
+  const listMode = availableModels !== null && availableModels.length > 0;
+  const optionPool = listMode
+    ? availableModels
+    : recentModels.concat(
+        effectiveModel !== null && effectiveModel !== configModel ? [effectiveModel] : [],
+      );
+  const otherModels = Array.from(
+    new Set(
+      optionPool
+        .concat(sessionModel !== null ? [sessionModel] : [])
+        .filter((m): m is string => typeof m === 'string' && m !== '' && m !== configModel),
+    ),
+  );
   // guardrails is unknown (Record<string, unknown>); narrow before member access.
   const guardrailsRaw = config?.guardrails;
   const guardrails =
@@ -408,89 +772,73 @@ export default function SessionDetail() {
           <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
             {leftTab === 'files' ? (
               <>
-                {files.length === 0 && (
-                  <div style={{ padding: designTokens.spacing[6], textAlign: 'center', color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
-                    暂无文件变更
-                  </div>
-                )}
-                {files.map((file) => (
-                  <button
-                    key={file.path}
-                    type="button"
-                    onClick={() => setSelectedPath(file.path)}
+                {treeError !== null && (
+                  <div
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      width: '100%',
-                      padding: `${designTokens.spacing[2]} ${designTokens.spacing[4]}`,
-                      border: 'none',
-                      borderBottomWidth: 1,
-                      borderBottomStyle: 'solid',
-                      borderBottomColor: designTokens.colors.border,
-                      background:
-                        selectedPath === file.path
-                          ? designTokens.colors.primarySoft
-                          : 'transparent',
-                      boxShadow:
-                        selectedPath === file.path
-                          ? `inset 2px 0 0 ${designTokens.colors.primary}`
-                          : 'none',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      fontFamily: designTokens.typography.fontFamily.sans,
+                      padding: designTokens.spacing[5],
+                      textAlign: 'center',
+                      color: designTokens.colors.danger,
+                      fontSize: designTokens.typography.fontSize.sm,
                     }}
                   >
-                    <span
-                      style={{
-                        display: 'grid',
-                        placeItems: 'center',
-                        width: 18,
-                        height: 18,
-                        borderRadius: designTokens.radius.sm,
-                        fontFamily: designTokens.typography.fontFamily.mono,
-                        fontSize: designTokens.typography.fontSize.xs,
-                        fontWeight: designTokens.typography.fontWeight.semibold,
-                        flexShrink: 0,
-                        color: markColor(file.mark).fg,
-                        background: markColor(file.mark).bg,
-                      }}
-                    >
-                      {file.mark}
-                    </span>
-                    <span
-                      style={{
-                        fontFamily: designTokens.typography.fontFamily.mono,
-                        fontSize: designTokens.typography.codeSize.md,
-                        color: designTokens.colors.text,
-                        flex: 1,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {file.path}
-                    </span>
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        gap: 6,
-                        fontFamily: designTokens.typography.fontFamily.mono,
-                        fontSize: designTokens.typography.fontSize.xs,
-                      }}
-                    >
-                      {file.addCount > 0 && <span style={{ color: designTokens.colors.success }}>+{file.addCount}</span>}
-                      {file.delCount > 0 && <span style={{ color: designTokens.colors.danger }}>−{file.delCount}</span>}
-                    </span>
-                  </button>
-                ))}
+                    无法加载文件树 — {treeError}
+                  </div>
+                )}
+                {treeError === null && tree === null && (
+                  <div style={{ padding: designTokens.spacing[6], textAlign: 'center', color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                    加载文件树…
+                  </div>
+                )}
+                {tree !== null && treeError === null && (
+                  <>
+                    {Array.isArray(tree.children) && tree.children.length === 0 && (
+                      <div style={{ padding: designTokens.spacing[6], textAlign: 'center', color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                        工作目录为空
+                      </div>
+                    )}
+                    {renderFileTreeNode(tree, 0, treeExpanded, fileMarks, selectedPath, selectFile, toggleTreeDir)}
+                  </>
+                )}
+                {hiddenChangedFiles.length > 0 && (
+                  <div
+                    style={{
+                      padding: designTokens.spacing[3],
+                      borderTopWidth: 1,
+                      borderTopStyle: 'solid',
+                      borderTopColor: designTokens.colors.border,
+                    }}
+                  >
+                    <div style={fallbackLabelStyle}>变更文件（未显示在树中）</div>
+                    {hiddenChangedFiles.map((file) => {
+                      const absPath = absoluteWithin(workspaceRoot, file.path);
+                      const selected = selectedPath === absPath;
+                      return (
+                        <button
+                          key={file.path}
+                          type="button"
+                          onClick={() => selectFile(absPath)}
+                          style={fallbackRowStyle(selected)}
+                        >
+                          <MarkBadge mark={file.mark} />
+                          <span style={fallbackPathStyle}>{file.path}</span>
+                          <span style={fallbackCountsStyle}>
+                            {file.addCount > 0 && <span style={{ color: designTokens.colors.success }}>+{file.addCount}</span>}
+                            {file.delCount > 0 && <span style={{ color: designTokens.colors.danger }}>−{file.delCount}</span>}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {selectedPath !== null && (
-                  <div style={{ padding: designTokens.spacing[3] }}>
-                    <FileDiff path={selectedPath} content={contentForFile(events.messages, selectedPath)} />
+                  <div style={{ padding: designTokens.spacing[3], borderTopWidth: 1, borderTopStyle: 'solid', borderTopColor: designTokens.colors.border }}>
+                    {/* 1.5: the preview shows the file's CURRENT CONTENT,
+                        fetched from the workspace-bounded /api/fs/file. */}
+                    <FileDiff path={selectedPath} content={selectedContent} error={selectedError} />
                   </div>
                 )}
               </>
-            ) : (
+            ) : events.terminal.length === 0 ? (
               <div
                 style={{
                   padding: designTokens.spacing[6],
@@ -500,7 +848,32 @@ export default function SessionDetail() {
                 }}
               >
                 <Terminal size={20} style={{ margin: '0 auto 8px', display: 'block' }} />
-                终端流将在 Task 19 接入 agent 主循环后提供。
+                暂无终端输出 — 运行中产生的工具调用、反馈与护栏事件会实时显示在这里。
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: `${designTokens.spacing[3]} ${designTokens.spacing[4]}`,
+                  fontFamily: designTokens.typography.fontFamily.mono,
+                  fontSize: designTokens.typography.codeSize.sm,
+                  lineHeight: 1.75,
+                  overflowWrap: 'anywhere',
+                }}
+              >
+                {events.terminal.map((line) => (
+                  <div key={line.id} style={{ display: 'flex', gap: designTokens.spacing[2] }}>
+                    <span
+                      style={{
+                        color: designTokens.colors.textFaint,
+                        flexShrink: 0,
+                        userSelect: 'none',
+                      }}
+                    >
+                      {formatDateTime(line.timestamp)}
+                    </span>
+                    <span style={{ color: terminalKindColor(line.kind) }}>{line.text}</span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -672,8 +1045,82 @@ export default function SessionDetail() {
                 v={events.pendingApproval !== null ? 'HITL · 已触发' : '未触发'}
                 vColor={events.pendingApproval !== null ? designTokens.colors.warning : undefined}
               />
-              {model !== null && <ContextKV k="模型" v={model} mono />}
             </ContextSection>
+
+            {/* model (Task 26: session-level override selector) */}
+            {configModel !== null && (
+              <ContextSection label="模型">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: designTokens.spacing[2] }}>
+                    <span style={{ color: designTokens.colors.textMuted, fontSize: designTokens.typography.fontSize.sm }}>
+                      {sessionModel !== null ? '会话模型' : '默认模型'}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: designTokens.typography.fontFamily.mono,
+                        fontSize: designTokens.typography.codeSize.md,
+                        color: sessionModel !== null ? designTokens.colors.primary : designTokens.colors.text,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {effectiveModel}
+                    </span>
+                  </div>
+                  <select
+                    aria-label="选择模型"
+                    value={effectiveModel ?? ''}
+                    onChange={(e) => void handleModelSelect(e.target.value)}
+                    disabled={modelBusy}
+                    style={modelSelectStyle}
+                  >
+                    <option value={configModel}>默认模型 · {configModel}</option>
+                    {otherModels.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                    {!listMode && <option value={CUSTOM_MODEL_VALUE}>自定义模型…</option>}
+                  </select>
+                  {!listMode && customMode && (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        aria-label="自定义模型输入"
+                        value={customModel}
+                        onChange={(e) => setCustomModel(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            void applyCustomModel();
+                          }
+                        }}
+                        placeholder="模型名称，如 deepseek-v3"
+                        style={modelInputStyle}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void applyCustomModel()}
+                        disabled={modelBusy || customModel.trim() === ''}
+                        style={modelApplyStyle}
+                      >
+                        {modelBusy ? <Loader2 size={12} /> : '应用'}
+                      </button>
+                    </div>
+                  )}
+                  {modelsError !== null && (
+                    <span style={{ color: designTokens.colors.warning, fontSize: designTokens.typography.fontSize.sm }}>
+                      模型列表加载失败：{modelsError}（可手动输入）
+                    </span>
+                  )}
+                  {modelError !== null && (
+                    <span style={{ color: designTokens.colors.danger, fontSize: designTokens.typography.fontSize.sm }}>
+                      {modelError}
+                    </span>
+                  )}
+                </div>
+              </ContextSection>
+            )}
 
             {/* rounds progress */}
             <ContextSection label="轮次进度">
@@ -732,18 +1179,35 @@ export default function SessionDetail() {
               )}
             </ContextSection>
 
-            {/* token usage */}
+            {/* token usage — billed totals (KNOWN_ISSUES 9 明细) plus the
+                memory layer's context estimate */}
             <ContextSection label="Token 使用">
-              <span
-                style={{
-                  fontFamily: designTokens.typography.fontFamily.mono,
-                  fontSize: designTokens.typography.fontSize.md,
-                  fontVariantNumeric: 'tabular-nums',
-                  color: designTokens.colors.text,
-                }}
-              >
-                {formatTokens(session?.tokenCount ?? 0)}
-              </span>
+              {session?.tokenUsage !== undefined ? (
+                <>
+                  <ContextKV k="输入" v={formatTokens(session.tokenUsage.prompt)} mono />
+                  <ContextKV k="输出" v={formatTokens(session.tokenUsage.completion)} mono />
+                  {session.tokenUsage.cached !== undefined && (
+                    <ContextKV k="缓存命中" v={formatTokens(session.tokenUsage.cached)} mono />
+                  )}
+                  <ContextKV
+                    k="总计"
+                    v={formatTokens(session.tokenUsage.prompt + session.tokenUsage.completion)}
+                    mono
+                  />
+                  <ContextKV k="上下文估计" v={formatTokens(session?.tokenCount ?? 0)} mono vColor={designTokens.colors.textMuted} />
+                </>
+              ) : (
+                <span
+                  style={{
+                    fontFamily: designTokens.typography.fontFamily.mono,
+                    fontSize: designTokens.typography.fontSize.md,
+                    fontVariantNumeric: 'tabular-nums',
+                    color: designTokens.colors.text,
+                  }}
+                >
+                  {formatTokens(session?.tokenCount ?? 0)}
+                </span>
+              )}
             </ContextSection>
 
             {/* runtime info */}
@@ -937,12 +1401,302 @@ function markColor(mark: string): { fg: string; bg: string } {
   }
 }
 
+/** Small A/M/D badge used by the tree rows and the fallback change list. */
+function MarkBadge({ mark }: { mark: string }) {
+  const colors = markColor(mark);
+  return (
+    <span
+      style={{
+        display: 'grid',
+        placeItems: 'center',
+        width: 16,
+        height: 16,
+        borderRadius: designTokens.radius.sm,
+        fontFamily: designTokens.typography.fontFamily.mono,
+        fontSize: designTokens.typography.fontSize.xs,
+        fontWeight: designTokens.typography.fontWeight.semibold,
+        flexShrink: 0,
+        color: colors.fg,
+        background: colors.bg,
+      }}
+    >
+      {mark}
+    </span>
+  );
+}
+
+/** Normalized absolute paths of every file node in the fetched tree. */
+function collectTreeFilePaths(tree: FsTreeNode | null): Set<string> {
+  const paths = new Set<string>();
+  if (tree === null) {
+    return paths;
+  }
+  const walk = (node: FsTreeNode): void => {
+    if (node.type === 'file') {
+      paths.add(normalizePath(node.path));
+    }
+    if (node.type === 'dir' && Array.isArray(node.children)) {
+      node.children.forEach(walk);
+    }
+  };
+  walk(tree);
+  return paths;
+}
+
+// ─── Fallback change-list styles (CR I2) ────────────────────────────────────
+
+const fallbackLabelStyle: CSSProperties = {
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.fontSize.xs,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: designTokens.colors.textMuted,
+  marginBottom: designTokens.spacing[1],
+};
+
+function fallbackRowStyle(selected: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: designTokens.spacing[1],
+    width: '100%',
+    padding: `${designTokens.spacing[1]} ${designTokens.spacing[2]}`,
+    border: 'none',
+    borderRadius: designTokens.radius.sm,
+    background: selected ? designTokens.colors.primarySoft : 'transparent',
+    boxShadow: selected ? `inset 2px 0 0 ${designTokens.colors.primary}` : 'none',
+    cursor: 'pointer',
+    textAlign: 'left',
+    fontFamily: designTokens.typography.fontFamily.sans,
+    marginBottom: designTokens.spacing[0],
+  };
+}
+
+const fallbackPathStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.codeSize.md,
+  color: designTokens.colors.text,
+};
+
+const fallbackCountsStyle: CSSProperties = {
+  display: 'inline-flex',
+  gap: designTokens.spacing[1],
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.fontSize.xs,
+  flexShrink: 0,
+};
+
+/**
+ * Recursive workspace file tree (Task 23): directories expand/collapse via
+ * chevrons; files carry the A/M change badge + line counts when touched, and
+ * selecting one opens the diff preview. Indentation scales per depth.
+ */
+function renderFileTreeNode(
+  node: FsTreeNode,
+  depth: number,
+  treeExpanded: Set<string>,
+  fileMarks: Map<string, FileEntry>,
+  selectedPath: string | null,
+  onSelect: (path: string) => void,
+  onToggleDir: (path: string) => void,
+): ReactNode {
+  const isExpanded = treeExpanded.has(node.path);
+  const children =
+    node.type === 'dir' && Array.isArray(node.children) ? node.children : [];
+  const mark = node.type === 'file' ? fileMarks.get(normalizePath(node.path)) : undefined;
+
+  return (
+    <div key={node.path}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: designTokens.spacing[1],
+          paddingLeft: `calc(${depth} * ${designTokens.spacing[3]})`,
+          paddingRight: designTokens.spacing[2],
+          paddingBlock: designTokens.spacing[0],
+          minHeight: 26,
+          borderRadius: designTokens.radius.sm,
+          background:
+            node.type === 'file' && selectedPath === node.path
+              ? designTokens.colors.primarySoft
+              : 'transparent',
+          boxShadow:
+            node.type === 'file' && selectedPath === node.path
+              ? `inset 2px 0 0 ${designTokens.colors.primary}`
+              : 'none',
+        }}
+      >
+        {node.type === 'dir' ? (
+          children.length > 0 ? (
+            <button
+              type="button"
+              aria-label={isExpanded ? `折叠 ${node.name}` : `展开 ${node.name}`}
+              onClick={() => onToggleDir(node.path)}
+              style={treeChevronStyle}
+            >
+              <ChevronRight
+                size={12}
+                style={{ transform: isExpanded ? 'rotate(90deg)' : undefined, transition: 'transform 0.12s' }}
+              />
+            </button>
+          ) : (
+            <span style={treeSpacerStyle} />
+          )
+        ) : (
+          <span style={treeSpacerStyle} />
+        )}
+        {node.type === 'dir' ? (
+          isExpanded ? (
+            <FolderOpen size={13} style={{ color: designTokens.colors.textMuted, flexShrink: 0 }} />
+          ) : (
+            <Folder size={13} style={{ color: designTokens.colors.textMuted, flexShrink: 0 }} />
+          )
+        ) : (
+          <File size={13} style={{ color: designTokens.colors.textSubtle, flexShrink: 0 }} />
+        )}
+        {node.type === 'file' ? (
+          <button
+            type="button"
+            onClick={() => onSelect(node.path)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: designTokens.spacing[1],
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontFamily: designTokens.typography.fontFamily.sans,
+              padding: `${designTokens.spacing[0]} ${designTokens.spacing[1]}`,
+              borderRadius: designTokens.radius.sm,
+              overflow: 'hidden',
+            }}
+          >
+            {mark !== undefined && <MarkBadge mark={mark.mark} />}
+            <span
+              style={{
+                fontFamily: designTokens.typography.fontFamily.mono,
+                fontSize: designTokens.typography.codeSize.md,
+                color: designTokens.colors.text,
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {node.name}
+            </span>
+            <span
+              style={{
+                display: 'inline-flex',
+                gap: designTokens.spacing[1],
+                fontFamily: designTokens.typography.fontFamily.mono,
+                fontSize: designTokens.typography.fontSize.xs,
+                flexShrink: 0,
+              }}
+            >
+              {mark !== undefined && mark.addCount > 0 && (
+                <span style={{ color: designTokens.colors.success }}>+{mark.addCount}</span>
+              )}
+              {mark !== undefined && mark.delCount > 0 && (
+                <span style={{ color: designTokens.colors.danger }}>−{mark.delCount}</span>
+              )}
+            </span>
+          </button>
+        ) : (
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontFamily: designTokens.typography.fontFamily.mono,
+              fontSize: designTokens.typography.codeSize.md,
+              color: designTokens.colors.text,
+            }}
+          >
+            {node.name}
+          </span>
+        )}
+        {node.truncated === true && (
+          <span style={{ flexShrink: 0, fontSize: designTokens.typography.fontSize.xs, color: designTokens.colors.warning }}>
+            …截断
+          </span>
+        )}
+      </div>
+      {node.type === 'dir' && isExpanded && children.length > 0 && (
+        <div>
+          {children.map((child) =>
+            renderFileTreeNode(child, depth + 1, treeExpanded, fileMarks, selectedPath, onSelect, onToggleDir),
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const treeChevronStyle: CSSProperties = {
+  display: 'grid',
+  placeItems: 'center',
+  width: 16,
+  height: 20,
+  border: 'none',
+  background: 'transparent',
+  color: designTokens.colors.textMuted,
+  cursor: 'pointer',
+  flexShrink: 0,
+  padding: 0,
+};
+
+const treeSpacerStyle: CSSProperties = {
+  width: 16,
+  flexShrink: 0,
+};
+
+/** Unify path separators (fs tree paths come from the server OS). */
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/** Absolute form of a tool-reported path (relative → joined to the root). */
+function absoluteWithin(root: string, rel: string): string {
+  if (rel.startsWith('/') || /^[A-Za-z]:[\\/]/.test(rel)) {
+    return rel;
+  }
+  return `${root.replace(/[\\/]+$/, '')}/${rel}`;
+}
+
 function formatDurationBetween(fromIso: string, toIso: string): string {
   const ms = Math.max(0, new Date(toIso).getTime() - new Date(fromIso).getTime());
   const total = Math.floor(ms / 1000);
   const m = String(Math.floor(total / 60)).padStart(2, '0');
   const s = String(total % 60).padStart(2, '0');
   return `${m}:${s}`;
+}
+
+/** Terminal line color by event kind (KNOWN_ISSUES 9 终端 tab). */
+function terminalKindColor(kind: TerminalLine['kind']): string {
+  switch (kind) {
+    case 'tool':
+      return designTokens.colors.primary;
+    case 'guardrail':
+      return designTokens.colors.danger;
+    case 'status':
+      return designTokens.colors.success;
+    case 'round':
+      return designTokens.colors.warning;
+    default:
+      return designTokens.colors.textMuted;
+  }
 }
 
 function ContextSection({ label, children }: { label: string; children: ReactNode }) {
@@ -1051,4 +1805,54 @@ const iconBtnStyle: CSSProperties = {
   background: 'transparent',
   color: designTokens.colors.textMuted,
   cursor: 'pointer',
+};
+
+/** Sentinel option value for the model selector's custom entry (Task 26). */
+const CUSTOM_MODEL_VALUE = '__custom__';
+
+/** Model selector dropdown (Task 26) — token-driven, matches the composer. */
+const modelSelectStyle: CSSProperties = {
+  width: '100%',
+  padding: '6px 8px',
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.borderStrong,
+  background: designTokens.colors.well,
+  color: designTokens.colors.text,
+  fontFamily: designTokens.typography.fontFamily.sans,
+  fontSize: designTokens.typography.fontSize.sm,
+  cursor: 'pointer',
+};
+
+const modelInputStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  padding: '6px 8px',
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.borderStrong,
+  background: designTokens.colors.well,
+  color: designTokens.colors.text,
+  fontFamily: designTokens.typography.fontFamily.mono,
+  fontSize: designTokens.typography.codeSize.md,
+  outline: 'none',
+};
+
+const modelApplyStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: designTokens.spacing[1],
+  padding: '5px 10px',
+  borderRadius: designTokens.radius.md,
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: designTokens.colors.primary,
+  background: designTokens.colors.primary,
+  color: designTokens.colors.onPrimary,
+  fontSize: designTokens.typography.fontSize.sm,
+  fontWeight: designTokens.typography.fontWeight.medium,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
 };

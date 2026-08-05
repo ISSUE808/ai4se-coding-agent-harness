@@ -43,3 +43,10 @@ PREPARATION_CHECKLIST.md
 #CLAUDE.md
 
 .claude/
+
+# desktop 独立 package
+desktop/build/
+desktop/node_modules/
+desktop/backend-pack/
+# 项目级个人配置（含本机路径，运行生成）
+.codeharness.json

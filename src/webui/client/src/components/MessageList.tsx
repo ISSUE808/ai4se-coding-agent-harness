@@ -12,6 +12,7 @@ import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, Hash, TriangleAler
 import designTokens from '../design-tokens';
 import { formatDateTime, type SessionMessage } from '../lib/session-messages';
 import ApprovalCard, { type ApprovalCardProps } from './ApprovalCard';
+import MarkdownContent from './MarkdownContent';
 
 export interface MessageListProps {
   messages: SessionMessage[];
@@ -333,25 +334,30 @@ function TextMessage({
             {formatDateTime(message.timestamp)}
           </span>
         </div>
-        <p
-          style={{
-            margin: '0 0 0',
-            fontSize: designTokens.typography.fontSize.base,
-            lineHeight: designTokens.typography.lineHeight.relaxed,
-            // User messages render as accent-tinted bubbles (prototype .r-user).
-            color: isUser ? designTokens.colors.text : designTokens.colors.textSubtle,
-            background: isUser ? designTokens.colors.primarySoft : 'transparent',
-            borderWidth: 1,
-            borderStyle: 'solid',
-            borderColor: isUser ? designTokens.colors.primaryBorder : 'transparent',
-            padding: isUser ? '10px 12px' : '0',
-            borderRadius: isUser ? 10 : 0,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}
-        >
-          {message.content}
-        </p>
+        {isUser ? (
+          // User messages stay plain text in accent-tinted bubbles (prototype .r-user);
+          // only assistant content gets markdown rendering.
+          <p
+            style={{
+              margin: '0 0 0',
+              fontSize: designTokens.typography.fontSize.base,
+              lineHeight: designTokens.typography.lineHeight.relaxed,
+              color: designTokens.colors.text,
+              background: designTokens.colors.primarySoft,
+              borderWidth: 1,
+              borderStyle: 'solid',
+              borderColor: designTokens.colors.primaryBorder,
+              padding: '10px 12px',
+              borderRadius: 10,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}
+          >
+            {message.content}
+          </p>
+        ) : (
+          <MarkdownContent content={message.content} />
+        )}
       </div>
     </article>
   );
