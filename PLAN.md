@@ -1127,9 +1127,10 @@ describe('Agent Main Loop (integration)', () => {
 - 创建：`Dockerfile`、`.dockerignore`
 - 修改：`package.json`（添加 `files`、`publishConfig`）
 
+- [x] **npm link 部分已落地**（2026-08-05，Task 29——`npm link` 全局 `codeharness` 命令，bin/shebang 已就位零代码；npm publish 仍未做，维持待办）
 - [ ] **步骤 1：Dockerfile**——FROM node:20-alpine, COPY package*.json, RUN npm ci --omit=dev, COPY dist/, EXPOSE 3000, ENTRYPOINT node dist/cli/index.js
 - [ ] **步骤 2：.dockerignore**——排除 node_modules、tests、.git、.env、secrets、*.cred
-- [ ] **步骤 3：npm 配置**——`"files": ["dist/", "README.md", "LICENSE"]`，`"publishConfig": {"access": "public"}`
+- [ ] **步骤 3：npm 配置**——`"files": ["dist/", "README.md", "LICENSE"]`，`"publishConfig": {"access": "public"}`（npm publish 待办）
 - [ ] **步骤 4：构建并验证**——`npm run build && docker build -t codeharness . && docker run --rm codeharness --version`
 - [ ] **步骤 5：CI 更新**——在 `.github/workflows/ci.yml` 中添加 `docker-build` job
 - [ ] **步骤 6：提交**
@@ -1143,7 +1144,7 @@ describe('Agent Main Loop (integration)', () => {
 **涉及文件：**
 - 创建/完成：`README.md`
 
-- [ ] **步骤 1：README.md**——项目概述、安装（npm + Docker）、快速开始、key 配置指南、WebUI、目录结构、安全边界、已知限制、许可证
+- [x] **已完成**（2026-08-05，Task 33 落地——README.md 由分发专项实施：项目概述、安装（npm link + 桌面应用）、快速开始、key 配置指南、WebUI 说明、目录结构、安全边界、已知限制；commits `9d241c8` `946386c`）
 
 提交：`docs: README`
 
@@ -1216,6 +1217,69 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
+### 任务 28：生产模式静态服务（server staticDir + SPA fallback）✅ — `006d448`
+
+**背景（用户建议，2026-08-05）**：CLI/WebUI 启动需手动输入命令（不便）——分发专项（桌面应用 + 全局命令）第 1 层底座：`codeharness start --web` 单命令即可浏览器使用完整 WebUI。
+
+**涉及文件：**
+- 修改：`src/webui/server.ts`（`WebUIServerDeps.staticDir` + 静态挂载 + SPA fallback）
+- 创建：`tests/integration/webui-static.test.ts`
+
+- [x] **已完成**（commit `006d448`，主项目 627/627）——staticDir 可注入；`express.static` 挂在 `/api` 404 兜底**之后**（`/api/*` 永不落入 fallback，即使 build 产物含 api/ 目录）；SPA fallback 仅 GET（react-router 深链回 index.html，sendFile 错误走 error handler）；staticDir 缺省保持 API-only（开发模式 Vite 5173 不受影响）；4 集成测试（fixture 临时目录模拟 build 产物，不依赖真实构建）
+
+### 任务 29：--web 生产模式接线 + dist 缺失报错 + npm link ✅ — `90e3778` `c4d7724`
+
+**背景**：生产模式接线——`resolveStaticDir`（显式参数 → `CODEHARNESS_WEBUI_DIR` env → 项目根 `src/webui/client/dist`，`import.meta.url` 上溯**不依赖 process.cwd()**——npm link 后 `codeharness` 在任意目录运行）；dist 缺失明确失败（构建指引）；`npm link` 全局命令（bin/shebang 已就位，零代码）。
+
+**涉及文件：**
+- 修改：`src/cli/commands/start.ts`（`resolveStaticDir` 导出 + createWebHarness 校验/接线）
+- 修改：`tests/integration/full-loop.test.ts`（makeHarness fixture staticDir 自给自足——CI 不构建 client，修复了隐式依赖真实构建产物的 CI 回归）
+
+- [x] **已完成**（commits `90e3778` `c4d7724`，主项目 630/630）——3 harness 级测试（env 覆盖 / fixture 静态页 / dist 缺失报错）+ resolveStaticDir 单测；`codeharness --version` 任意目录可用（npm link 已验证）
+
+### 任务 30：desktop/ 脚手架 + 主进程纯函数 ✅ — `cbe0a40`
+
+**背景**：Electron 桌面壳（分发专项第 3 层）第 1 步——**纯逻辑与 electron 解耦**（依赖注入，单测不启动 Electron，CI 不装 Electron）。
+
+**涉及文件：**
+- 创建：`desktop/`（独立 package：package.json、tsconfig.json CJS、vitest.config.ts）
+- 创建：`desktop/src/lifecycle.ts`（`resolveBackendDir` / `buildBackendCommand` / `waitForPort` / `killProcessTree` 纯函数）
+- 修改：根 `.gitignore`（+`desktop/build/`、`desktop/node_modules/`）
+
+- [x] **已完成**（commit `cbe0a40`，desktop 6/6 单测）——独立 package（electron 依赖不污染主项目）；spawn 命令构造含 `CODEHARNESS_WEBUI_DIR` env；端口轮询（fetch 注入）；进程树清理（taskkill /T /F，spawnFn 注入）；Windows 路径断言用 path.join 构造
+
+### 任务 31：Electron 生命周期 + main 接线 ✅ — `0d5fdf9` `d2203dc`
+
+**背景**：主进程生命周期——短探 :3000 就绪 → 直接开窗不重复 spawn；未就绪 → spawn 后端（生产模式）→ 轮询 30s → BrowserWindow；超时 → showError + **onExit（防僵尸应用）**；窗口关闭 → kill 进程树 + 退出。
+
+**涉及文件：**
+- 创建：`desktop/src/lifecycle.ts`（追加 `runDesktopLifecycle` 注入式编排）
+- 创建：`desktop/src/main.ts`（唯一 import electron 的薄接线层；`app.isPackaged` 分支）
+
+- [x] **已完成**（commits `0d5fdf9` `d2203dc`，desktop 11/11 单测）——评审修复：`intentional` 标志（主动关闭不误弹「后端已退出」框——Windows 强杀 exit code ≠ 0）/ 超时分支 close 杀已 spawn 进程（防孤儿）/ spawn null 立即报错
+
+### 任务 32：electron-builder 打包 + TESTING 验收 ✅ — `b28dc04` `cb1975c` `918ac18`
+
+**背景**：便携 + NSIS 安装程序；`extraResources` 三件套（backend dist + node_modules + client 产物 → resources/backend）；**keytar 原生模块出 asar**（SPEC §8.5 的"目标机安全配置"落地）。
+
+**涉及文件：**
+- 修改：`desktop/package.json`（build 字段：`directories.output: build` 避开 tsc dist、`signAndEditExecutable: false`——Windows 无管理员符号链接权限，无自定义图标/签名零损失）
+- 创建：`desktop/prepare-resources.mjs`（组装 backend-pack：cpSync + `npm prune --omit=dev`——分发体积 73MB→20MB，typescript/vitest 不进用户包）
+- 修改：`TESTING.md`（B11 验收小节：全局命令 / 窗口自载 / 无残留进程 / 复用不重复 spawn / 端口占用错误框）
+
+- [x] **已完成**（commits `b28dc04`（用户实现）`cb1975c` `918ac18`，82MB 双 exe 实测）——win-unpacked + portable + NSIS 三产物；**KNOWN_ISSUES #12**：打包 keytar ABI 依赖打包机 Node 版本（@electron/rebuild 只重建 app 目录依赖，extraResources verbatim 复制——修复路径：钉打包机 Node 20 或 backend-pack rebuild）
+
+### 任务 33：README ✅ — `9d241c8` `946386c`
+
+**背景**：Task 22（文档）的实际落地——安装（npm link + 桌面应用）、快速开始、WebUI 说明（开发/生产模式）、目录结构、安全边界、已知限制。
+
+**涉及文件：**
+- 创建：`README.md`
+
+- [x] **已完成**（commits `9d241c8` `946386c`）——命令逐一核验（npm link bin 指向、vite 代理配置）；产物路径 `desktop/build/`（修正 plan 笔误 desktop/dist）
+
+---
+
 ## 实现阶段
 
 ```
@@ -1234,9 +1298,10 @@ describe('Agent Main Loop (integration)', () => {
 阶段 13: 分发             任务 21        （Dockerfile + npm 配置）
 阶段 14: 文档             任务 22        （README）
 阶段 15: WebUI/CLI 增强    任务 23-27     （用户真实测试后提出的产品改进；依赖阶段 10-11 完成）
+阶段 16: 分发落地          任务 28-33     （2026-08-05 用户建议"输入产品名启动 CLI / 桌面应用连 WebUI"；生产模式 + npm link + Electron 桌面壳 + 打包 + README；依赖阶段 11/14 完成）
 ```
 
-**拆分后任务总数**：30（Task 11→11a/11b、Task 13→13a/13b、Task 18→18a/18b、Task 23-27 为阶段 15 产品增强）
+**拆分后任务总数**：36（Task 11→11a/11b、Task 13→13a/13b、Task 18→18a/18b、Task 23-27 为阶段 15 产品增强、Task 28-33 为阶段 16 分发落地）
 
 **可并行的任务对**：任务 2+4（LLM + 工具）、任务 6+8（配置 + 护栏）、任务 10+14（反馈 + 凭据）、任务 17+20（WebUI 服务器 + 演示）
 
@@ -1248,4 +1313,5 @@ describe('Agent Main Loop (integration)', () => {
  1 ──→ {2→3, 4→5} ──→ {6, 7} ──→ {8→9, 10→11a→11b→12} ──→ 13a→13b
                                                                    │
  14→15 ──→ 16 ──→ {17→18a→18b, 20} ──→ 19 ──→ 21 ──→ 22
+                                                          └─→ 28→29→{30→31→32, 33}
 ```
