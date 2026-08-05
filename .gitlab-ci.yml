@@ -1,0 +1,64 @@
+# GitLab CI — 与 .github/workflows/ci.yml（GitHub Actions）行为对等
+# 课程要求（§五.6）：必须包含一个名为 unit-test 的 job。
+# §4.8：每次 push 自动运行测试；项目选容器分发，CI 中构建镜像。
+
+stages:
+  - test
+  - build
+
+cache:
+  key: npm
+  paths:
+    - ~/.npm
+
+unit-test:
+  stage: test
+  image: node:22
+  script:
+    - npm ci
+    - npm test
+
+webui-client:
+  stage: test
+  image: node:20
+  script:
+    - cd src/webui/client
+    - npm ci
+    - npm test
+    - npm run build
+
+desktop:
+  stage: test
+  image: node:20
+  script:
+    - cd desktop
+    - npm ci
+    - npm test
+    - npx tsc --noEmit
+
+docker-build:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  script:
+    # 多阶段构建自包含（镜像内完成 tsc + WebUI client 构建）
+    - docker build -t codeharness .
+    # 版本号非空即可
+    - docker run --rm codeharness --version
+    - docker run --rm codeharness --help
+    # 容器内 `start --web` 必须能找到 WebUI client 构建产物（resolveStaticDir
+    # 默认 src/webui/client/dist）——不再报「WebUI 前端构建产物不存在」即证明镜像完整。
+    # 镜像 ENTRYPOINT 为 exec 形式（node dist/cli/index.js），docker run 尾部参数拼接到
+    # ENTRYPOINT 之后——命令不能带 `codeharness` 前缀，否则 commander 报 unknown option。
+    - |
+      OUTPUT="$(timeout 60 docker run --rm codeharness start --web 2>&1 || true)"
+      printf '%s\n' "$OUTPUT"
+      if printf '%s\n' "$OUTPUT" | grep -Fq "unknown option"; then
+        echo "FAIL: 命令行解析失败（docker run 尾部参数拼接到 ENTRYPOINT 后出错）" >&2
+        exit 1
+      fi
+      if printf '%s\n' "$OUTPUT" | grep -Fq "WebUI 前端构建产物不存在"; then
+        echo "FAIL: WebUI 前端构建产物缺失（resolveStaticDir 未找到 client dist）" >&2
+        exit 1
+      fi
