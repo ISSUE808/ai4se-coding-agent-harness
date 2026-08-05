@@ -80,3 +80,29 @@ jobs:
       - name: Type-check desktop
         working-directory: desktop
         run: npx tsc --noEmit
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Build Docker image
+        run: docker build -t codeharness .
+
+      - name: Verify container runs
+        run: docker run --rm codeharness --version
