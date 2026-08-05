@@ -9,9 +9,9 @@
 **CodeHarness** 是一个 Coding Agent Harness——从零构建的、用于软件开发场景的 AI 编码智能体运行框架。核心命题：**Agent = LLM + Harness**，所有机制（治理、反馈、工具、记忆）必须由代码而非提示词实现。
 
 关键文档：
-- `SPEC.md` — 完整设计规约
-- `PLAN.md` — 22 个 task 的实现计划与依赖图
-- `SPEC_PROCESS.md` — brainstorming 与冷启动验证过程记录
+- `docs/SPEC.md` — 完整设计规约
+- `docs/PLAN.md` — 22 个 task 的实现计划与依赖图
+- `docs/SPEC_PROCESS.md` — brainstorming 与冷启动验证过程记录
 
 ---
 
@@ -22,7 +22,7 @@
 
 ### 1. 每个模块第一个 task 前：创建 worktree
 
-**"模块"的定义：PLAN.md「实现阶段」中的每个阶段是一个模块。**
+**"模块"的定义：docs/PLAN.md「实现阶段」中的每个阶段是一个模块。**
 
 ```
 /using-git-worktrees
@@ -48,7 +48,7 @@
 | 13 | 分发 | Task 21 | |
 | 14 | 文档 | Task 22 | |
 
-> 并行模块（标注 ⑂）需要各自独立的 worktree。依赖关系见 PLAN.md 任务依赖图。
+> 并行模块（标注 ⑂）需要各自独立的 worktree。依赖关系见 docs/PLAN.md 任务依赖图。
 
 ### 2. 每个 task：派发 subagent，由 subagent 执行 TDD
 
@@ -97,7 +97,7 @@ Subagent: [agentId前8位]
 - 第二阶段：代码质量检查（正确性、可读性、测试覆盖）
 - Critical issue → 必须修复才能进入下一 task
 
-**代码评审通过后，立即追加 AGENT_LOG.md 条目**（见下方「AGENT_LOG 维护」节）。
+**代码评审通过后，立即追加 docs/AGENT_LOG.md 条目**（见下方「AGENT_LOG 维护」节）。
 在 commit message 中标注由哪个 subagent 完成和人工修改部分。
 
 ### 4. 模块所有 task 完成后：完成分支
@@ -126,21 +126,21 @@ merge: Phase [X] [模块名称] — Tasks [编号范围] by subagents [ID1前8�
   │                                  ├─ 红 → 绿 → 重构
   │                                  └─ commit → 返回 commit hash
   ├─ /requesting-code-review         │
-  ├─ 追加 AGENT_LOG.md               │
+  ├─ 追加 docs/AGENT_LOG.md               │
   ├─ (模块完成时)                     │
   └─ /finishing-a-development-branch │
 ```
 
 ---
 
-## 全局约束（来自 PLAN.md）
+## 全局约束（来自 docs/PLAN.md）
 
 1. **TDD 强制**：红 → 绿 → 重构，每个 task 都要走这个循环
 2. **§A.4-C 硬性判据**：核心机制必须能用 MockProvider 做确定性单测——不依赖真实 LLM
 3. **凭据不入代码/Git/日志/历史**
 4. **每个 task commit 标注 subagent**：按 §2 格式标注 subagent ID + 人工修改（§4.7 要求）。merge commit 汇总本模块所有 subagent
 5. **完成条件必验**：每个 task 的「完成条件」部分必须在声称完成前逐一验证
-6. **PLAN.md 持续更新**：每完成一个 task 即标记 `[x]` 并附 commit hash
+6. **docs/PLAN.md 持续更新**：每完成一个 task 即标记 `[x]` 并附 commit hash
 
 ---
 
@@ -167,7 +167,7 @@ merge: Phase [X] [模块名称] — Tasks [编号范围] by subagents [ID1前8�
 
 ### 触发时机
 
-代码评审通过、commit 完成后，**立即**调用 Read 工具打开 `AGENT_LOG.md`，在文件末尾追加一条新条目。
+代码评审通过、commit 完成后，**立即**调用 Read 工具打开 `docs/AGENT_LOG.md`，在文件末尾追加一条新条目。
 
 ### 条目格式
 
@@ -188,8 +188,8 @@ merge: Phase [X] [模块名称] — Tasks [编号范围] by subagents [ID1前8�
 ### 要求
 
 - 时间戳格式：`YYYY-MM-DD HH:MM`
-- 必须在你（主 agent）的回合中直接编辑 `AGENT_LOG.md`，不要让 subagent 代写
+- 必须在你（主 agent）的回合中直接编辑 `docs/AGENT_LOG.md`，不要让 subagent 代写
 - Commit hash 从 subagent 返回结果或 `git log` 中提取
 - 「人工干预」如实记录——你做了什么修改、为什么
 - 「教训」写具体的、下次能用的东西，不写空话
-- 每次追加后 commit：`git add AGENT_LOG.md && git commit -m "docs: AGENT_LOG — Task [编号]"`
+- 每次追加后 commit：`git add docs/AGENT_LOG.md && git commit -m "docs: AGENT_LOG — Task [编号]"`
