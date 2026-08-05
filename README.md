@@ -84,6 +84,17 @@ npx vitest run tests/demo   # 仅运行三项机制演示
 npm test                    # 全量测试（含演示）
 ```
 
+## 凭据模型与线上部署
+
+- **本地 / 桌面**：凭据存系统 keychain（keytar），交互式设置；keytar 不可用时降级到加密文件（encrypted-file），启动时交互输入主密码
+- **容器（线上部署）**：容器内 keytar 不可用（无系统 keychain），凭据自动降级到 encrypted-file；无交互终端，须在挂载的 `~/.codeharness/config.json` 中**预置主密码**，UI 设置密钥即可完整可用：
+
+  ```json
+  { "llm": { "masterPassword": "<自定义口令>" } }
+  ```
+
+- **无用户隔离**：WebUI 为单实例共享设计（无登录认证）——所有访问者共享同一凭据存储（`secrets.enc`）与配置，任一用户设置密钥/配置全局生效。多用户按账号隔离是已知限制；公网实例请勿配置真实密钥，演示后及时关停
+
 ## 安全边界
 
 - 工作区外操作需 HITL 人工确认（symlink 逃逸在 canonical 层拦截）
