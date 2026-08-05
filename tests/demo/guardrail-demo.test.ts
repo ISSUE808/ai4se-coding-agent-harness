@@ -47,6 +47,7 @@ async function runGuardrailStep(
           guardrailRule: guard.rule,
           guardrailCommand: command,
         },
+        approvalRequired: false, // 与 main-loop guardMsg 同构：block 时 needsApproval=false
         timestamp: '2026-08-05T00:00:00.000Z',
       },
     };

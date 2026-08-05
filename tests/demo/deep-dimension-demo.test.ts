@@ -101,7 +101,7 @@ describe('演示 3：主力维度确定性行为（深链路）', () => {
     expect(callLog).toEqual(['eslint', 'tsc']);
   });
 
-  it('FailureClassifier：eslint 失败 → syntax，tsc 失败 → type', () => {
+  it('FailureClassifier：透传 failureCategory（eslint→syntax / tsc→type 的映射发生在真实校验器内，见端到端用例）', () => {
     const classifier = new FailureClassifier();
     const eslintFailure: FeedbackResult = {
       passed: false,
