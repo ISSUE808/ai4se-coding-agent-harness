@@ -7,6 +7,7 @@
 ```bash
 npm run build
 npm link          # 全局 codeharness 命令（任意目录可用）
+# 注：npm 上 `codeharness` 包名已被无关第三方占用，本项目暂未 publish；发布前需更名
 ```
 
 ### 桌面应用（可选）
@@ -15,6 +16,30 @@ npm link          # 全局 codeharness 命令（任意目录可用）
 cd desktop && npm install && npm run dist
 # 产物：desktop/build/CodeHarness*.exe（portable 免安装 / NSIS 安装程序）
 ```
+
+## 容器化运行
+
+多阶段镜像（Task 21，SPEC §8.4）：build 阶段在镜像内完成 tsc + WebUI client 构建，自包含、不依赖宿主机预构建。
+
+```bash
+docker build -t codeharness .
+docker run --rm codeharness --version   # 验证版本号
+docker run --rm codeharness --help      # 验证 CLI 可用
+```
+
+容器内运行 WebUI（端口映射 + 挂载配置/凭据目录）：
+
+```bash
+# 注意：镜像 ENTRYPOINT 为 exec 形式（node dist/cli/index.js），docker run 的尾部参数
+# 会拼接到 ENTRYPOINT 之后——直接写 `start --web`，不要带 `codeharness` 前缀
+docker run --rm -p 3000:3000 \
+  -v "$HOME/.codeharness:/root/.codeharness" \
+  start --web
+```
+
+- `-p 3000:3000`：映射 WebUI 端口（Dockerfile `EXPOSE 3000`，浏览器访问 http://localhost:3000）
+- `-v "$HOME/.codeharness:/root/.codeharness"`：挂载用户级配置与凭据（容器内用户级配置 `~/.codeharness/config.json`，见 src/cli/options.ts）
+- 容器内 keytar 不可用（alpine 无原生绑定、无系统 keychain），凭据自动降级到 encrypted-file 后端（`~/.codeharness/secrets.enc`，与配置同目录，随挂载复用）
 
 ## 快速开始
 
@@ -45,6 +70,19 @@ src/
   webui/        # Express + WebSocket 服务器 + React SPA 客户端
   config/       # 三层配置覆盖加载（用户级 → 项目级 → CLI 参数）
   utils/        # 通用工具（环境前提检查、平台差异指引）
+```
+
+## 机制演示
+
+`tests/demo/` 三项确定性演示（Task 20，SPEC §A.6）——全部基于 mock 组件（MockProvider / mock 校验器），零外部调用（无真实 LLM / HTTP / shell 子进程），可离线复现核心机制：
+
+1. **护栏拦截**（guardrail-demo.test.ts）：MockProvider 提议执行 `rm -rf /` → PatternGuard 判定 block → 命令绝不到达执行器 → agent 收到拦截通知
+2. **反馈闭环自我修正**（feedback-demo.test.ts）：连续 3 轮修复——类型错误（targeted_fix）→ 语法错误（auto_fix）→ 通过完成
+3. **主力维度确定性行为**（deep-dimension-demo.test.ts）：动作分类 → 校验器选择 → 校验链（fail_fast / collect_all）→ 失败归类 → 策略匹配 → 轮次升级全链路
+
+```bash
+npx vitest run tests/demo   # 仅运行三项机制演示
+npm test                    # 全量测试（含演示）
 ```
 
 ## 安全边界
