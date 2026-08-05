@@ -1095,3 +1095,23 @@
   - **两套持久化路径必须同构**：PUT /api/config 的 config 路由自带默认写盘（cwd/.codeharness.json），POST /api/keys 的 registry 走注入回调（无默认）——不对称导致"config 编辑器保存持久、添加供应商不持久"。持久化责任应收敛到单一实现
   - **用户"密钥为什么持久"的疑问引出真 bug**：用户观察到 deepseek key 持久（keytar）而 nju baseUrl 丢——对比中暴露了 registry 与 key 存储的生命周期差异。用户的疑问往往比表面问题更有诊断价值
   - **CLI key status 只查当前 provider**：用户以为它列全部——设计上只显示 account=llm.provider。诊断时先确认命令语义再下结论（差点误判 key 丢失）
+
+---
+
+## 2026-08-05 17:00 Task 20：机制演示（§A.6 三项演示测试）
+
+- **触发技能**：`using-git-worktrees`（阶段 12 新模块 → worktree-demo 分支）、`test-driven-development`（RED/GREEN 独立 commit）、`requesting-code-review`（两阶段评审）
+- **Subagent**：implementer a78d2962（RED+GREEN）、reviewer a5313d24（两阶段评审 PASS）
+- **Prompt 要点**：仅新增 tests/demo/ 三个文件、零 src/ 改动；演示 2 禁止真实 eslint/tsc 子进程（mock 校验器注入 FeedbackResult）；RED 先单独 commit；Windows worker flaky 提示（重跑即可全绿）；demo 测试自给自足（CI 不联网不构建 client）
+- **产出**：
+  - Commits: `d1d0ca3`（RED，5 例失败）+ `9810d95`（GREEN，11/11）+ `246b04a`（主 agent CR Minor 修复）
+  - 涉及文件: tests/demo/guardrail-demo.test.ts（演示 1 护栏拦截）、feedback-demo.test.ts（演示 2 反馈闭环）、deep-dimension-demo.test.ts（演示 3 主力维度深链路）
+  - 测试: demo 11/11（guardrail 2 + feedback 1 + deep-dimension 8）；全量 644/644；tsc 干净
+- **人工干预**：评审 4 条 Minor 无 Critical/Important；顺手修复 2 条（246b04a）——FailureClassifier 单测标题如实化（该测试实为透传断言，eslint→syntax 映射发生在真实校验器内部）、guardMsg 补 `approvalRequired: false` 与 main-loop 同构；另 2 条 Minor 记录不修（拦截通知的 tool 错误配对属演示边界；callLog 模块级变量在串行执行下无 flaky）
+- **教训**：
+  - **演示胶水必须逐字段镜像真实链路消息**：评审逐字段核对 main-loop guardMsg 抓出缺 `approvalRequired`——"与 main-loop 同构"的注释承诺了结构一致，就要逐字段兑现
+  - **空洞透传测试的标题就是误导读物**：FailureClassifier 只是透传 failureCategory（映射在真实 validator 内），测试除 throw 外永远通过——保留它可以，但标题不能把映射责任错记到分类器头上；机制演示的意义在于展示真实管线（e2e 用例），不是孤立类冒烟
+  - **Windows 本地 vitest worker 偶发崩溃**（Worker exited unexpectedly）：全量回归首跑 631/644、重跑 644/644——验收判据要以"重跑后全绿"为准，不要被首跑 flaky 误导判错
+  - **演示测试的模块选材决定 CI 独立性**：不 import 真实 validator（eslint/tsc validator 会 spawn 子进程）→ demo 测试在 CI/本地零外部调用，符合 §A.4-C 硬性判据
+  - **`tsc --noEmit` 不覆盖 tests/（tsconfig include 只有 src/）**：项目 tsconfig `exclude: ["tests"]`——声称"tsc 干净"仅对 src/ 成立；vitest 用 esbuild 转译不做类型检查。这次把 `approvalRequired` 放错层级（应在 metadata 内，main-loop.ts:418 同构）就是被 VSCode 语言服务抓到、被 tsc 放过的实例。测试文件类型检查需显式传文件：`npx tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --skipLibCheck --esModuleInterop <测试文件...>`（修复 commit 后补验）
+
