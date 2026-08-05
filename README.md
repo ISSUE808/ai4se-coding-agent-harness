@@ -37,11 +37,20 @@ docker run --rm codeharness --version   # 验证版本号
 docker run --rm codeharness --help      # 验证 CLI 可用
 ```
 
-容器内运行 WebUI（端口映射 + 挂载配置/凭据目录）：
+容器内运行 WebUI（端口映射 + 挂载配置/凭据目录），按 ①② 顺序执行：
 
 ```bash
-# 注意：镜像 ENTRYPOINT 为 exec 形式（node dist/cli/index.js），docker run 的尾部参数
-# 会拼接到 ENTRYPOINT 之后——直接写 `start --web`，不要带 `codeharness` 前缀
+# ① 首次运行前先预置主密码——容器内无交互终端，缺了它凭据层会因无 TTY
+#    而死锁（容器不断重启）。把 <自定义口令> 换成你的口令；<<'EOF' 的单引号
+#    防止 shell 展开。若 config.json 已存在（例如曾运行过 CLI），请手动合并
+#    llm.masterPassword 字段，不要整体覆盖。
+mkdir -p ~/.codeharness
+cat > ~/.codeharness/config.json <<'EOF'
+{ "llm": { "masterPassword": "<自定义口令>" } }
+EOF
+
+# ② 启动（镜像 ENTRYPOINT 为 exec 形式（node dist/cli/index.js），docker run
+#    尾部参数会拼接到 ENTRYPOINT 之后——直接写 `start --web`，不带 codeharness 前缀）
 docker run --rm -p 3000:3000 \
   -v "$HOME/.codeharness:/root/.codeharness" \
   start --web
@@ -50,16 +59,7 @@ docker run --rm -p 3000:3000 \
 - `-p 3000:3000`：映射 WebUI 端口（Dockerfile `EXPOSE 3000`，浏览器访问 http://localhost:3000）
 - `-v "$HOME/.codeharness:/root/.codeharness"`：挂载用户级配置与凭据（容器内用户级配置 `~/.codeharness/config.json`，见 src/cli/options.ts）
 - 容器内 keytar 不可用（alpine 无原生绑定、无系统 keychain），凭据自动降级到 encrypted-file 后端（`~/.codeharness/secrets.enc`，与配置同目录，随挂载复用）
-- **首次运行前必须预置主密码**：容器内无交互终端，凭据层会因无 TTY 而死锁（容器不断重启）。先在挂载目录创建配置（把 `<自定义口令>` 换成你的口令，注意 JSON 引号；`<<'EOF'` 的单引号防止 shell 展开）：
-
-  ```bash
-  mkdir -p ~/.codeharness
-  cat > ~/.codeharness/config.json <<'EOF'
-  { "llm": { "masterPassword": "<自定义口令>" } }
-  EOF
-  ```
-
-  若 `config.json` 已存在（例如曾运行过 CLI），请手动合并 `llm.masterPassword` 字段，不要整体覆盖。凭据模型详见「凭据模型与线上部署」。
+- 凭据模型与 masterPassword 的作用详见「凭据模型与线上部署」
 
 ## 快速开始
 
