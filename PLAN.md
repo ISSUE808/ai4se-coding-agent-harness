@@ -1203,7 +1203,7 @@ describe('Agent Main Loop (integration)', () => {
 
 - [x] **已完成**（commit `9743b5f` + 评审修复 `9422977`，主项目 495 + client 166）——Session.model 全链路 + PATCH /:id/model（WS session:updated 按会话过滤）；BuildAgentLoopOptions.session → createLLMProvider model 参数（CLI 结构性回退 config）；运行中切换复用 abort+restart（finally 加 running 守卫防 pause 竞态；restartLiveRun helper）；前端上下文栏模型选择器（默认/历史/自定义 + 清除覆盖）
 
-### 任务 27：CLI 交互式 REPL（Claude Code 式）
+### 任务 27：CLI 交互式 REPL
 
 **背景**：CLI 启动/对话需手动输入完整命令（不便）
 
