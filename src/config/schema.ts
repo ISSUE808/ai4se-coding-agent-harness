@@ -8,6 +8,9 @@ export const DEFAULT_CONFIG: Config = Object.freeze({
     maxTokens: 4096,
     apiKeySource: 'keytar',
     apiKeyService: 'codeharness/deepseek',
+    // Docker/headless 预置口令（方案 B）：keytar 不可用且无交互环境时，
+    // 用此口令激活 encrypted-file 后端；缺省 undefined 走交互提示。
+    masterPassword: undefined,
     // Task 26 follow-up: the built-in registry entry mirrors the active
     // values, so the Settings "应用" action has metadata to switch back to.
     providers: {

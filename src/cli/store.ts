@@ -2,7 +2,7 @@ import { CredentialStore } from '../credentials/store.js';
 import { KeytarBackend } from '../credentials/backends/keytar-backend.js';
 import { EncryptedFileBackend } from '../credentials/backends/encrypted-file-backend.js';
 import { EnvBackend } from '../credentials/backends/env-backend.js';
-import type { CredentialBackend } from '../types.js';
+import type { Config, CredentialBackend } from '../types.js';
 
 /**
  * CLI-side CredentialStore factory — wires the SPEC §3.7 backend priority
@@ -76,4 +76,24 @@ export async function buildCredentialStore(
   }
 
   return new CredentialStore(backends);
+}
+
+/**
+ * buildStoreFromConfig — config 驱动的 CLI 凭据存储工厂（方案 B）。
+ * 读取 merged config 的 `apiKeySource`（SPEC §4.2）与 `masterPassword`
+ * （Docker/headless 预置口令，SPEC §8.5）构建 CredentialStore：keytar 不可用
+ * 且口令已预置 → encrypted-file 后端直接激活，无交互提示。
+ * `options` 仅供测试注入（keytarBackend / filePath）。
+ */
+export async function buildStoreFromConfig(
+  config: Config,
+  readHidden: (label: string) => Promise<string>,
+  options: { keytarBackend?: CredentialBackend | null; filePath?: string } = {},
+): Promise<CredentialStore> {
+  return buildCredentialStore({
+    readHidden,
+    apiKeySource: config.llm.apiKeySource, // SPEC §4.2: explicit source only
+    masterPassword: config.llm.masterPassword,
+    ...options,
+  });
 }

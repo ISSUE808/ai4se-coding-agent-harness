@@ -72,6 +72,26 @@ describe('loadConfig - 三层覆盖配置系统', () => {
     expect(cfg.agent.contextThreshold).toBe(0.8);
   });
 
+  it('用户配置 llm.masterPassword（Docker 预置口令）透传到 merged config', () => {
+    const userConfig = {
+      llm: { masterPassword: 'docker-master-pass' },
+    };
+    fs.writeFileSync(
+      path.join(userConfigDir, 'config.json'),
+      JSON.stringify(userConfig),
+    );
+
+    const cfg = loadConfig({
+      userConfigPath: path.join(userConfigDir, 'config.json'),
+      projectConfigPath: path.join(projectDir, '.codeharness.json'),
+    });
+
+    expect(cfg.llm.masterPassword).toBe('docker-master-pass');
+    // 其余字段保持默认（深度合并，非整体替换）
+    expect(cfg.llm.provider).toBe(DEFAULT_CONFIG.llm.provider);
+    expect(cfg.llm.baseUrl).toBe(DEFAULT_CONFIG.llm.baseUrl);
+  });
+
   // ---- 3. 项目配置覆盖用户配置 ----
 
   it('项目配置文件 (.codeharness.json) 应覆盖用户配置', () => {

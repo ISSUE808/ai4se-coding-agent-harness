@@ -38,7 +38,7 @@ import type { SecureHandle } from '../../credentials/secure-handle.js';
 import { loadConfig } from '../../config/loader.js';
 import type { LoadConfigOptions } from '../../config/loader.js';
 import { defaultConfigOptions } from '../options.js';
-import { buildCredentialStore } from '../store.js';
+import { buildStoreFromConfig } from '../store.js';
 import { promptHidden, readKeyWithConfirm } from '../prompt.js';
 import { adviceFor } from '../errors.js';
 // Task 27: the REPL module reuses the CLI run semantics (streaming, HITL
@@ -457,11 +457,7 @@ function buildDefaultAgentLoop(deps: StartCommandDeps): BuildAgentLoop {
     const store =
       deps.store ??
       (await (deps.storeFactory ??
-        (() =>
-          buildCredentialStore({
-            readHidden,
-            apiKeySource: config.llm.apiKeySource, // SPEC §4.2: explicit source only
-          })))());
+        (() => buildStoreFromConfig(config, readHidden)))());
     // Task 26: the session-level model override (if any) wins over
     // config.llm.model — CLI `start <task>` has no session, so it always
     // falls back to the config default.
@@ -833,11 +829,7 @@ async function runWebAction(deps: StartCommandDeps): Promise<void> {
     const readHidden = deps.readHidden ?? promptHidden;
     // One credential store shared by the server AND every loop build.
     const credentialStore = await (deps.storeFactory ??
-      (() =>
-        buildCredentialStore({
-          readHidden,
-          apiKeySource: config.llm.apiKeySource, // SPEC §4.2: explicit source only
-        })))();
+      (() => buildStoreFromConfig(config, readHidden)))();
     const buildAgentLoop =
       deps.buildAgentLoop ?? buildDefaultAgentLoop({ ...deps, store: credentialStore });
     const print = deps.print ?? console.log;

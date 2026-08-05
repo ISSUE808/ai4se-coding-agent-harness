@@ -8,7 +8,9 @@ import { createConfigCommand } from './commands/config.js';
 import type { ConfigCommandDeps } from './commands/config.js';
 import { createStartCommand, runReplAction } from './commands/start.js';
 import type { StartCommandDeps } from './commands/start.js';
-import { buildCredentialStore } from './store.js';
+import { buildStoreFromConfig } from './store.js';
+import { loadConfig } from '../config/loader.js';
+import { defaultConfigOptions } from './options.js';
 import { promptHidden } from './prompt.js';
 
 /**
@@ -47,7 +49,10 @@ export function createProgram(deps: ProgramDeps = {}, options: ProgramOptions = 
 
   program.addCommand(
     createKeyCommand({
-      storeFactory: async () => buildCredentialStore({ readHidden: promptHidden }),
+      storeFactory: async () => {
+        const config = loadConfig(defaultConfigOptions());
+        return buildStoreFromConfig(config, promptHidden);
+      },
       readHidden: promptHidden,
       print: console.log,
       errPrint: console.error,

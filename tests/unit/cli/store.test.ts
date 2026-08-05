@@ -2,9 +2,13 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { buildCredentialStore } from '../../../src/cli/store.js';
+import {
+  buildCredentialStore,
+  buildStoreFromConfig,
+} from '../../../src/cli/store.js';
 import { CredentialStore } from '../../../src/credentials/store.js';
-import type { CredentialBackend } from '../../../src/types.js';
+import { DEFAULT_CONFIG } from '../../../src/config/schema.js';
+import type { Config, CredentialBackend } from '../../../src/types.js';
 
 /**
  * buildCredentialStore — CLI-side wiring of the SPEC §3.7 backend priority
@@ -141,5 +145,43 @@ describe('buildCredentialStore (SPEC §3.7 priority chain from the CLI)', () => 
       filePath: tmpSecretsPath(),
     });
     expect((await store.getActiveBackend()).name).toBe('encrypted-file');
+  });
+});
+
+describe('buildStoreFromConfig — config 驱动的凭据存储（方案 B：Docker 预置口令）', () => {
+  it('keytar 不可用 + config.llm.masterPassword 预置 → encrypted-file 激活，零交互（容器场景）', async () => {
+    const readHidden = vi.fn(async () => {
+      throw new Error('容器无 TTY，不得提示交互输入');
+    });
+    const store = await buildStoreFromConfig(
+      {
+        ...DEFAULT_CONFIG,
+        llm: { ...DEFAULT_CONFIG.llm, masterPassword: 'docker-master-pass' },
+      } as Config,
+      readHidden,
+      { keytarBackend: null, filePath: tmpSecretsPath() },
+    );
+    expect((await store.getActiveBackend()).name).toBe('encrypted-file');
+    expect(readHidden).not.toHaveBeenCalled();
+
+    // 真实读写 roundtrip：线上 WebUI /api/keys 链路可用
+    await store.save('codeharness/deepseek', 'deepseek', 'sk-live');
+    await expect(store.status('codeharness/deepseek', 'deepseek')).resolves.toBe(
+      '****-live',
+    );
+  });
+
+  it('透传 config.llm.apiKeySource（显式 env 时不需要口令）', async () => {
+    const readHidden = vi.fn(async () => {
+      throw new Error('env 模式不得提示口令');
+    });
+    process.env.CODEHARNESS_API_KEY = 'sk-env-test';
+    const store = await buildStoreFromConfig(
+      { ...DEFAULT_CONFIG, llm: { ...DEFAULT_CONFIG.llm, apiKeySource: 'env' } } as Config,
+      readHidden,
+      { keytarBackend: null },
+    );
+    expect((await store.getActiveBackend()).name).toBe('env');
+    expect(readHidden).not.toHaveBeenCalled();
   });
 });

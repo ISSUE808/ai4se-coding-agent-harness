@@ -126,6 +126,13 @@ export interface Config {
     apiKeySource: 'keytar' | 'encrypted_file' | 'env';
     apiKeyService: string;
     /**
+     * Pre-supplied encrypted-file master password (Docker/headless
+     * deployments, SPEC §8.5): when keytar is unavailable and no interactive
+     * prompt is possible, this activates the encrypted-file backend without
+     * prompting. Falls back to interactive input when unset.
+     */
+    masterPassword?: string;
+    /**
      * Task 26 follow-up: provider registry — per-provider connection
      * metadata. `llm.provider`/`llm.baseUrl`/`llm.model` are the ACTIVE
      * provider's values; this map keeps every registered provider's
