@@ -1154,3 +1154,23 @@
   - **cwd 漂移根因链**：portable 每次自解压到新 `%TEMP%` 目录 → 后端 cwd 漂移 → projectConfigPath/registry 持久化（均基于 cwd）写入临时目录 → 重启即失；keytar 是系统级（%APPDATA% 凭据库）不受影响——"key 还在、baseUrl 空"恰好暴露了凭据（系统级）与配置（cwd 级）的存储分层
   - **同一 POST 的存储分层可作故障二分**：POST /api/keys 先写 keytar（key）再 persistConfig（baseUrl）——`node dist/cli/index.js key status` 验证 keytar 状态，可快速区分"保存链路失败"与"持久化路径漂移"两类故障（本次 keytar 无 nju 说明旧会话保存从未成功，用户看到的行属 UI 内存态）
   - **全盘搜索配置文件是高效证据**：`.codeharness.json` 搜索（%TEMP%/%APPDATA%/%USERPROFILE%）一次排除所有候选写入位置——30+ 解压目录全部无文件，直接把怀疑从"哪个 cwd"逼到"写没写入"
+
+
+---
+
+## 2026-08-05 23:22 Task 22：README 补充（Docker 用法 + npm 全局安装 + 机制演示）
+
+- **触发技能**：`using-git-worktrees`（阶段 14 文档模块 → worktree-docs 分支）、`requesting-code-review`（两阶段评审 REVISE → 修复 → 容器实测）
+- **Subagent**：implementer 2e36ca82（README 三处增量，commit `805d2c4`）；reviewer af30f06a（两阶段评审）
+- **Prompt 要点**：Task 22 在 PLAN 已由 Task 33 落地（README 基础版），本次补充分发专项后的三个增量（容器化运行 / npm 全局安装 / 机制演示）；纪律要求"先读后写"——每条命令/路径/名称必须以真实文件为依据（Dockerfile、ci.yml、options.ts、encrypted-file-backend.ts、tests/demo），禁止凭训练数据编造
+- **产出**：
+  - Commits: `805d2c4`（subagent 增量）、`cba722f`（CR 修复，主 agent）、`f4eaa53`（merge PR #13）
+  - 涉及文件: README.md（+38 行）、.github/workflows/ci.yml（断言补强 +7 行）
+  - 评审: REVISE → 修复 → 容器内实测（`docker run --rm codeharness start --web` 不再报 unknown option，正确走到凭据层）
+- **人工干预**：① subagent 把 commit 落在了 master（派发未指定 worktree）——cherry-pick 到 worktree-docs + master reset 纠偏，请用户手动跑 git 命令；② CR 修复全部由主 agent 完成（C1 容器命令前缀、C2 ci.yml 弱断言、I1 npm 包名占用、M1 措辞）
+- **教训**：
+  - **ENTRYPOINT exec 形式下 docker run 尾部参数直接拼接**：`docker run ... codeharness start --web` 实际执行 `node dist/cli/index.js codeharness start --web` → commander 把多余 operand 解析错乱报 unknown option（--version/--help 因短路不受影响，恰好只咬 start）——README 写了带前缀命令，评审实测揪出。验证 docker 命令必须考虑 ENTRYPOINT 拼接语义
+  - **弱断言 CI 是"绿得心安理得"的温床**：ci.yml 的 start --web 检查用 `|| true` + 仅 grep 一个错误串——命令行解析错误（unknown option）永远发现不了。评审 C2 补 grep 后，"容器内 --web 可用"的 Task 21 结论才真正有护栏
+  - **README 的"可复制执行命令"必须逐条实测**：`npm install -g codeharness` 一行——npm registry 上该包名已被无关第三方占用（评审 WebFetch 查证），install 会装上别人家的软件。写安装文档前要查包名占用
+  - **派发 subagent 必须显式指定 worktree**：Agent 工具默认在主工作目录跑——不传 isolation 或 cd 指令，subagent 会把 commit 落在 master。纠偏成本（cherry-pick + reset + 用户手动命令）远高于派发时多写一句"在 <worktree 路径> 下操作"
+  - **"命令与 CI 实测一致"是内部行话**：README 面向用户，应写事实（多阶段自包含）而非流程（ci.yml 怎么验的）——且断言修复前"实测一致"本身不成立

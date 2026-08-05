@@ -1149,6 +1149,7 @@ describe('Agent Main Loop (integration)', () => {
 - 创建/完成：`README.md`
 
 - [x] **已完成**（2026-08-05，Task 33 落地——README.md 由分发专项实施：项目概述、安装（npm link + 桌面应用）、快速开始、key 配置指南、WebUI 说明、目录结构、安全边界、已知限制；commits `9d241c8` `946386c`）
+- [x] **补充**（2026-08-05，worktree-docs 分支 PR #13——README 补分发专项后增量：容器化运行（多阶段镜像 + 容器内 WebUI + keytar 降级）、npm 包名占用说明、机制演示小节；评审 REVISE→修复：容器命令去 `codeharness` 前缀（ENTRYPOINT exec 拼接实测）、ci.yml start --web 断言补 unknown option 检查、npm install -g 行因包名被第三方占用改为注释；commits `805d2c4` `cba722f` `f4eaa53`）
 
 提交：`docs: README`
 
