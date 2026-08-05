@@ -42,6 +42,9 @@ logs/
 PREPARATION_CHECKLIST.md
 #CLAUDE.md
 
+# WebUI 设计原型（Task 18a 工作产物，非交付物）
+Web-Prototype/
+
 .claude/
 
 # desktop 独立 package

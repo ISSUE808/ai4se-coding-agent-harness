@@ -7,7 +7,6 @@
 ```bash
 npm run build
 npm link          # 全局 codeharness 命令（任意目录可用）
-# 注：npm 上 `codeharness` 包名已被无关第三方占用，本项目暂未 publish；发布前需更名
 ```
 
 ### 桌面应用（可选）
@@ -89,7 +88,3 @@ npm test                    # 全量测试（含演示）
 
 - 工作区外操作需 HITL 人工确认（symlink 逃逸在 canonical 层拦截）
 - 凭据不入代码/Git/日志/历史
-
-## 已知限制
-
-已知问题与改进清单见 [KNOWN_ISSUES.md](KNOWN_ISSUES.md)——含 CLI `--cwd` 可选增强未实现、目录选择器整机浏览端点（安全取舍，仅元数据不返回内容）等，按优先级维护。
