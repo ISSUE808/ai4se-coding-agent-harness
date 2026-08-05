@@ -797,6 +797,31 @@ function loadStartConfig(deps: StartCommandDeps): Config {
 }
 
 /**
+ * Default `start --web` config persistence (real-test fix): POST /api/keys
+ * registry writes and PUT /api/config both persist through the harness's
+ * persistConfig channel — with nothing wired that channel is a no-op, so a
+ * WebUI-added provider's baseUrl/defaultModel only lived in the in-memory
+ * liveConfig and vanished on restart. The CLI default writes the project-level
+ * config file the loader reads back on startup — same path resolution and
+ * write format as the config router's default (config.ts). The path is a lazy
+ * getter so resolution happens at write time (testable against a temp file).
+ */
+export function createDefaultPersistConfig(
+  getProjectPath: () => string,
+): (config: Config) => Promise<void> {
+  return async (config: Config) => {
+    // `fs` here is the callback API (`import * as fs`) — writeFile without a
+    // callback throws; use the promises variant (config.ts's default does the
+    // same write via `promises as fs`).
+    await fs.promises.writeFile(
+      getProjectPath(),
+      `${JSON.stringify(config, null, 2)}\n`,
+      'utf-8',
+    );
+  };
+}
+
+/**
  * `start --web` (Task 19, SPEC §9): same-process WebUI + real agent loop.
  * Sessions created in the browser run on the live loop; the process stays
  * up until Ctrl+C (injectable for tests).
@@ -822,7 +847,15 @@ async function runWebAction(deps: StartCommandDeps): Promise<void> {
       events,
       credentialStore,
       buildAgentLoop,
-      persistConfig: deps.persistConfig,
+      // Real-test fix: the production chain (createProgram → createStartCommand)
+      // never provides deps.persistConfig, so the registry writes from POST
+      // /api/keys were lost on restart. Default to writing the project config
+      // file — the same path the loader read at startup.
+      persistConfig:
+        deps.persistConfig ??
+        createDefaultPersistConfig(
+          () => deps.config?.projectConfigPath ?? path.join(process.cwd(), '.codeharness.json'),
+        ),
     });
     print(`[web] WebUI on http://localhost:${harness.port} — Ctrl+C to stop`);
     await (deps.waitForShutdown ?? waitForSigint)();

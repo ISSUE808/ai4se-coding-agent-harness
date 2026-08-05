@@ -31,6 +31,7 @@ import {
   runStartTask,
   createLLMProvider,
   formatMessageLine,
+  createDefaultPersistConfig,
 } from '../../../src/cli/commands/start.js';
 import { createProgram } from '../../../src/cli/index.js';
 import { mockBackend, parseCaptured } from './helpers.js';
@@ -401,6 +402,36 @@ describe('createLLMProvider', () => {
   });
 });
 
+describe('createDefaultPersistConfig', () => {
+  it('writes the full config to the resolved project path (provider registry survives restart)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-persist-'));
+    const projectPath = path.join(dir, '.codeharness.json');
+    try {
+      const persist = createDefaultPersistConfig(() => projectPath);
+      const config: Config = {
+        ...makeConfig(),
+        llm: {
+          ...DEFAULT_CONFIG.llm,
+          providers: {
+            ...DEFAULT_CONFIG.llm.providers,
+            nju: { baseUrl: 'https://nju.example.com', defaultModel: 'nju-chat' },
+          },
+        },
+      };
+      await persist(config);
+      const raw = fs.readFileSync(projectPath, 'utf-8');
+      // Same write format as PUT /api/config's default (config.ts): pretty-
+      // printed JSON + trailing newline — the loader reads it back on startup.
+      expect(raw.endsWith('\n')).toBe(true);
+      expect(JSON.parse(raw)).toEqual(config);
+      expect(raw).toContain('"nju"');
+      expect(raw).toContain('https://nju.example.com');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('createStartCommand wiring', () => {
   it('`start <task>` loads config and runs the loop, printing messages to stdout', async () => {
     const out: string[] = [];
@@ -481,6 +512,65 @@ describe('createStartCommand wiring', () => {
         process.env.CODEHARNESS_WEBUI_DIR = originalWebuiDir;
       }
       fs.rmSync(webuiDir, { recursive: true, force: true });
+    }
+  });
+
+  it('`start --web`: POST /api/keys persists the provider registry to the project config (restart survives)', async () => {
+    // Real-test regression: runWebAction 生产链路从不提供 deps.persistConfig
+    // → createWebHarness 的持久化通道是 no-op → POST /api/keys 的 registry
+    // 写入（baseUrl/defaultModel）只更新内存 liveConfig，重启后端后 baseUrl
+    // 丢失（key 在 keytar 不受影响）。修复后默认 persistConfig 写项目配置
+    // 文件（与 PUT /api/config 的缺省同路径同格式），重启后 registry 保留。
+    const webuiDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeharness-cli-webui-'));
+    fs.writeFileSync(path.join(webuiDir, 'index.html'), '<!doctype html><title>CodeHarness</title>');
+    const projectPath = path.join(workspaceRoot, 'webui-keys-project.json');
+    expect(fs.existsSync(projectPath)).toBe(false);
+    const originalWebuiDir = process.env.CODEHARNESS_WEBUI_DIR;
+    let postStatus = 0;
+    let persisted = '';
+    try {
+      process.exitCode = 0;
+      process.env.CODEHARNESS_WEBUI_DIR = webuiDir;
+      const printed: string[] = [];
+      const cmd = createStartCommand({
+        config: {
+          userConfigPath: path.join(workspaceRoot, 'missing-user.json'),
+          projectConfigPath: projectPath,
+          cliArgs: { webui: { port: 0 } }, // ephemeral port
+        },
+        storeFactory: async () => new CredentialStore([mockBackend('mem', { secret: 'sk-mock' }).backend]),
+        buildAgentLoop: buildMockAgentLoop([{ content: 'done' }]),
+        print: (line) => printed.push(line),
+        waitForShutdown: async () => {
+          // The server is live and the URL line is printed — POST a provider
+          // now, then let the command shut down. The keys route awaits
+          // persistence BEFORE responding, so a 200 means the file write
+          // already completed.
+          const urlLine = printed.find((l) => l.includes('[web] WebUI'));
+          const port = Number(urlLine?.match(/localhost:(\d+)/)?.[1] ?? 0);
+          const res = await fetch(`http://localhost:${port}/api/keys/nju`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ baseUrl: 'https://nju.example.com', apiKey: 'sk-nju-test' }),
+          });
+          postStatus = res.status;
+          persisted = fs.existsSync(projectPath) ? fs.readFileSync(projectPath, 'utf-8') : '';
+        },
+      });
+      const result = await parseCaptured(cmd, ['start', '--web']);
+      expect(postStatus).toBe(200);
+      expect(persisted).toContain('"nju"');
+      expect(persisted).toContain('https://nju.example.com');
+      expect(printed.some((l) => l.includes('[web] WebUI'))).toBe(true);
+      expect(result.err).toBe('');
+    } finally {
+      if (originalWebuiDir === undefined) {
+        delete process.env.CODEHARNESS_WEBUI_DIR;
+      } else {
+        process.env.CODEHARNESS_WEBUI_DIR = originalWebuiDir;
+      }
+      fs.rmSync(webuiDir, { recursive: true, force: true });
+      fs.rmSync(projectPath, { force: true });
     }
   });
 
