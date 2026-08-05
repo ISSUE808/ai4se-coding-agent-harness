@@ -475,9 +475,9 @@ $ codeharness key reset           # 清除所有 key
 
 CI 中 `docker build` 作为验证步骤，git tag 触发自动 push 到 GHCR。
 
-### 8.5 桌面应用分发（2026-08-05，Task 28-33）
+### 8.5 桌面应用分发
 
-**背景**：用户建议「像 Claude Code 一样输入产品名就能启动 CLI」+「桌面应用打开就连接 WebUI」。三层架构（每层独立可验证）：
+三层架构（每层独立可验证）：
 
 ```
 第 3 层  Electron 桌面壳（desktop/）——双击打开 → 独立窗口 → 自动连上 WebUI

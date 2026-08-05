@@ -1152,7 +1152,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ### 任务 23：fs 浏览端点 + 目录选择器 + 会话详情文件树
 
-**背景（用户建议）**：新建会话工作目录需手动输入路径（不便）；会话详情左栏只显示文件变更（希望显示工作目录文件树）。
+**背景**：新建会话工作目录需手动输入路径（不便）；会话详情左栏只显示文件变更（希望显示工作目录文件树）。
 
 **涉及文件：**
 - 创建：`src/webui/api/fs.ts`——`GET /api/fs/tree?path=<dir>` 枚举目录树（含文件大小/类型；越界拦截——仅限授权的工作目录；深度限制防爆炸）
@@ -1166,7 +1166,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ### 任务 24：MD 渲染 + 移除搜索框
 
-**背景（用户建议）**：AI 输出的 markdown 应以渲染预览显示；右上角搜索框无功能应删除。
+**背景**：AI 输出的 markdown 应以渲染预览显示；右上角搜索框无功能应删除。
 
 **涉及文件：**
 - 修改：`src/webui/client/src/components/MessageList.tsx`——assistant 消息用 **react-markdown** 安全渲染（样式对齐 design-tokens：代码块/表格/列表/行内代码；禁用危险 HTML——防 XSS）
@@ -1178,7 +1178,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ### 任务 25：自定义供应商 + 模型/护栏可编辑
 
-**背景（用户建议）**：API Keys 仅三家供应商（需支持任意自定义供应商）；设置"模型与护栏"只读（需可直接修改并同步配置）。
+**背景**：API Keys 仅三家供应商（需支持任意自定义供应商）；设置"模型与护栏"只读（需可直接修改并同步配置）。
 
 **涉及文件：**
 - 修改：`src/webui/api/keys.ts`——新增 `GET /api/keys`（枚举凭据库中已配置的 provider）
@@ -1190,7 +1190,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ### 任务 26：对话中切换模型
 
-**背景（用户建议）**：切换模型应便捷（对话中即可），不必每次改配置。
+**背景**：切换模型应便捷（对话中即可），不必每次改配置。
 
 **涉及文件：**
 - 修改：`src/types.ts`（Session 增加 `model?: string`）、`src/webui/session-store.ts`（create 支持 model）
@@ -1205,7 +1205,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ### 任务 27：CLI 交互式 REPL（Claude Code 式）
 
-**背景（用户建议）**：CLI 启动/对话需手动输入完整命令（不便）——参考 Claude Code 交互界面。
+**背景**：CLI 启动/对话需手动输入完整命令（不便）
 
 **涉及文件：**
 - 修改：`src/cli/index.ts`、`src/cli/commands/start.ts`——无参数启动进入 **REPL**（readline 交互循环：提示符 → 输入任务 → 运行 agent → 流式输出 → 等待下一条指令 → **消息注入**（复用 onMessageAdded 机制）→ 继续；`/exit`、`/help` 等斜杠命令）
@@ -1219,7 +1219,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ### 任务 28：生产模式静态服务（server staticDir + SPA fallback）✅ — `006d448`
 
-**背景（用户建议，2026-08-05）**：CLI/WebUI 启动需手动输入命令（不便）——分发专项（桌面应用 + 全局命令）第 1 层底座：`codeharness start --web` 单命令即可浏览器使用完整 WebUI。
+**背景**：CLI/WebUI 启动需手动输入命令（不便）——分发专项（桌面应用 + 全局命令）第 1 层底座：`codeharness start --web` 单命令即可浏览器使用完整 WebUI。
 
 **涉及文件：**
 - 修改：`src/webui/server.ts`（`WebUIServerDeps.staticDir` + 静态挂载 + SPA fallback）

@@ -48,3 +48,5 @@ PREPARATION_CHECKLIST.md
 desktop/build/
 desktop/node_modules/
 desktop/backend-pack/
+# 项目级个人配置（含本机路径，运行生成）
+.codeharness.json
