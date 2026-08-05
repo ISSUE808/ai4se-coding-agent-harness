@@ -1113,4 +1113,5 @@
   - **空洞透传测试的标题就是误导读物**：FailureClassifier 只是透传 failureCategory（映射在真实 validator 内），测试除 throw 外永远通过——保留它可以，但标题不能把映射责任错记到分类器头上；机制演示的意义在于展示真实管线（e2e 用例），不是孤立类冒烟
   - **Windows 本地 vitest worker 偶发崩溃**（Worker exited unexpectedly）：全量回归首跑 631/644、重跑 644/644——验收判据要以"重跑后全绿"为准，不要被首跑 flaky 误导判错
   - **演示测试的模块选材决定 CI 独立性**：不 import 真实 validator（eslint/tsc validator 会 spawn 子进程）→ demo 测试在 CI/本地零外部调用，符合 §A.4-C 硬性判据
+  - **`tsc --noEmit` 不覆盖 tests/（tsconfig include 只有 src/）**：项目 tsconfig `exclude: ["tests"]`——声称"tsc 干净"仅对 src/ 成立；vitest 用 esbuild 转译不做类型检查。这次把 `approvalRequired` 放错层级（应在 metadata 内，main-loop.ts:418 同构）就是被 VSCode 语言服务抓到、被 tsc 放过的实例。测试文件类型检查需显式传文件：`npx tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --skipLibCheck --esModuleInterop <测试文件...>`（修复 commit 后补验）
 

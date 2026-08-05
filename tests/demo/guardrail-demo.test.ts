@@ -44,10 +44,10 @@ async function runGuardrailStep(
         role: 'system',
         content: `Operation paused for human approval: ${guard.rule}`,
         metadata: {
+          approvalRequired: false, // 与 main-loop guardMsg 同构：block 时 needsApproval=false
           guardrailRule: guard.rule,
           guardrailCommand: command,
         },
-        approvalRequired: false, // 与 main-loop guardMsg 同构：block 时 needsApproval=false
         timestamp: '2026-08-05T00:00:00.000Z',
       },
     };
