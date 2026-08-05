@@ -37,6 +37,11 @@ describe('buildBackendCommand', () => {
     expect(cmd.args).toEqual([path.join('C:/app/backend', 'dist', 'cli', 'index.js'), 'start', '--web']);
     expect(cmd.env.ELECTRON_RUN_AS_NODE).toBe('1');
   });
+  it('稳定 cwd 选项：打包后 backendDir 在 portable 临时解压目录（每次漂移），配置持久化必须用稳定用户目录', () => {
+    const cmd = buildBackendCommand('C:/app/backend', 'node', { cwd: 'C:/Users/x/AppData/Roaming/CodeHarness' });
+    expect(cmd.cwd).toBe('C:/Users/x/AppData/Roaming/CodeHarness');
+    expect(cmd.args[0]).toBe(path.join('C:/app/backend', 'dist', 'cli', 'index.js')); // 其余字段不受影响
+  });
 });
 
 describe('waitForPort', () => {
@@ -62,6 +67,26 @@ describe('killProcessTree', () => {
 });
 
 describe('runDesktopLifecycle', () => {
+  it('backendCwd 注入：spawn 后端使用稳定 cwd（打包后 backendDir 在 portable 临时解压目录，配置持久化必须用稳定用户目录）', async () => {
+    const spawnBackend = vi.fn(() => 999);
+    const waitForPort = vi.fn()
+      .mockRejectedValueOnce(new Error('not ready'))
+      .mockResolvedValueOnce(undefined);
+    const deps = {
+      projectRoot: 'C:/dev/codeharness',
+      backendCwd: 'C:/Users/x/AppData/Roaming/CodeHarness',
+      createWindow: vi.fn(),
+      spawnBackend,
+      waitForPort,
+      killProcessTree: vi.fn(),
+      showError: vi.fn(),
+      onExit: vi.fn(),
+    };
+    await runDesktopLifecycle(deps);
+    expect(spawnBackend).toHaveBeenCalledTimes(1);
+    expect(spawnBackend.mock.calls[0][0].cwd).toBe('C:/Users/x/AppData/Roaming/CodeHarness');
+  });
+
   it('端口已就绪 → 直接开窗，不 spawn 后端', async () => {
     const createWindow = vi.fn();
     const spawnBackend = vi.fn();

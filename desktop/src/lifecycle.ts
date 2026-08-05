@@ -40,7 +40,11 @@ export function resolveNodePath(isPackaged: boolean, execPath: string): string {
  * 默认 'node' 保留开发/测试语义——只有 nodePath !== 'node'（electron.exe run-as-node）
  * 才设置 ELECTRON_RUN_AS_NODE。nodePath 由 resolveNodePath 解析。
  */
-export function buildBackendCommand(backendDir: string, nodePath = 'node'): {
+export function buildBackendCommand(
+  backendDir: string,
+  nodePath = 'node',
+  options?: { cwd?: string },
+): {
   cmd: string;
   args: string[];
   env: Record<string, string>;
@@ -57,7 +61,11 @@ export function buildBackendCommand(backendDir: string, nodePath = 'node'): {
     cmd: nodePath,
     args: [path.join(backendDir, 'dist', 'cli', 'index.js'), 'start', '--web'],
     env,
-    cwd: backendDir,
+    // 稳定 cwd：打包后 backendDir 位于 portable 临时解压目录（每次运行漂移），
+    // 而配置（projectConfigPath = cwd/.codeharness.json）与 registry 持久化都以
+    // cwd 为基准——漂移会导致重启后配置丢失（B11 桌面验收实测）。桌面应用
+    // 由 main.ts 传 app.getPath('userData')（如 %APPDATA%\CodeHarness）。
+    cwd: options?.cwd ?? backendDir,
   };
 }
 
@@ -101,6 +109,13 @@ export function killProcessTree(
 export interface DesktopLifecycleDeps {
   projectRoot: string;
   resourcesPath?: string;
+  /**
+   * 后端进程的稳定工作目录（默认 backendDir）。
+   * 打包后 backendDir 在 portable 临时解压目录（每次运行漂移）——配置持久化
+   * （projectConfigPath/registry 写 cwd/.codeharness.json）需要稳定 cwd。
+   * 桌面应用由 main.ts 传 app.getPath('userData')。
+   */
+  backendCwd?: string;
   /** 打开主窗口（url 就绪后调用）。返回可被 close 的窗口句柄（可为 undefined）。 */
   createWindow: (url: string) => void;
   /** spawn 后端进程，返回 pid 或 null（spawn 失败）。 */
@@ -148,7 +163,11 @@ export async function runDesktopLifecycle(deps: DesktopLifecycleDeps): Promise<D
 
   if (!ready) {
     const backendDir = resolveBackendDir({ resourcesPath: deps.resourcesPath, projectRoot: deps.projectRoot });
-    const cmd = buildBackendCommand(backendDir, deps.nodePath);
+    const cmd = buildBackendCommand(
+      backendDir,
+      deps.nodePath,
+      deps.backendCwd !== undefined ? { cwd: deps.backendCwd } : undefined,
+    );
     backendPid = deps.spawnBackend(cmd);
     if (backendPid === null) {
       // spawn 失败（如 node 不存在）：立即报错，不空等 30s 轮询。

@@ -27,6 +27,10 @@ app.whenReady().then(async () => {
   const lifecycle = await runDesktopLifecycle({
     projectRoot,
     resourcesPath: app.isPackaged ? process.resourcesPath : undefined,
+    // 稳定 cwd：打包后后端 backendDir 位于 portable 临时解压目录（每次运行漂移），
+    // 配置持久化（cwd/.codeharness.json）需固定位置——userData（%APPDATA%\CodeHarness）
+    // 是 Electron 保证存在的稳定用户目录（B11 桌面验收实测：baseUrl 重启丢失）。
+    backendCwd: app.getPath('userData'),
     // 打包内没有系统 Node：electron.exe 以 ELECTRON_RUN_AS_NODE=1 纯 Node 模式运行后端。
     // ABI 真相：打包内 keytar 按打包机系统 Node ABI 编译（backend/node_modules 是
     // verbatim 复制，@electron/rebuild 无物可重建），与 electron 内嵌 Node（20.18/ABI 115）
