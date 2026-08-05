@@ -11,7 +11,11 @@ npm link          # 全局 codeharness 命令（任意目录可用）
 
 ### 桌面应用（可选）
 
+打包依赖后端产物与 WebUI 前端产物（prepare-resources.mjs 强制检查，缺失即报错），需先构建：
+
 ```bash
+npm run build                                   # 后端产物 dist/
+cd src/webui/client && npm run build && cd ../..  # WebUI 前端产物 client/dist/
 cd desktop && npm install && npm run dist
 # 产物：desktop/build/CodeHarness*.exe（portable 免安装 / NSIS 安装程序）
 ```
