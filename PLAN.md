@@ -1130,12 +1130,14 @@ describe('Agent Main Loop (integration)', () => {
 - 修改：`package.json`（添加 `files`、`publishConfig`）
 
 - [x] **npm link 部分已落地**（2026-08-05，Task 29——`npm link` 全局 `codeharness` 命令，bin/shebang 已就位零代码；npm publish 仍未做，维持待办）
-- [ ] **步骤 1：Dockerfile**——FROM node:20-alpine, COPY package*.json, RUN npm ci --omit=dev, COPY dist/, EXPOSE 3000, ENTRYPOINT node dist/cli/index.js
-- [ ] **步骤 2：.dockerignore**——排除 node_modules、tests、.git、.env、secrets、*.cred
-- [ ] **步骤 3：npm 配置**——`"files": ["dist/", "README.md", "LICENSE"]`，`"publishConfig": {"access": "public"}`（npm publish 待办）
-- [ ] **步骤 4：构建并验证**——`npm run build && docker build -t codeharness . && docker run --rm codeharness --version`
-- [ ] **步骤 5：CI 更新**——在 `.github/workflows/ci.yml` 中添加 `docker-build` job
-- [ ] **步骤 6：提交**
+- [x] **步骤 1：Dockerfile**——多阶段构建（CR 修复）：build 阶段（node:20.19.4-alpine3.22）镜像内完成 `npm ci --ignore-scripts` + tsc + client vite 构建；runtime 阶段 `npm ci --omit=dev --ignore-scripts` + COPY --from=build 两处产物 + EXPOSE 3000 + ENTRYPOINT node dist/cli/index.js（keytar 降级 encrypted-file，SPEC「Docker 不走 keytar」）
+- [x] **步骤 2：.dockerignore**——排除 node_modules/tests/scripts/docs/.github/.git/*.md/日志/.claude/desktop/凭据模式（根锚定 /secrets /credentials）；src 与 client 保留（多阶段构建需要）
+- [x] **步骤 3：npm 配置**——`"files": ["dist/", "README.md"]`（LICENSE 文件不存在故未引用）、`"publishConfig": {"access": "public"}`；npm publish 维持待办
+- [x] **步骤 4：构建并验证**——docker build 成功（235MB）、`--version`→0.1.0、`--help` exit 0、容器内 `start --web` 找到 client dist（挂载配置后真实 listen）、npm pack --dry-run 126 文件 97.4kB
+- [x] **步骤 5：CI 更新**——docker-build job（checkout → docker build → --version/--help/--web 三项容器验证）
+- [x] **步骤 6：提交**
+
+**已完成**（2026-08-05，worktree-dist 分支）——commits `7b3c0a4`（配置）`1f30811`（CI）`9df1b74`（CR 修复多阶段构建）`f11e311`（版本断言不硬编码）+ AGENT_LOG；两阶段评审 REVISE→修复→主 agent 复核实测 PASS；全量 644/644 + tsc 干净。
 
 提交：`feat: Docker + npm distribution with CI docker-build job`
 
