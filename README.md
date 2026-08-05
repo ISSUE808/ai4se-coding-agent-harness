@@ -5,8 +5,15 @@
 ## 安装
 
 ```bash
+npm install
 npm run build
 npm link          # 全局 codeharness 命令（任意目录可用）
+```
+
+WebUI（`codeharness start --web`）与桌面应用依赖前端产物，需额外构建：
+
+```bash
+cd src/webui/client && npm install && npm run build && cd ../..
 ```
 
 ### 桌面应用（可选）
@@ -43,6 +50,7 @@ docker run --rm -p 3000:3000 \
 - `-p 3000:3000`：映射 WebUI 端口（Dockerfile `EXPOSE 3000`，浏览器访问 http://localhost:3000）
 - `-v "$HOME/.codeharness:/root/.codeharness"`：挂载用户级配置与凭据（容器内用户级配置 `~/.codeharness/config.json`，见 src/cli/options.ts）
 - 容器内 keytar 不可用（alpine 无原生绑定、无系统 keychain），凭据自动降级到 encrypted-file 后端（`~/.codeharness/secrets.enc`，与配置同目录，随挂载复用）
+- **首次运行前必须预置主密码**：容器内无交互终端，凭据层会因无 TTY 而死锁（容器不断重启）——在挂载的 `~/.codeharness/config.json` 中写入 `{"llm":{"masterPassword":"<自定义口令>"}}` 再启动，见「凭据模型与线上部署」
 
 ## 快速开始
 
@@ -55,7 +63,7 @@ codeharness start --web           # WebUI（浏览器 http://localhost:3000）
 
 ## WebUI 说明
 
-- 开发模式：`node dist/cli/index.js start --web`（后端 :3000）+ `cd src/webui/client && npm run dev`（Vite :5173，代理 /api 与 /ws）
+- 开发模式：`node dist/cli/index.js start --web`（后端 :3000）+ `cd src/webui/client && npm install && npm run dev`（首次需先安装 client 依赖；Vite :5173，代理 /api 与 /ws）
 - 生产模式：`codeharness start --web` 单命令（server 服务构建后的前端）
 - 密钥只经 `/api/keys` 链路，config 拒绝明文密钥字段
 
