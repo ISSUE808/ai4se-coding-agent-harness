@@ -7,7 +7,7 @@
 ```bash
 npm run build
 npm link          # 全局 codeharness 命令（任意目录可用）
-npm install -g codeharness  # 发布后用法（项目尚未 publish，当前以 npm link 为主路径）
+# 注：npm 上 `codeharness` 包名已被无关第三方占用，本项目暂未 publish；发布前需更名
 ```
 
 ### 桌面应用（可选）
@@ -19,7 +19,7 @@ cd desktop && npm install && npm run dist
 
 ## 容器化运行
 
-多阶段镜像（Task 21，SPEC §8.4）：build 阶段在镜像内完成 tsc + WebUI client 构建，自包含、不依赖宿主机预构建（命令与 `.github/workflows/ci.yml` docker-build job 实测一致）。
+多阶段镜像（Task 21，SPEC §8.4）：build 阶段在镜像内完成 tsc + WebUI client 构建，自包含、不依赖宿主机预构建。
 
 ```bash
 docker build -t codeharness .
@@ -30,9 +30,11 @@ docker run --rm codeharness --help      # 验证 CLI 可用
 容器内运行 WebUI（端口映射 + 挂载配置/凭据目录）：
 
 ```bash
+# 注意：镜像 ENTRYPOINT 为 exec 形式（node dist/cli/index.js），docker run 的尾部参数
+# 会拼接到 ENTRYPOINT 之后——直接写 `start --web`，不要带 `codeharness` 前缀
 docker run --rm -p 3000:3000 \
   -v "$HOME/.codeharness:/root/.codeharness" \
-  codeharness start --web
+  start --web
 ```
 
 - `-p 3000:3000`：映射 WebUI 端口（Dockerfile `EXPOSE 3000`，浏览器访问 http://localhost:3000）
@@ -72,7 +74,7 @@ src/
 
 ## 机制演示
 
-`tests/demo/` 三项确定性演示（Task 20，SPEC §A.6）——全部基于 MockProvider 与 mock 校验器，零外部调用（无真实 LLM / HTTP / shell 子进程），可离线复现核心机制：
+`tests/demo/` 三项确定性演示（Task 20，SPEC §A.6）——全部基于 mock 组件（MockProvider / mock 校验器），零外部调用（无真实 LLM / HTTP / shell 子进程），可离线复现核心机制：
 
 1. **护栏拦截**（guardrail-demo.test.ts）：MockProvider 提议执行 `rm -rf /` → PatternGuard 判定 block → 命令绝不到达执行器 → agent 收到拦截通知
 2. **反馈闭环自我修正**（feedback-demo.test.ts）：连续 3 轮修复——类型错误（targeted_fix）→ 语法错误（auto_fix）→ 通过完成
