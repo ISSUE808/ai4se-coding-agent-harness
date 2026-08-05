@@ -1112,12 +1112,14 @@ describe('Agent Main Loop (integration)', () => {
 - 创建：`tests/demo/feedback-demo.test.ts`
 - 创建：`tests/demo/deep-dimension-demo.test.ts`
 
-- [ ] **步骤 1：演示 1——护栏拦截**——MockProvider 返回 Action(run_shell, "rm -rf /") → PatternGuard.check() 返回 { blocked: true, level: 'block' } → 命令绝不执行 → agent 收到拦截通知。零网络调用。
-- [ ] **步骤 2：演示 2——反馈闭环自我修正**——MockProvider 注入 3 个响应：类型错误 → 语法错误 → 正确代码。断言 RoundManager 正确递增，每轮产生正确的 FeedbackResult，agent 在第 3 轮完成。
-- [ ] **步骤 3：演示 3——主力维度确定性行为**——完整链路：ActionClassifier（file_write → file_write）→ ValidatorSelector（file_write → [eslint, tsc]）→ ValidatorChain fail_fast（eslint 失败 → tsc 跳过）vs collect_all（eslint 失败 → tsc 仍调用）→ FailureClassifier（eslint → syntax, tsc → type）→ StrategyMatcher（syntax → auto_fix）→ RoundManager（3 次失败 → shouldUpgrade）。所有断言均不依赖任何 LLM/HTTP/I/O。
-- [ ] **步骤 4：运行演示测试** → `npx vitest run tests/demo/` → 全部 3 个通过，零网络调用。
+- [x] **步骤 1：演示 1——护栏拦截**——MockProvider 返回 Action(run_shell, "rm -rf /") → PatternGuard.check() 返回 { blocked: true, level: 'block' } → 命令绝不执行 → agent 收到拦截通知。零网络调用。
+- [x] **步骤 2：演示 2——反馈闭环自我修正**——MockProvider 注入 3 个响应：类型错误 → 语法错误 → 正确代码。断言 RoundManager 正确递增，每轮产生正确的 FeedbackResult，agent 在第 3 轮完成。
+- [x] **步骤 3：演示 3——主力维度确定性行为**——完整链路：ActionClassifier（file_write → file_write）→ ValidatorSelector（file_write → [eslint, tsc]）→ ValidatorChain fail_fast（eslint 失败 → tsc 跳过）vs collect_all（eslint 失败 → tsc 仍调用）→ FailureClassifier（eslint → syntax, tsc → type）→ StrategyMatcher（syntax → auto_fix）→ RoundManager（3 次失败 → shouldUpgrade）。所有断言均不依赖任何 LLM/HTTP/I/O。
+- [x] **步骤 4：运行演示测试** → `npx vitest run tests/demo/` → 全部 3 个通过，零网络调用。
 
-提交：`feat: mechanism demonstrations — guardrail, feedback loop, deep dimension (all mock-LLM deterministic)`
+**已完成**（2026-08-05，worktree-demo 分支）——3 个演示测试文件：guardrail-demo（2 用例：rm -rf / 拦截 + ls -la 放行对照）、feedback-demo（3 响应注入 → RoundManager 1→2→3 → 第 3 轮完成）、deep-dimension（8 用例：分类/选择/fail_fast vs collect_all 短路/分类映射/策略匹配/3 次失败升级，全部内存类零 I/O）。commits `d1d0ca3`（RED）`9810d95`（GREEN）`246b04a`（CR Minor）`5842706`（approvalRequired 层级修复）；评审两阶段 PASS；demo 11/11 + 全量 644/644 + tsc 干净。
+
+提交：`test: Task 20 mechanism demonstrations — guardrail, feedback loop, deep dimension (all mock-LLM deterministic)`
 
 ---
 
