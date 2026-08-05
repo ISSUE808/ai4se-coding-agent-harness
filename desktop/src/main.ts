@@ -23,20 +23,23 @@ app.whenReady().then(async () => {
   // 需区分「主动清理」（不弹框）与「后端自行崩溃」（弹框提示）。spec 2026-08-04 §5.3。
   let intentional = false;
 
-  // 后端 spawn 的稳定工作目录：确保存在（Electron 通常自动创建 userData，
-  // 显式 mkdir 防 ENOENT——spawn cwd 不存在会直接失败）。
+  // 后端 spawn 的稳定工作目录（仅打包态需要）：portable 解压目录每次漂移会丢配置；
+  // dev（isPackaged=false）backendDir=项目根且稳定，保持仓库根 .codeharness.json 语义。
+  // 确保存在（Electron 通常自动创建 userData，显式 mkdir 防 ENOENT）。
   const userDataDir = app.getPath('userData');
-  mkdirSync(userDataDir, { recursive: true });
+  if (app.isPackaged) {
+    mkdirSync(userDataDir, { recursive: true });
+  }
 
   // 打包后 process.resourcesPath 存在；开发时用项目根（desktop 的上级）。
   const projectRoot = path.resolve(__dirname, '..', '..');
   const lifecycle = await runDesktopLifecycle({
     projectRoot,
     resourcesPath: app.isPackaged ? process.resourcesPath : undefined,
-    // 稳定 cwd：打包后后端 backendDir 位于 portable 临时解压目录（每次运行漂移），
-    // 配置持久化（cwd/.codeharness.json）需固定位置——userData（%APPDATA%\CodeHarness）
-    // 是 Electron 保证存在的稳定用户目录（B11 桌面验收实测：baseUrl 重启丢失）。
-    backendCwd: userDataDir,
+    // 稳定 cwd（仅打包态）：打包后后端 backendDir 位于 portable 临时解压目录
+    // （每次运行漂移），配置持久化（cwd/.codeharness.json）需固定位置——
+    // userData（%APPDATA%\CodeHarness）是稳定用户目录（B11 验收实测：baseUrl 重启丢失）。
+    backendCwd: app.isPackaged ? userDataDir : undefined,
     // 打包内没有系统 Node：electron.exe 以 ELECTRON_RUN_AS_NODE=1 纯 Node 模式运行后端。
     // ABI 真相：打包内 keytar 按打包机系统 Node ABI 编译（backend/node_modules 是
     // verbatim 复制，@electron/rebuild 无物可重建），与 electron 内嵌 Node（20.18/ABI 115）
