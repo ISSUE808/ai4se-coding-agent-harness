@@ -1115,3 +1115,22 @@
   - **演示测试的模块选材决定 CI 独立性**：不 import 真实 validator（eslint/tsc validator 会 spawn 子进程）→ demo 测试在 CI/本地零外部调用，符合 §A.4-C 硬性判据
   - **`tsc --noEmit` 不覆盖 tests/（tsconfig include 只有 src/）**：项目 tsconfig `exclude: ["tests"]`——声称"tsc 干净"仅对 src/ 成立；vitest 用 esbuild 转译不做类型检查。这次把 `approvalRequired` 放错层级（应在 metadata 内，main-loop.ts:418 同构）就是被 VSCode 语言服务抓到、被 tsc 放过的实例。测试文件类型检查需显式传文件：`npx tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --skipLibCheck --esModuleInterop <测试文件...>`（修复 commit 后补验）
 
+
+---
+
+## 2026-08-05 17:59 Task 21：Docker + npm 分发
+
+- **触发技能**：`using-git-worktrees`（阶段 13 新模块 → worktree-dist 分支）、`requesting-code-review`（两阶段评审 REVISE → 修复 → 主 agent 复核实测）
+- **Subagent**：implementer ac7fba14（配置 + CI + 验证）、implementer a37d38ce（CR 修复多阶段构建）
+- **Prompt 要点**：Docker 本机可用（29.1.3）→ 必须真实 docker build/run 验证；keytar 是原生模块无 alpine prebuilt——SPEC「Docker 不走 keytar」；.dockerignore 必须排除 .claude/（否则 worktree 副本进上下文）；npm publish 保持待办只加配置；TDD 豁免（配置类），验收动作=构建验证
+- **产出**：
+  - Commits: `7b3c0a4`（Dockerfile/.dockerignore/package.json files+publishConfig）、`1f30811`（CI docker-build job）、`9df1b74`（CR 修复：多阶段构建 + tag 钉版 + dockerignore 补漏）、`f11e311`（主 agent：CI 版本断言不硬编码）
+  - 涉及文件: Dockerfile、.dockerignore、package.json、.github/workflows/ci.yml
+  - 验证: docker build 成功（235MB）、`--version`→0.1.0、`--help` exit 0、容器内 `start --web` 挂载配置后真实 listen（resolveStaticDir 找到 client dist）、npm pack 126 文件 97.4kB、全量 644/644、tsc 干净
+- **人工干预**：CI 版本断言从 `test "$VERSION" = "0.1.0"` 改为 `test -n "$VERSION"`（硬编码版本升级会挂 CI，f11e311）；评审 2 条 Minor（tag 钉版、dockerignore 补 .codeharness.json/.npmrc）由 implementer 在 9df1b74 一并修复
+- **教训**：
+  - **EXPOSE 声明的能力必须真实存在**：评审实测抓到"容器内 --web 报 client dist 缺失"——Dockerfile 只 COPY tsc 产物时 EXPOSE 3000 是虚假声明。多阶段构建（镜像内 tsc + vite）让 docker build 自包含，是兑现 SPEC「Docker 作为 WebUI 验证备选」的正解
+  - **.dockerignore 的模式锚定**：`credentials` 无锚定模式在 src 进上下文后误杀 `src/credentials/` 源码——排除模式要么根锚定（/credentials）要么明确目录
+  - **npm ci --ignore-scripts 在 build 阶段也要**：keytar 编译在 alpine 直接失败（无工具链）；编译期不需要原生绑定（动态 import 降级），build/runtime 两阶段都跳过 install scripts 是正确姿势
+  - **容器内凭据层先行失败**：`start --web` 无 TTY 时先死在 CredentialStore 主密码提示（非交互 stdin EOF）而非 dist 缺失——验证"镜像完整性"要用挂载配置/交互模式，且报错定位要分清"镜像缺产物"与"运行时交互"两类
+  - **分类器不可用期间 subagent 产出要亲自复核**：两次派发（ac7fba14、a37d38ce）期间安全分类器不可用，主 agent 逐一 Read Dockerfile/.dockerignore/ci.yml 全文 + 复跑 docker build/run 实测确认声称
