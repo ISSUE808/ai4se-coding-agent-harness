@@ -47,7 +47,12 @@ docker-build:
   #   docker.m.daocloud.io/gcr.io/kaniko-project/executor 返回 invalid repository,
   #   source docker.io）——GCR 要换专用端点 gcr.m.daocloud.io（本地实测 token
   #   握手后 manifest 200 可达）。
-  image: gcr.m.daocloud.io/kaniko-project/executor:latest
+  # entrypoint: [""] 必需——executor 镜像 ENTRYPOINT 是 /kaniko/executor，GitLab
+  #   用 sh -c 包装脚本会变成 `executor sh` → unknown command（实测 2026-08-06）；
+  #   用 :debug 标签（含 busybox sh，GitLab 官方文档同款组合）。
+  image:
+    name: gcr.m.daocloud.io/kaniko-project/executor:debug
+    entrypoint: [""]
   script:
     # 多阶段构建自包含（镜像内完成 tsc + WebUI client 构建）
     - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile" --no-push
