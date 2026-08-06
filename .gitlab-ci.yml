@@ -56,14 +56,32 @@ docker-build:
   script:
     # 多阶段构建自包含（镜像内完成 tsc + WebUI client 构建）
     # --registry-mirror：kaniko 绕过 daemon 自拉 Docker Hub 被 NJU 网络拦截（实测
-    #   Get https://index.docker.io/v2/: dial tcp i/o timeout；runner 宿主 daemon
-    #   能拉 node:20 是因宿主配了自己的镜像站）→ 走镜像站。注意镜像站必须是
-    #   「完整代理」：docker.m.daocloud.io 的 blob 下载会重定向到
-    #   production.cloudfront.docker.com，被 NJU 网络 reset（实测 2026-08-06）。
-    #   docker.1panel.live 实测 blob 由自身域名伺服（200）且 node:20.19.4-alpine3.22
-    #   存在（另一候选 docker.xuanyuan.me 同测通过但 429 限流，弃用）。
-    #   仅影响本 job——Dockerfile 保持规范 FROM，GitHub Actions/本地构建不受影响。
-    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile" --no-push --registry-mirror=docker.1panel.live
+    #   index.docker.io i/o timeout；runner 宿主 daemon 能拉 node:20 是宿主自己配了
+    #   镜像站）→ 走镜像站，且必须是「完整代理」（blob 由镜像站伺服）：
+    #   docker.m.daocloud.io 实测 blob 重定向 production.cloudfront.docker.com 被
+    #   reset；m.daocloud.io 带 token 仍 403（要账号）；1panel.live 本机可用但
+    #   runner 容器挂起；1ms.run blob 走自家 CloudFront CDN（校园网有 reset
+    #   CloudFront IP 的前科，风险）。本机网络与 runner 网络不同，候选按
+    #   busybox wget 15s 探测连通性循环选择：docker.nju.edu.cn（校内镜像站，
+    #   本机 403=nginx 限校内 IP；宿主大概率就是用它）→ docker.1ms.run →
+    #   docker.1panel.live。仅影响本 job——Dockerfile 保持规范 FROM，
+    #   GitHub Actions/本地构建不受影响。
+    - |
+      for M in docker.nju.edu.cn docker.1ms.run docker.1panel.live; do
+        echo "== probe $M =="
+        if wget -S -q --timeout=15 -O /dev/null "https://$M/v2/library/node/manifests/20.19.4-alpine3.22" 2>&1 | grep -q "HTTP/"; then
+          echo "== $M reachable from runner; kaniko --registry-mirror=$M =="
+          if /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile" --no-push --registry-mirror="$M"; then
+            exit 0
+          else
+            echo "== kaniko failed with $M (exit $?) =="
+          fi
+        else
+          echo "== $M unreachable from runner =="
+        fi
+      done
+      echo "== all mirrors failed =="
+      exit 1
   # 说明：kaniko 无 daemon，无法 docker run 验证（--version/--help/start --web 断言
   # 由 GitHub Actions 的 docker-build job 承担，见 .github/workflows/ci.yml——GitHub
   # runner 原生支持 docker executor，两平台分工：GitLab 验证镜像可构建，GitHub 验证运行行为。
