@@ -60,9 +60,11 @@ docker-build:
     #   FROM node:20.19.4-alpine3.22 AS build → npm ci --ignore-scripts
     #   → npm run build（tsc → dist/）→ cd src/webui/client && npm ci && npm run
     #   build（vite → src/webui/client/dist）。
+    # 注意：client 在仓库根下第 3 级，回根必须 cd ../../..（../.. 只回到 src/；
+    # 2026-08-06 首跑实测：test -f dist/cli/index.js 在 src/ 下查不到文件，exit 1）。
     - npm ci --ignore-scripts
     - npm run build
-    - cd src/webui/client && npm ci && npm run build && cd ../..
+    - cd src/webui/client && npm ci && npm run build && cd ../../..
     # 断言产物存在（与 runtime 阶段 COPY --from=build 的路径一致——容器内
     # ENTRYPOINT node dist/cli/index.js，start --web 依赖 client/dist）。
     - test -f dist/cli/index.js
