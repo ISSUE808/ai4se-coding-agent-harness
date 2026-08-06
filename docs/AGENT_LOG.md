@@ -1231,3 +1231,21 @@
   - **对话框元素同步渲染 ≠ 内容同步存在**：DirectoryPicker 的 dialog 元素挂载即出现，但根目录在 `fetchMachineRoots()` 异步 resolve 前停留在 `phase==='loading'`（只有「加载目录…」spinner）。`findByRole('dialog')` 在 loading 态就 resolve，紧跟着的同步 `getByRole('选择 C:\')` 是竞态——mockResolvedValue 的微任务 resolve 与测试续体的执行顺序无保证
   - **同文件铁证排除平台差异**：用例 1 用同样的同步 getByRole 却通过（同一 beforeEach/同一渲染路径），失败只在用例 2——纯时序问题，GitLab 共享 runner 较慢丢失竞态，GitHub Actions 与本地恰好每次都赢，所以此前从未暴露。CI 偶发 = 测试写错，不是环境怪癖
   - **规则化：对异步加载内容的查询一律 findBy*/waitFor，对同步渲染内容的查询才用 getBy***：本文件用例 4/8 作者已用了 findByRole（异步内容），用例 1/2/3/7 与 expand() helper 漏了——同一文件的风格分裂是竞态温床
+
+## 2026-08-06 19:31 GitLab CI docker-build job 定稿：dind → kaniko → 镜像站 → 构建逻辑等价验证（§五.7 CI 留档）
+
+- **触发技能**：`systematic-debugging`（含 Phase 4.5 架构质疑——3+ 修复失败后与用户决策降级方案）
+- **Subagent**：无——CI 运维类修复，主 agent 直接完成（用户提供每次 pipeline 日志 + 最终方案决策）
+- **Prompt 要点**：/（目标：GitLab CI 4 job 全绿留档 §五.7；共享 runner 约束逐轮实测：无特权容器 / 校园网屏蔽 Docker Hub 与 CloudFront）
+- **产出**：
+  - Commits: `36021f5`（kaniko 取代 dind）、`7a1a253`（gcr 换 DaoCloud 代理）、`9918c90`（gcr.m.daocloud.io 专用端点）、`e013353`（kaniko ENTRYPOINT 清空 + :debug 标签）、`cdd53b0`（--registry-mirror）、`7e96097`（docker.1panel.live 完整代理）、`3a40bcc`（镜像探测循环）、`7d0314d`（等价验证定稿）、`2dbb89f`（cd 层级修复）
+  - 涉及文件: .gitlab-ci.yml（docker-build job 注释完整记录各轮失败实测结论）
+  - 测试: GitLab 4 job 全绿（unit-test / webui-client / desktop / docker-build），§五.7 留档完成
+- **人工干预**：全部主 agent；关键决策——用户选择「构建逻辑等价验证」方案（真实镜像构建 + 运行断言由 GitHub Actions 承担，§4.8 在 GitHub 侧完整满足）
+- **教训**：
+  - **无特权共享 runner 上 dind 必然不可用**（mount permission denied）——GitLab 官方推荐替代是 kaniko（daemonless）；但 kaniko 不借宿主 daemon 的镜像源，校园网屏蔽 index.docker.io 时必须 --registry-mirror
+  - **镜像站分 redirect 与 full-proxy 两类**：docker.m.daocloud.io manifest 200 但 blob 302 到 production.cloudfront.docker.com（被 reset）；m.daocloud.io 带 token 仍 403（要账号）；1panel.live/xuanyuan.me 为 blob 自伺服完整代理（后者 429 限流）。选镜像站要看 blob 的最终 host，不能只看 manifest 200
+  - **本机网络 ≠ runner 网络**：1panel.live 本机可用但从 runner 挂起、docker.nju.edu.cn 本机 403 从 runner 也挂起——本机探测结论不能外推到 CI
+  - **busybox wget --timeout 在 kaniko 容器不生效**（DNS/connect 阶段无限等待），探测循环静默卡满 job 超时（实测 1h）——依赖超时兜底的探测方案不可行
+  - **3+ 修复失败后必须质疑架构（Phase 4.5）**：无特权 + 屏蔽 Docker Hub/CloudFront 的双重约束下，该 runner 无法真实构建镜像——不是再试第 7 个方案，而是与用户确认降级为「Dockerfile 构建逻辑等价验证」，真实构建由 GitHub Actions 承担
+  - **等价验证脚本要防路径算术错误**：`cd src/webui/client && ... && cd ../..` 从 client 只回到 src/（少跳一级，client 在仓库根下第 3 级），后续 test -f 查错目录——日志里"最后一条 `$` 行 + 无下一条"即可定位断言位置
