@@ -1263,3 +1263,19 @@
 - **教训**：
   - **"不完整"的测试必须把对应关系写进交付文档**：GitLab docker-build 降级为等价验证后，只看 GitLab 截图会误以为镜像从未被验证——README 写明「真实构建与运行断言由 GitHub Actions 承担」后，GitLab/GitHub 两张留档截图才自洽
   - **README 新章节复用既有锚点**：§4.8（CI 构建镜像）、`COPY --from=build`（容器化运行节既有概念）、dind/校园网屏蔽（.gitlab-ci.yml 注释已有逐轮实测记录）——新章节与旧章节互相指涉，不重复展开
+
+## 2026-08-06 20:08 CI 改动两阶段评审（spec 合规 + 代码质量）与 Minor 收口
+
+- **触发技能**：`requesting-code-review`（两阶段评审，subagent 派发）
+- **Subagent**：reviewer aae8c79e0c9c27e70（评审区间 6504cb8..7645488：CI 降级链路 + 测试竞态修复 + README CI/CD 小节）
+- **Prompt 要点**：要求逐条核对等价验证与 Dockerfile build 阶段对应（步骤/路径/产物）、§五.6 unit-test job / §4.8 构建镜像 / §五.7 留档合规、凭据与 .gitignore 约束、测试竞态修复完整性
+- **产出**：
+  - 评审结论: 无 Critical、无 Important，3 条 Minor → 全部修复；「可以留档（§五.7）」
+  - Commit: `9d1ec87`（基镜 node:22→node:20、头注释指向 GitHub 真实构建、test -f→test -s）
+  - 涉及文件: .gitlab-ci.yml
+  - 测试: 本地等价链全量重跑 ALL-OK（含 test -s 断言）
+- **人工干预**：主 agent 修复全部 Minor；用户决策已记录（codeharness.tar 删除、桌面 03:17 版已验收通过）
+- **教训**：
+  - **「等价」要精确到环境维度**：等价验证的步骤一致 ≠ 环境一致——基镜 node 大版本/发行版不同时应对齐或写明（评审 Minor 1 指出的 fidelity 差距；已改 node:20 对齐 Dockerfile build 阶段）
+  - **文件头注释是最先被读的文档**：GitLab 已不构建镜像后，头注释仍写「CI 中构建镜像」单独看有误导——职责迁移后所有声称点都要就近指向真实执行位置（GitHub Actions docker-build）
+  - **仓库内无法独立复核 live pipeline**：留档证据是 AGENT_LOG 自述 + 截图/URL——§五.7 截图为必需，不能只靠 commit 历史
