@@ -1213,3 +1213,21 @@
   - **持久化必须与状态变更同事务**：仅清内存 registry 不 persistConfig，重启后复活（与 B11 的 cwd 漂移同族：状态写到错误/临时层）。DELETE 现在走完整 persistConfig 链路
   - **活跃供应商删除是悬空引用**：llm.provider 指向已删供应商 → 回退 DEFAULT_CONFIG.llm.provider（deepseek），并触发 onConfigChanged 让运行中会话按新 provider 重启（与 POST 编辑活跃 provider 同一契约）
   - **线上实例仍跑旧镜像**：2a11aeb 尚未重建/部署，需本地 docker build + save + scp + 服务器 load + run 后验证
+
+---
+
+## 2026-08-06 16:21 CI 修复：DirectoryPicker 测试竞态（GitLab webui-client 偶发失败）
+
+- **触发技能**：`systematic-debugging`（日志现场 → 根因链，无修复先于根因）
+- **Subagent**：无——CI 偶发失败，主 agent 直接完成
+- **Prompt 要点**：/（用户报告 GitLab pipeline webui-client job 失败：`selecting a drive fills the parent form` 用例报 `Unable to find ... "选择 C:\"`，DOM dump 停在「加载目录…」加载态）
+- **产出**：
+  - Commit: `1ff00d7`（fix: DirectoryPicker 测试竞态——getByRole 改 findByRole，等待异步加载的根目录/条目按钮）
+  - 涉及文件: src/webui/client/src/components/DirectoryPicker.test.tsx（`expand()` helper + 用例 1/2 的 5 处同步查询改异步）
+  - 测试: 222/222（webui-client 全量，本地复跑通过）
+  - 推送: origin(GitHub) + gitlab(NJU) 双远程
+- **人工干预**：主 agent 全量；修改仅测试代码，组件/产品代码零改动
+- **教训**：
+  - **对话框元素同步渲染 ≠ 内容同步存在**：DirectoryPicker 的 dialog 元素挂载即出现，但根目录在 `fetchMachineRoots()` 异步 resolve 前停留在 `phase==='loading'`（只有「加载目录…」spinner）。`findByRole('dialog')` 在 loading 态就 resolve，紧跟着的同步 `getByRole('选择 C:\')` 是竞态——mockResolvedValue 的微任务 resolve 与测试续体的执行顺序无保证
+  - **同文件铁证排除平台差异**：用例 1 用同样的同步 getByRole 却通过（同一 beforeEach/同一渲染路径），失败只在用例 2——纯时序问题，GitLab 共享 runner 较慢丢失竞态，GitHub Actions 与本地恰好每次都赢，所以此前从未暴露。CI 偶发 = 测试写错，不是环境怪癖
+  - **规则化：对异步加载内容的查询一律 findBy*/waitFor，对同步渲染内容的查询才用 getBy***：本文件用例 4/8 作者已用了 findByRole（异步内容），用例 1/2/3/7 与 expand() helper 漏了——同一文件的风格分裂是竞态温床
