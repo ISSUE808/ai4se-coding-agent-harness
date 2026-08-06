@@ -1249,3 +1249,17 @@
   - **busybox wget --timeout 在 kaniko 容器不生效**（DNS/connect 阶段无限等待），探测循环静默卡满 job 超时（实测 1h）——依赖超时兜底的探测方案不可行
   - **3+ 修复失败后必须质疑架构（Phase 4.5）**：无特权 + 屏蔽 Docker Hub/CloudFront 的双重约束下，该 runner 无法真实构建镜像——不是再试第 7 个方案，而是与用户确认降级为「Dockerfile 构建逻辑等价验证」，真实构建由 GitHub Actions 承担
   - **等价验证脚本要防路径算术错误**：`cd src/webui/client && ... && cd ../..` 从 client 只回到 src/（少跳一级，client 在仓库根下第 3 级），后续 test -f 查错目录——日志里"最后一条 `$` 行 + 无下一条"即可定位断言位置
+
+## 2026-08-06 19:55 README 补 CI/CD 小节（§五.7 留档收尾）
+
+- **触发技能**：`requesting-code-review`（两阶段评审自查，随本条一并执行）
+- **Subagent**：无——主 agent 直接完成（用户问「等价验证是否意味着测试不完整」，回答后要求把对应关系写进 README）
+- **Prompt 要点**：/（README 此前无任何 CI 段落；需要向读者说明 GitLab docker-build 等价验证与 GitHub 真实构建的职责分工）
+- **产出**：
+  - Commit: `d997817`
+  - 涉及文件: README.md（新增「## CI/CD」小节 7 行：双平台对等流水线、GitHub Actions 真实构建 + 容器运行断言（§4.8）、GitLab 等价验证的实测原因与职责边界）
+  - 测试: 无代码改动；GitLab 4 job 全绿 + GitHub Actions 全绿已留档（§五.7）
+- **人工干预**：全部主 agent
+- **教训**：
+  - **"不完整"的测试必须把对应关系写进交付文档**：GitLab docker-build 降级为等价验证后，只看 GitLab 截图会误以为镜像从未被验证——README 写明「真实构建与运行断言由 GitHub Actions 承担」后，GitLab/GitHub 两张留档截图才自洽
+  - **README 新章节复用既有锚点**：§4.8（CI 构建镜像）、`COPY --from=build`（容器化运行节既有概念）、dind/校园网屏蔽（.gitlab-ci.yml 注释已有逐轮实测记录）——新章节与旧章节互相指涉，不重复展开
