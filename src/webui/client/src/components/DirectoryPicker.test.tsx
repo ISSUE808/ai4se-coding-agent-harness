@@ -64,9 +64,14 @@ function defaultBrowse(path: string): Promise<typeof USER_DIR> {
   return Promise.reject(new Error('unexpected browse path: ' + path));
 }
 
-/** Expand the given dir row inside the picker dialog. */
+/**
+ * Expand the given dir row inside the picker dialog. Awaits the row's
+ * appearance — roots/entries load asynchronously, and the dialog element
+ * renders before its content does (CI race, 2026-08-06: getByRole 会偶发
+ * 查在加载态上 → 改用 findByRole 等待内容出现)。
+ */
 async function expand(picker: HTMLElement, name: string): Promise<void> {
-  await userEvent.click(within(picker).getByRole('button', { name: `展开 ${name}` }));
+  await userEvent.click(await within(picker).findByRole('button', { name: `展开 ${name}` }));
 }
 
 function renderPicker(onSelect = vi.fn(), onClose = vi.fn()) {
@@ -86,15 +91,15 @@ describe('DirectoryPicker (browse: machine-wide, unrestricted)', () => {
     renderPicker();
     const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
     expect(fetchMachineRootsMock).toHaveBeenCalledTimes(1);
-    expect(within(picker).getByText('这台电脑')).toBeInTheDocument();
-    expect(within(picker).getByRole('button', { name: '选择 C:\\' })).toBeInTheDocument();
-    expect(within(picker).getByRole('button', { name: '选择 D:\\' })).toBeInTheDocument();
+    expect(await within(picker).findByText('这台电脑')).toBeInTheDocument();
+    expect(await within(picker).findByRole('button', { name: '选择 C:\\' })).toBeInTheDocument();
+    expect(await within(picker).findByRole('button', { name: '选择 D:\\' })).toBeInTheDocument();
   });
 
   it('selecting a drive fills the parent form with its path and closes nothing on its own', async () => {
     const { onSelect } = renderPicker();
     const picker = await screen.findByRole('dialog', { name: '选择工作目录' });
-    await userEvent.click(within(picker).getByRole('button', { name: '选择 C:\\' }));
+    await userEvent.click(await within(picker).findByRole('button', { name: '选择 C:\\' }));
     expect(onSelect).toHaveBeenCalledWith('C:\\');
   });
 
