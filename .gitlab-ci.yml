@@ -38,27 +38,14 @@ desktop:
 
 docker-build:
   stage: build
-  image: docker:27
-  services:
-    - docker:27-dind
+  # NJU GitLab 共享 runner 无特权容器——docker:27-dind 无法启动（实测 2026-08-06：
+  # mount: permission denied + AppArmor/--privileged 警告 → dockerd 未监听 2375 →
+  # docker build 报 Cannot connect to the Docker daemon）。
+  # kaniko 是 daemonless 镜像构建（GitLab 官方推荐的 dind 替代），无需特权容器。
+  image: gcr.io/kaniko-project/executor:latest
   script:
     # 多阶段构建自包含（镜像内完成 tsc + WebUI client 构建）
-    - docker build -t codeharness .
-    # 版本号非空即可
-    - docker run --rm codeharness --version
-    - docker run --rm codeharness --help
-    # 容器内 `start --web` 必须能找到 WebUI client 构建产物（resolveStaticDir
-    # 默认 src/webui/client/dist）——不再报「WebUI 前端构建产物不存在」即证明镜像完整。
-    # 镜像 ENTRYPOINT 为 exec 形式（node dist/cli/index.js），docker run 尾部参数拼接到
-    # ENTRYPOINT 之后——命令不能带 `codeharness` 前缀，否则 commander 报 unknown option。
-    - |
-      OUTPUT="$(timeout 60 docker run --rm codeharness start --web 2>&1 || true)"
-      printf '%s\n' "$OUTPUT"
-      if printf '%s\n' "$OUTPUT" | grep -Fq "unknown option"; then
-        echo "FAIL: 命令行解析失败（docker run 尾部参数拼接到 ENTRYPOINT 后出错）" >&2
-        exit 1
-      fi
-      if printf '%s\n' "$OUTPUT" | grep -Fq "WebUI 前端构建产物不存在"; then
-        echo "FAIL: WebUI 前端构建产物缺失（resolveStaticDir 未找到 client dist）" >&2
-        exit 1
-      fi
+    - /kaniko/executor --context "${CI_PROJECT_DIR}" --dockerfile "${CI_PROJECT_DIR}/Dockerfile" --no-push
+  # 说明：kaniko 无 daemon，无法 docker run 验证（--version/--help/start --web 断言
+  # 由 GitHub Actions 的 docker-build job 承担，见 .github/workflows/ci.yml——GitHub
+  # runner 原生支持 docker executor，两平台分工：GitLab 验证镜像可构建，GitHub 验证运行行为。
