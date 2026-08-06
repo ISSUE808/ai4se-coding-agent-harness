@@ -1,52 +1,51 @@
 # REFLECTION — AI4SE Final Project（A 类：Coding Agent Harness）
 
-## 一、项目概览
+> 说明：本文稿由开发过程中的主智能体依据 `AGENT_LOG.md` 与开发记录起草，作者本人逐段改写、核对事实后定稿（AI 辅助润色，按学术规范声明标注）。
 
-这个项目里，我从零构建了一个 Coding Agent Harness——CodeHarness。核心命题：**Agent = LLM + Harness**——治理、反馈、工具、记忆全部由代码实现，而非提示词堆砌。项目按 `docs/PLAN.md` 拆成 22 个 task（实际拆解后 30+），跨 14 个开发阶段，650 个测试全绿；WebUI 部署到阿里云，桌面应用打包验收，CI 覆盖 GitHub Actions 与 GitLab 双平台。
+## 哪些 Superpowers 技能发挥了最大作用，哪些"形式大于实质"？
 
-项目从零开始，无遗留代码——`CLAUDE.md` 工作纪律、`docs/PLAN.md` 计划、`docs/SPEC.md` 规约先行，实现与文档同步演进，22 个 task 全部走完。
+作用最大的无疑是 `requesting-code-review` 的两阶段评审。项目里最贵的一批 bug 全是评审抓的：容器命令带 `codeharness` 前缀（ENTRYPOINT 是 exec 形式，尾部参数直接拼接，命令解析错乱报 unknown option）、CI 断言弱到用 `|| true` 兜底（命令行错误永远发现不了）、README 里 `npm install -g codeharness` 的包名已被无关第三方占用（评审用 WebFetch 查证）、桌面后端 spawn 的 cwd 不加门控会改写 dev 语义。`test-driven-development` 和 `using-git-worktrees` 次之——核心机制全部走红→绿，14 个阶段模块靠 worktree 隔离并行。
 
-选这个题目，是想亲手回答：agent 是"会写代码的程序"，还是一个软件系统？写 prompt 调 agent 谁都会，但把 agent 当系统设计时——什么样的反馈能让它自我修正、什么样的护栏挡得住危险操作、什么样的状态值得持久化——只有亲手实现一遍才能真懂。
+"形式大于实质"的是 `brainstorming`：A 类项目设计空间小、SPEC 先行，brainstorming 的产出与最终实现偏离明显，过程记录的意义大于实质指导。TDD 在配置类、文档类 task 上也基本是仪式——下文细说。
 
-## 二、关键技术决策
+## TDD 强制在 AI 协作下是阻碍还是放大器？
 
-**凭据链三后端**（keytar → 加密文件 → 环境变量）按可用性探测降级：keytar 桌面可用、Docker alpine 静默缺失，降级链成了必需品——线上容器无交互终端，主密码提示 EOF 死锁，最终用 `config.llm.masterPassword` 预置（方案 B）解决。§A.4-C 判据：核心机制须能用 MockProvider 确定性单测、不依赖真实 LLM，凭据层同理。
+对核心机制是放大器。红→绿循环给 subagent 一个明确的终点：先写失败测试，测试就定义了"完成"；§A.4-C 要求机制能用 MockProvider 确定性单测、不依赖真实 LLM，凭据链、反馈管线因此全部可离线验证。
 
-**反馈闭环 5 层管线**（动作分类 → 校验器选择 → 校验链 → 失败归类 → 修正策略）是主力维度：LLM 生成代码必然出错，harness 的价值在于错误分类得准（语法/类型/运行时/断言），修正策略才选得对（auto_fix / targeted_fix / 人工介入），再配合轮次升级。
+但对配置类、文档类 task 是阻碍：**"README 命令可复制"用什么红色测试表达？** 写不出有意义的失败测试，我就用构建验证和命令实测替代，这算是对纪律的务实取舍。结论：TDD 的适用边界是"有可断言行为"的代码，不是所有 task。
 
-**三层护栏**（PatternGuard / ScopeFence / HITL）：demo 里 MockProvider 提议 `rm -rf /`，命令在到达执行器前被拦下——代码层的硬约束，不是提示词告诫。
+## subagent 工作流能让智能体自主运行多久而不偏离主题？
 
-**配置三层覆盖**（用户 → 项目 → CLI，泛化 deepMerge）：容器挂载、桌面 userData、CLI 参数全走同一套合并逻辑，线上 masterPassword 预置也靠它落进配置。
+单 task 内基本不偏离——派发 prompt 给了涉及文件列表、SPEC 章节引用、完成条件，subagent 只需要执行。**偏离全部发生在 prompt 没给全的地方**：Task 22 派发时没指定 worktree，subagent 把 commit 落在 master（cherry-pick + reset 才纠回来）；README 容器命令没给 ENTRYPOINT 拼接语义，subagent 写了带前缀的启动命令。
 
-## 三、开发过程与纪律执行
+一个反直觉的观察：subagent 几乎从不执行"不确定时暂停提问"的约定——宁可猜着继续。新鲜 subagent 零会话污染是双刃剑：不会想歪，但也没有上下文积累，prompt 之外没有任何护栏，reviewer 是最后的防线。
 
-CLAUDE.md 强制每个 task 的流程：worktree 模块化（14 阶段独立 worktree + PR）→ subagent 执行 TDD 红→绿→重构 → 两阶段评审（spec 合规 + 代码质量）→ AGENT_LOG 记录 → 模块收尾 merge。
+## 什么样的 task 颗粒度最优？
 
-真实执行远比计划颠簸：subagent 把 commit 落在 master（派发没指定 worktree）、评审抓到容器命令带多余前缀、CI 断言弱到"绿得心安理得"、npm 包名被无关第三方占用。但纪律的价值正在这些时刻：**每个"必挂"的坑都在评审或测试环节被拦下，而不是上线后由用户报告**。README 的新机可复制性审计（补 `npm install`、前端产物、容器主密码预置这些"照做必死"的步骤）就是评审文化沉淀下来的习惯。AGENT_LOG 逐条记录了每个 task 的触发技能、subagent、人工干预与教训，事后复盘全靠它。
+"一个 task 等于一个可验证的完成条件"最优——例如"新增一个凭据后端 + 它的单测"。拆分依据是依赖关系（11a→11b 顺序执行、13a→13b 严格依赖），而不是工作量。反例是 Task 22：三条不相关的增量（Docker 用法、npm 全局安装、机制演示）捆绑在一个 task 里，一次派发就带偏一次。
 
-## 四、踩坑
+## SPEC/PLAN 质量如何影响实现质量？
 
-**cwd 漂移（桌面版）**：portable 每次自解压到新 `%TEMP%`，后端 cwd 漂移，基于 cwd 的配置写进临时目录，重启即失。用户报告"重启后 baseUrl 空、key 还在"——keytar 是系统级存储不受影响，恰好暴露了凭据与配置的存储分层。修复：spawn 稳定 cwd 到 userData（`app.isPackaged` 门控，不破坏 dev 语义）。教训：验收先核对产物时间戳——第一轮"验收"验的是旧 portable，修复代码从未被测到。
+影响是直接的：**规约每少写一处，就是 subagent 一个偏离点。** 具体案例：SPEC 写了"编辑 provider 端点"，但没写"编辑活跃 provider 时 `llm.baseUrl` 必须同步"——初期实现只更新了配置 registry，运行中的会话继续用旧端点。这个契约是 reviewer 在代码评审中指出的，补上后编辑活跃 provider 才真正生效。这让我意识到，单人项目里"陌生 subagent 冷启动验证"（§4.5）为什么被要求——自己写的 spec 永远比自己读起来更清晰。
 
-**容器凭据死锁**：线上容器 Restarting，日志停在 `Master password for encrypted key storage:`。keytar 动态 import 失败 → 链上只剩加密文件 → 无 TTY 交互 EOF → 崩溃。最初想用 env 后端绕过，但它是只读的，UI 写 key 会坏——"配置层能用"不等于"功能完整"。最终方案 B：`llm.masterPassword` 预置，非交互激活。
+## 你最有效的 prompt/context 策略是什么、为什么有效？
 
-**"删除供应商刷新复活"**：删除 nju 后刷新又出现。根因：GET 枚举的是凭据存储 ∪ 配置 registry 两个来源，DELETE 只清了前者。修复：DELETE 同步清理 registry 并持久化、活跃供应商回退默认。教训：删除必须清理"枚举来源"本身，且持久化与状态变更同事务——否则"删了"只是 UI 假象。
+派发 prompt 的四要素模板：TDD 纪律（先写失败测试）、涉及文件列表、SPEC 章节引用、完成条件。有效的原因很朴素：**新鲜 subagent 的唯一上下文就是 prompt，给多少上下文，偏离面就有多小**；引用 SPEC 章节而非口头复述，避免我自己的理解污染它。踩过坑后的补强是"在 `<worktree 路径>` 下操作"——从那以后 subagent 再没落错过分支。
 
-**subagent 提交落错分支**：派发没指定 worktree，commit 落在 master，纠正成本（cherry-pick + reset + 手动命令）远高于派发时多写一句。
+## 凭据与分发这两条工程要求，迫使你想清楚了哪些原本会忽略的问题？
 
-## 五、与课程方法论的对照
+凭据要求（不入代码/Git/日志/历史）逼出了 SecureHandle 闭包设计——`#private` 字段让 `Object.keys`/`JSON.stringify`/`structuredClone` 都拿不到密钥；还逼出了三后端降级链：keytar 在桌面可用、在 alpine 容器静默缺失（无 musl 预编译、无系统 keychain），于是加密文件后端和"动态 import + 可用性探测"成了必需品。线上容器无交互终端，主密码提示直接 EOF 死锁，最终用 `config.llm.masterPassword` 预置（方案 B）解决——这些只有在"必须上线"时才想得到。
 
-§4.6 的 agent 工程纪律（TDD / 两阶段评审 / AGENT_LOG）执行一整轮后的体感：
+分发要求逼出了多阶段自包含镜像（镜像内完成 tsc + vite 构建，EXPOSE 3000 不是虚假声明）、`.dockerignore` 的模式锚定（无锚定的 `credentials` 会误杀 `src/credentials/` 源码）、CI 断言的强度（弱断言等于没断言）。
 
-- **评审最有价值**：抓到的几乎全是"文档承诺了能力、代码没兑现"——容器命令解析错乱、`start --web` 报 unknown option、弱断言 CI 永远发现不了命令行错误。评审员是另一双眼睛，专找"我以为对"的东西。
-- **TDD 的"红"最难写**：配置类、文档类 task 很难写出有意义的失败测试——"README 命令可复制"用什么红色测试表达？我用构建验证和命令实测替代，是对纪律的务实取舍。
-- **治理为什么要代码化**：prompt 里的"你要小心"是软约束，PatternGuard 的 block 是硬约束；prompt 里的"先写测试"是建议，TDD 的红色门禁是纪律。把后者从提示词搬进代码，才是 harness 区别于"会写代码的对话框"的地方。
-- **AGENT_LOG 的复利**：逐条记录教训在当下是"额外成本"，但学期末回看，正是这些细节——cwd 漂移的时间戳教训、容器死锁的交互点清单——让这份反思能写具体、写真实。没有它，我大概率只记得"项目做完了"，说不出为什么做成了。
+## 如果重做你会改变什么？
 
-## 六、收获与展望
+四件事：派发模板从第一天就标准化（worktree 路径进模板）；配置/文档类 task 直接用验收清单，不为 TDD 而 TDD；新机可复制性审计提前到文档完成当天（README 缺 `npm install`、缺前端产物、容器缺主密码预置都是收尾阶段才补的）；验收先核对产物时间戳（桌面版第一轮"验收"验的是旧 portable，修复代码从未被测到）。
 
-从"用 agent 写代码"到"实现一个 agent"。650 个测试、30+ task 走下来，最深的体感：**agent 系统的调试对象不是代码，而是状态流**——cwd 漂移、registry 复活、容器死锁，全是"状态写到了错误的地方"。
+## 对 Superpowers 方法论的批判——它假设了什么，假设成立吗？
 
-已知限制：WebUI 无用户隔离（单实例共享凭据）、容器内主密码明文存服务器、npm 发布待办（包名被占用）、未做真实模型端到端验证。若继续：多用户认证、容器内真正的系统凭据方案、真实模型评测集——方向已经清楚，剩下的主要是工程投入。
+它假设了 agent 的工具环境稳定：本项目安全分类器多次不可用，subagent 无法完成 git 操作，主 agent 只能代劳——这个假设不成立，且没有预案。它假设 subagent 会"不确定时暂停提问"：实际几乎不执行，宁可猜测继续——不成立，因此 reviewer 必须存在。它假设 TDD 普适：配置/文档类不适用——成立但不完备。它还假设主 agent 有足够的评审带宽：反馈闭环 4 个 task 并行时评审明显滞后——部分成立。这些假设的共性是"agent 是可靠的执行者"，而真实项目里 agent 是"需要兜底的协作者"——这正是 harness 存在的理由。
+
+---
 
 回看整个项目，最值钱的不只是 650 个测试和一个能跑的 Harness，而是把"想当然"变成"可验证"的习惯——先写失败测试再写实现，先定评审标准再声称完成。这个习惯会带到下一个项目去。
