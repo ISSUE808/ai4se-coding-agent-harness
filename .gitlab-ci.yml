@@ -1,6 +1,7 @@
 # GitLab CI — 与 .github/workflows/ci.yml（GitHub Actions）行为对等
 # 课程要求（§五.6）：必须包含一个名为 unit-test 的 job。
-# §4.8：每次 push 自动运行测试；项目选容器分发，CI 中构建镜像。
+# §4.8：每次 push 自动运行测试；项目选容器分发，CI 中构建镜像——真实镜像构建在
+# GitHub Actions 的 docker-build job，GitLab 侧为构建逻辑等价验证（见下方说明）。
 
 stages:
   - test
@@ -54,7 +55,9 @@ docker-build:
   #  真实镜像构建 + 运行断言（--version/--help/start --web）由 GitHub Actions 的
   #  docker-build job 承担（§4.8「CI 构建镜像」在 GitHub 侧完整满足，
   #  见 .github/workflows/ci.yml）。
-  image: node:22
+  # 基镜与 Dockerfile build 阶段同为 node 20 大版本（Dockerfile 用
+  #  node:20.19.4-alpine3.22；此处 debian 发行版仅为构建逻辑验证）。
+  image: node:20
   script:
     # 与 Dockerfile build 阶段逐条对应：
     #   FROM node:20.19.4-alpine3.22 AS build → npm ci --ignore-scripts
@@ -65,7 +68,7 @@ docker-build:
     - npm ci --ignore-scripts
     - npm run build
     - cd src/webui/client && npm ci && npm run build && cd ../../..
-    # 断言产物存在（与 runtime 阶段 COPY --from=build 的路径一致——容器内
+    # 断言产物存在且非空（与 runtime 阶段 COPY --from=build 的路径一致——容器内
     # ENTRYPOINT node dist/cli/index.js，start --web 依赖 client/dist）。
-    - test -f dist/cli/index.js
-    - test -f src/webui/client/dist/index.html
+    - test -s dist/cli/index.js
+    - test -s src/webui/client/dist/index.html
