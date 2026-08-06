@@ -107,7 +107,7 @@ npm test                    # 全量测试（含演示）
 
 ## 凭据模型与线上部署
 
-**线上实例**：http://139.224.16.44:3000（阿里云学生机，容器化部署，Docker 多阶段镜像）——演示环境，**请勿配置真实 API key**，演示后请关停服务器。
+**线上实例**：http://139.224.16.44:3000（阿里云服务器，容器化部署，Docker 多阶段镜像）——演示环境，**请勿配置真实 API key**，演示后请关停服务器。
 
 - **本地 / 桌面**：凭据存系统 keychain（keytar），交互式设置；keytar 不可用时降级到加密文件（encrypted-file），启动时交互输入主密码
 - **容器（线上部署）**：容器内 keytar 不可用（无系统 keychain），凭据自动降级到 encrypted-file；无交互终端，须在挂载的 `~/.codeharness/config.json` 中**预置主密码**，UI 设置密钥即可完整可用：
@@ -124,8 +124,6 @@ npm test                    # 全量测试（含演示）
 - **容器主密码明文存储**：Docker 部署须在 `config.json` 预置 `llm.masterPassword`，口令以明文存在服务器（威胁模型：服务器 root 本就可读 `secrets.enc`，主密码防的是服务间与备份泄漏）
 - **桌面 keytar ABI 依赖打包机 Node 版本**：keytar 按打包机 Node ABI 编译，打包应用运行环境版本不符时自动降级 encrypted-file（系统 keychain 中已有密钥需重新设置），见 `desktop/prepare-resources.mjs` 注释
 - **npm 发布待办**：npm registry 上 `codeharness` 包名已被无关第三方占用，全局安装分发未启用（本地使用 `npm link`）
-- **CLI `--cwd` 未实现**：`start` 的 `--cwd <path>` 为可选增强未实现（PLAN Task 19 备注）
-- 完整问题清单与修复归档见 `docs/KNOWN_ISSUES.md`
 
 ## 安全边界
 
