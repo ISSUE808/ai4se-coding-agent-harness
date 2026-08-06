@@ -1012,7 +1012,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 17：WebUI——Express 服务器 + API 路由
+### 任务 17：WebUI——Express 服务器 + API 路由 ✅ — `319c72a9` + CR fix `6fe864d`
 
 **涉及文件：**
 - 创建：`src/webui/server.ts`
@@ -1031,7 +1031,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 18a：WebUI——Open Design 设计 + 项目脚手架 + Dashboard + Settings
+### 任务 18a：WebUI——Open Design 设计 + 项目脚手架 + Dashboard + Settings ✅ — `f5aaffc` `ce8627e`
 
 **涉及文件：**
 - 创建：`src/webui/client/`——Vite + React 项目（使用 `npm create vite@latest` 脚手架）
@@ -1056,7 +1056,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 18b：WebUI——SessionDetail + 核心组件
+### 任务 18b：WebUI——SessionDetail + 核心组件 ✅ — `184b682` `ab7a932`
 
 **涉及文件：**
 - 创建：页面：`SessionDetail.tsx`
@@ -1076,7 +1076,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 19：完整集成——CLI `--web` + Agent 循环
+### 任务 19：完整集成——CLI `--web` + Agent 循环 ✅ — `860336b` + CR fix `d411349`
 
 **涉及文件：**
 - 修改：`src/cli/commands/start.ts`——增加 `--web` 标志
@@ -1105,7 +1105,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 20：机制演示（§A.6）
+### 任务 20：机制演示（§A.6） ✅ — `9810d95` + CR `5842706`
 
 **涉及文件：**
 - 创建：`tests/demo/guardrail-demo.test.ts`
@@ -1123,7 +1123,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 21：Docker + npm 分发
+### 任务 21：Docker + npm 分发 ✅ — `7b3c0a4` + CR `9df1b74`
 
 **涉及文件：**
 - 创建：`Dockerfile`、`.dockerignore`
@@ -1143,7 +1143,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 22：文档
+### 任务 22：文档 ✅ — `9d241c8` + PR #13 `f4eaa53`
 
 **涉及文件：**
 - 创建/完成：`README.md`
@@ -1155,7 +1155,7 @@ describe('Agent Main Loop (integration)', () => {
 
 ---
 
-### 任务 23：fs 浏览端点 + 目录选择器 + 会话详情文件树
+### 任务 23：fs 浏览端点 + 目录选择器 + 会话详情文件树 ✅ — `9bba87c` `e5f88e8`
 
 **背景**：新建会话工作目录需手动输入路径（不便）；会话详情左栏只显示文件变更（希望显示工作目录文件树）。
 
@@ -1169,7 +1169,7 @@ describe('Agent Main Loop (integration)', () => {
 - [x] **已完成**（commit `9bba87c` + 评审修复 `3f0ee53`，主项目 463 + client 131）——fs 端点（嵌套/大小/排序、realpath 边界、symlink 拒绝、深度 4/每层 200/全局 5000 节点截断）；目录选择器弹窗（懒加载/回填/Escape 关闭）；会话详情文件树（展开折叠 + A/M 标记 + 变更文件 fallback 列表 + diff 预览）
 - [x] **整机浏览增强**（commit `e5f88e8`，主项目 525 + client 177）——用户真实测试需求"选择整台电脑的任何目录"：新增 `GET /api/fs/browse` 无授权浏览端点（无 path → 机器根：Windows 盘符 / POSIX `/`；逐级枚举仅**元数据**：名称/类型/大小；symlink 标 `link` 不跟随；每层 200 截断）；`/tree` 保持授权根不变；前端选择器切换为 browse（机器根起始 + 逐级懒加载 + 选中回填）；KNOWN_ISSUES 记录元数据-only 安全取舍
 
-### 任务 24：MD 渲染 + 移除搜索框
+### 任务 24：MD 渲染 + 移除搜索框 ✅ — `b53df7a` `c2a63cc`
 
 **背景**：AI 输出的 markdown 应以渲染预览显示；右上角搜索框无功能应删除。
 
@@ -1181,7 +1181,7 @@ describe('Agent Main Loop (integration)', () => {
 
 - [x] **已完成**（commit `b53df7a` + XSS URL 测试 `c2a63cc`，client 136 + 主项目 463）——react-markdown skipHtml 安全渲染（HTML 禁用 + URL 协议剥除 + 图片 alt 化，XSS 三类入口全测）；user 保持纯文本；搜索框移除
 
-### 任务 25：自定义供应商 + 模型/护栏可编辑
+### 任务 25：自定义供应商 + 模型/护栏可编辑 ✅ — `cc8b703` + CR fix `ab497ac`
 
 **背景**：API Keys 仅三家供应商（需支持任意自定义供应商）；设置"模型与护栏"只读（需可直接修改并同步配置）。
 
@@ -1193,7 +1193,7 @@ describe('Agent Main Loop (integration)', () => {
 
 - [x] **已完成**（commit `cc8b703` + 评审修复 `ab497ac`，主项目 481 + client 147）——GET /api/keys 凭据库枚举（CredentialBackend.list）；动态 provider 列表 + 添加供应商（URL 编码 + 名校验）；模型/护栏可编辑表单（PUT config 白名单）；**护栏配置接入运行时**（Config.guardrails：blockOutbound 网络外呼确认 / requireApproval 规则匹配确认——真实生效，非写死旋钮）
 
-### 任务 26：对话中切换模型
+### 任务 26：对话中切换模型 ✅ — `9743b5f` + CR fix `9422977`
 
 **背景**：切换模型应便捷（对话中即可），不必每次改配置。
 
@@ -1208,7 +1208,7 @@ describe('Agent Main Loop (integration)', () => {
 
 - [x] **已完成**（commit `9743b5f` + 评审修复 `9422977`，主项目 495 + client 166）——Session.model 全链路 + PATCH /:id/model（WS session:updated 按会话过滤）；BuildAgentLoopOptions.session → createLLMProvider model 参数（CLI 结构性回退 config）；运行中切换复用 abort+restart（finally 加 running 守卫防 pause 竞态；restartLiveRun helper）；前端上下文栏模型选择器（默认/历史/自定义 + 清除覆盖）
 
-### 任务 27：CLI 交互式 REPL
+### 任务 27：CLI 交互式 REPL ✅ — `051e052`
 
 **背景**：CLI 启动/对话需手动输入完整命令（不便）
 
