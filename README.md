@@ -105,6 +105,13 @@ npx vitest run tests/demo   # 仅运行三项机制演示
 npm test                    # 全量测试（含演示）
 ```
 
+## CI/CD
+
+每次 push 自动运行测试（§4.8），GitHub Actions 与 NJU GitLab 双平台对等流水线（同一 commit 双远程同步推送）：
+
+- **GitHub Actions**（.github/workflows/ci.yml）：`unit-test` / `webui-client` / `desktop` / `docker-build` 四个 job。docker-build 执行**真实**镜像构建（多阶段：镜像内完成 tsc + WebUI client 构建，自包含），并在容器内做运行断言（`--version` 非空、`--help` 退出 0、`start --web` 能找到 WebUI 构建产物）——「CI 构建镜像」（§4.8）在此完整满足
+- **NJU GitLab**（.gitlab-ci.yml）：与 GitHub Actions 一一对应的四个 job。共享 runner 为无特权容器（dind 无法启动）且校园网屏蔽 Docker Hub/CloudFront（实测），无法真实构建镜像，故 `docker-build` job 为**构建逻辑等价验证**——在 node 容器内逐条执行与 Dockerfile build 阶段相同的步骤（npm ci → tsc → WebUI client 构建）并断言产物，产物路径与 runtime 阶段 `COPY --from=build` 一致；Dockerfile 自身的构建与运行验证由 GitHub Actions 承担
+
 ## 凭据模型与线上部署
 
 **线上实例**：http://139.224.16.44:3000（阿里云服务器，容器化部署，Docker 多阶段镜像）——演示环境，**请勿配置真实 API key**，演示后请关停服务器。
